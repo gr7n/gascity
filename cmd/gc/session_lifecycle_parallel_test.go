@@ -130,11 +130,17 @@ func TestSessionTriggerBeadEnv(t *testing.T) {
 	if got := env["GC_TRIGGER_WORK_BEAD_ID"]; got != "gp-59q" {
 		t.Fatalf("GC_TRIGGER_WORK_BEAD_ID = %q, want gp-59q", got)
 	}
+	if got := env["GC_BEAD_ID"]; got != "gp-59q" {
+		t.Fatalf("GC_BEAD_ID = %q, want gp-59q", got)
+	}
 	if got := env["GC_TRIGGER_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
 		t.Fatalf("GC_TRIGGER_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
 	}
 	if got := env["GC_TRIGGER_WORK_STORE_REF"]; got != "rig:gascity-packs" {
 		t.Fatalf("GC_TRIGGER_WORK_STORE_REF = %q, want rig:gascity-packs", got)
+	}
+	if got := env["GC_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
+		t.Fatalf("GC_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
 	}
 }
 
