@@ -91,8 +91,17 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		p.cache.Invalidate()
 		return nil
 	}
-	p.cleanupFailedStart(name, cfg)
+	if failedStartMustCleanup(err) {
+		p.cleanupFailedStart(name, cfg)
+	} else {
+		p.cache.Invalidate()
+	}
 	return err
+}
+
+func failedStartMustCleanup(err error) bool {
+	return !errors.Is(err, runtime.ErrProviderUnavailable) &&
+		!errors.Is(err, runtime.ErrDeliveryUnconfirmed)
 }
 
 func stageStartFiles(cfg runtime.Config, warnings io.Writer) error {

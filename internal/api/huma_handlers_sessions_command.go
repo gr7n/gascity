@@ -736,6 +736,9 @@ func (s *Server) humaHandleSessionSubmit(ctx context.Context, input *SessionSubm
 }
 
 func sessionSubmitErrorCode(err error) string {
+	if errors.Is(err, runtime.ErrProviderUnavailable) {
+		return "provider_unavailable"
+	}
 	if errors.Is(err, runtime.ErrDeliveryUnconfirmed) {
 		return "delivery_unconfirmed"
 	}

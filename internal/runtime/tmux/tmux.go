@@ -1897,6 +1897,11 @@ func (t *Tmux) NudgeSession(session, message string) error {
 		target = agentPane
 	}
 	codexTarget := t.targetIsCodex(target)
+	var codexReceipt codexDeliverySnapshot
+	var codexReceiptErr error
+	if codexTarget {
+		codexReceipt, codexReceiptErr = t.snapshotCodexDelivery(session, target)
+	}
 
 	// Snapshot genuine activity BEFORE the first keystroke, and stamp the poke
 	// only once delivery is actually confirmed (see delivered below). This
@@ -1955,11 +1960,32 @@ func (t *Tmux) NudgeSession(session, message string) error {
 	sendEnter := func() error { _, err := t.run("send-keys", "-t", target, "Enter"); return err }
 	wake := func() { t.WakePaneIfDetached(session) }
 	if t.submitVerifyEligible(target) {
-		maximumSends := submitEnterMaxSends
 		if codexTarget {
-			maximumSends = 1
+			observe := func() (codexDeliveryObservation, error) {
+				if codexReceiptErr != nil {
+					return codexDeliveryObservation{}, codexReceiptErr
+				}
+				return codexReceipt.observe(message)
+			}
+			err := submitCodexEnterAndConfirm(
+				sendEnter,
+				wake,
+				func() (bool, error) { return t.paneBusy(target) },
+				observe,
+				time.Sleep,
+			)
+			if err != nil {
+				if errors.Is(err, runtime.ErrProviderUnavailable) {
+					// The rollout proves the message landed. Stamp activity but
+					// leave the session intact for a later provider recovery.
+					delivered = true
+				}
+				return fmt.Errorf("%w for provider %q", err, t.providerEnv(target))
+			}
+			delivered = true
+			return nil
 		}
-		confirmed, err := submitEnterAndConfirmLimit(sendEnter, wake, func() (bool, error) { return t.paneBusy(target) }, time.Sleep, maximumSends)
+		confirmed, err := submitEnterAndConfirm(sendEnter, wake, func() (bool, error) { return t.paneBusy(target) }, time.Sleep)
 		if err != nil {
 			return fmt.Errorf("failed to send Enter: %w", err)
 		}

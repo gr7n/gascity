@@ -25,6 +25,17 @@ func TestSessionSubmitErrorCodeMarksUnconfirmedDelivery(t *testing.T) {
 	}
 }
 
+func TestSessionSubmitErrorCodeMarksProviderUnavailable(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &runtime.ProviderUnavailableError{
+		StatusCode: 429,
+		RetryAfter: "17s",
+		LimitID:    "codex",
+	})
+	if got := sessionSubmitErrorCode(err); got != "provider_unavailable" {
+		t.Fatalf("sessionSubmitErrorCode(provider unavailable) = %q", got)
+	}
+}
+
 func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	fs := newSessionFakeState(t)
 	h := newTestCityHandler(t, fs)

@@ -937,6 +937,20 @@ func TestDoStartSessionReturnsNudgeDeliveryError(t *testing.T) {
 	})
 }
 
+func TestAcceptedOrAmbiguousStartupNudgeDoesNotRequestCleanup(t *testing.T) {
+	unavailable := fmt.Errorf("sending startup nudge: %w", &runtime.ProviderUnavailableError{StatusCode: 429})
+	if failedStartMustCleanup(unavailable) {
+		t.Fatal("failedStartMustCleanup(provider unavailable) = true, want false")
+	}
+	ambiguous := fmt.Errorf("sending startup nudge: %w", runtime.ErrDeliveryUnconfirmed)
+	if failedStartMustCleanup(ambiguous) {
+		t.Fatal("failedStartMustCleanup(delivery unconfirmed) = true, want false")
+	}
+	if !failedStartMustCleanup(errors.New("tmux transport failed")) {
+		t.Fatal("failedStartMustCleanup(transport failure) = false, want true")
+	}
+}
+
 func TestDoStartSession_AcceptStartupDialogsOnly(t *testing.T) {
 	ops := &fakeStartOps{
 		hasSessionResult: true,
