@@ -116,9 +116,9 @@ func TestTestFastParallelUsesSanitizedEnvironmentAndMachineAwareConcurrency(t *t
 			if !strings.Contains(command, "./scripts/test-local-parallel fast") {
 				t.Fatalf("test-fast-parallel recipe should still dispatch the sharded fast runner:\n%s", command)
 			}
-			wantJobAssignment := " LOCAL_TEST_JOBS=" + tt.wantJobs + " CMD_GC_PROCESS_TOTAL="
+			wantJobAssignment := " LOCAL_TEST_JOBS=" + tt.wantJobs + " LOCAL_TEST_CPUS=" + tt.cpus + " CMD_GC_PROCESS_TOTAL="
 			if !strings.Contains(command, wantJobAssignment) {
-				t.Fatalf("test-fast-parallel job count should be %s:\n%s", tt.wantJobs, command)
+				t.Fatalf("test-fast-parallel resource budget should be jobs=%s cpus=%s:\n%s", tt.wantJobs, tt.cpus, command)
 			}
 		})
 	}
@@ -239,9 +239,27 @@ func TestLocalParallelAllowlistIncludesObservableEnv(t *testing.T) {
 		t.Fatalf("read test-local-parallel: %v", err)
 	}
 	content := string(script)
-	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES"} {
+	if strings.Contains(content, `bash -lc "$command"`) {
+		t.Fatal("test-local-parallel must not reintroduce host login-shell state after env sanitization")
+	}
+	if !strings.Contains(content, `bash -c "$command"`) {
+		t.Fatal("test-local-parallel must execute each job in the sanitized non-login shell")
+	}
+	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=2") {
+		t.Fatal("unit-core must retain the repository's bounded package parallelism")
+	}
+	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES", "GOMAXPROCS"} {
 		if !strings.Contains(content, key+"=") {
 			t.Fatalf("test-local-parallel job env should pass through %s", key)
+		}
+	}
+	for _, path := range []string{"test-go-test-shard", "test-integration-shard"} {
+		content, err := os.ReadFile(filepath.Join(repoRoot, "scripts", path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(content), "GOMAXPROCS=") {
+			t.Fatalf("%s must preserve the partitioned Go CPU budget", path)
 		}
 	}
 	for _, key := range []string{"GC_CITY", "GC_HOME", "GC_SESSION_ID"} {

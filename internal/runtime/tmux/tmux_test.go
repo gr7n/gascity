@@ -3,6 +3,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1868,6 +1869,112 @@ func TestNewSessionWithCommandAndEnv(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithCommandAndEnvStdinBoundaryRoundTrip(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	version, err := exec.Command("tmux", "-V").Output()
+	if err != nil {
+		t.Fatalf("tmux -V: %v", err)
+	}
+	t.Logf("validated source-file stdin boundary with %s", strings.TrimSpace(string(version)))
+
+	tm := testTmux()
+	sessionName := fmt.Sprintf("gt-test-stdin-env-%d", time.Now().UnixNano()%1000000)
+	_ = tm.KillSession(sessionName)
+	t.Cleanup(func() { _ = tm.KillSession(sessionName) })
+
+	dir := t.TempDir()
+	valueFile := filepath.Join(dir, "complex-value")
+	unsetFile := filepath.Join(dir, "unset-state")
+	scriptPath := filepath.Join(dir, "capture-env.sh")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$GC_COMPLEX_VALUE\" > " + strconv.Quote(valueFile) + "\n" +
+		"if [ \"${GC_TMUX_MUST_BE_UNSET+x}\" = x ]; then printf present; else printf unset; fi > " + strconv.Quote(unsetFile) + "\n" +
+		"exec sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write capture script: %v", err)
+	}
+
+	complexValue := "spaces 'single' \"double\"\nnext-line"
+	providerMarker := "synthetic-provider-token-" + sessionName
+	t.Setenv("GC_TMUX_MUST_BE_UNSET", "ambient-value-that-must-not-survive")
+	if err := tm.NewSessionWithCommandAndEnv(sessionName, dir, scriptPath, map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": providerMarker,
+		"GC_COMPLEX_VALUE":        complexValue,
+		"GC_TMUX_MUST_BE_UNSET":   "",
+	}); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, valueErr := os.Stat(valueFile); valueErr == nil {
+			if _, unsetErr := os.Stat(unsetFile); unsetErr == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("respawned pane did not capture its environment")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	gotValue, err := os.ReadFile(valueFile)
+	if err != nil {
+		t.Fatalf("read complex value: %v", err)
+	}
+	if string(gotValue) != complexValue {
+		t.Fatalf("pane complex value = %q, want %q", string(gotValue), complexValue)
+	}
+	gotUnset, err := os.ReadFile(unsetFile)
+	if err != nil {
+		t.Fatalf("read unset state: %v", err)
+	}
+	if string(gotUnset) != "unset" {
+		t.Fatalf("respawned pane observed explicitly unset key: %q", string(gotUnset))
+	}
+	if _, err := tm.GetEnvironment(sessionName, "GC_TMUX_MUST_BE_UNSET"); err == nil {
+		t.Fatal("session environment retained explicitly unset key")
+	}
+	gotComplex, err := tm.GetEnvironment(sessionName, "GC_COMPLEX_VALUE")
+	if err != nil {
+		t.Fatalf("GetEnvironment complex value: %v", err)
+	}
+	if gotComplex != complexValue {
+		t.Fatalf("session complex value = %q, want %q", gotComplex, complexValue)
+	}
+
+	if runtime.GOOS == "linux" {
+		found, err := processArgvContains(providerMarker)
+		if err != nil {
+			t.Fatalf("scan /proc argv: %v", err)
+		}
+		if found {
+			t.Fatal("provider credential marker appeared in a live process argv")
+		}
+	}
+}
+
+func processArgvContains(value string) (bool, error) {
+	paths, err := filepath.Glob("/proc/[0-9]*/cmdline")
+	if err != nil {
+		return false, err
+	}
+	needle := []byte(value)
+	for _, path := range paths {
+		argv, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(argv, needle) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func TestSetGetRemoveEnvironment(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")
@@ -1997,7 +2104,7 @@ func TestSendKeysLiteralWithRetry_ImmediateSuccess(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 
 	// Should succeed immediately — no retry needed
-	err := tm.sendKeysLiteralWithRetry(sessionName, "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode(sessionName, "hello", 5*time.Second, false)
 	if err != nil {
 		t.Errorf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2012,7 +2119,7 @@ func TestSendKeysLiteralWithRetry_NonTransientFails(t *testing.T) {
 
 	// Target a session that doesn't exist — should fail immediately, not retry
 	start := time.Now()
-	err := tm.sendKeysLiteralWithRetry("gt-nonexistent-session-xyz", "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("gt-nonexistent-session-xyz", "hello", 5*time.Second, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -2033,7 +2140,7 @@ func TestSendKeysLiteralWithRetry_NonTransientFailsFast(t *testing.T) {
 	// Use a nonexistent session — tmux returns "session not found" which is
 	// non-transient, so the function should fail fast (well under the timeout).
 	start := time.Now()
-	err := tm.sendKeysLiteralWithRetry("gt-nonexistent-session-fast-fail", "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("gt-nonexistent-session-fast-fail", "hello", 5*time.Second, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -2052,7 +2159,7 @@ func TestSendKeysLiteralWithRetryFallsBackToPasteBufferOnCommandTooLong(t *testi
 	tm := NewTmuxWithConfig(DefaultConfig())
 	tm.exec = fe
 
-	err := tm.sendKeysLiteralWithRetry("%1", "large startup prompt", time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("%1", "large startup prompt", time.Second, false)
 	if err != nil {
 		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2079,7 +2186,7 @@ func TestSendKeysLiteralWithRetryUsesPasteBufferForLargeText(t *testing.T) {
 	tm := NewTmuxWithConfig(DefaultConfig())
 	tm.exec = fe
 
-	err := tm.sendKeysLiteralWithRetry("%1", strings.Repeat("x", maxSendKeysLiteralLen+1), time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("%1", strings.Repeat("x", maxSendKeysLiteralLen+1), time.Second, false)
 	if err != nil {
 		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2089,6 +2196,48 @@ func TestSendKeysLiteralWithRetryUsesPasteBufferForLargeText(t *testing.T) {
 	}
 	assertTmuxCommand(t, fe.calls[0], "load-buffer")
 	assertTmuxCommand(t, fe.calls[1], "paste-buffer")
+}
+
+func TestSendKeysLiteralWithRetryUsesPasteBufferForMultilineContextBelowLimit(t *testing.T) {
+	fe := &fakeExecutor{}
+	tm := NewTmuxWithConfig(DefaultConfig())
+	tm.exec = fe
+
+	message := "request\n\n" + strings.Repeat("source-linked advisory context ", 90)
+	if len(message) >= maxSendKeysLiteralLen {
+		t.Fatalf("test message length = %d, want < %d", len(message), maxSendKeysLiteralLen)
+	}
+	if err := tm.sendKeysLiteralWithRetryMode("%1", message, time.Second, false); err != nil {
+		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
+	}
+
+	if len(fe.calls) != 2 {
+		t.Fatalf("tmux calls = %d, want load/paste: %#v", len(fe.calls), fe.calls)
+	}
+	assertTmuxCommand(t, fe.calls[0], "load-buffer")
+	assertTmuxCommand(t, fe.calls[1], "paste-buffer")
+}
+
+func TestPaneBusyReadsOnlyVisibleStatusTail(t *testing.T) {
+	fe := &fakeExecutor{out: "idle composer\n"}
+	tm := NewTmuxWithConfig(DefaultConfig())
+	tm.exec = fe
+
+	busy, err := tm.paneBusy("%1")
+	if err != nil {
+		t.Fatalf("paneBusy() error = %v", err)
+	}
+	if busy {
+		t.Fatal("paneBusy() = true, want false")
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("tmux calls = %d, want 1", len(fe.calls))
+	}
+	for _, arg := range fe.calls[0] {
+		if arg == "-S" {
+			t.Fatalf("paneBusy included scrollback in capture: %v", fe.calls[0])
+		}
+	}
 }
 
 func assertTmuxCommand(t *testing.T, args []string, want string) {
@@ -2141,7 +2290,7 @@ func TestNudgeSessionSkipsEscapeForCodex(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -2202,7 +2351,7 @@ func main() {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -2233,7 +2382,7 @@ func TestNudgeSessionSkipsEscapeForClaude(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
