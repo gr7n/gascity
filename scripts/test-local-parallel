@@ -25,6 +25,20 @@ cd "$repo_root"
 source "$repo_root/scripts/lib/test-slice.sh"
 gc_test_slice_reexec "$repo_root/scripts/test-local-parallel" "$@"
 
+# One fast suite can legitimately reserve about 32 GiB across its compiler and
+# linker shards. The per-process memory detector cannot see a second worktree
+# making the same admission decision, so serialize broad local suites on hosts
+# that provide flock. Kubernetes Jobs also have concurrencyPolicy/resource
+# limits; this guard covers shared developer and agent hosts.
+if command -v flock >/dev/null 2>&1; then
+  lock_file="${GC_TEST_LOCAL_LOCK_FILE:-${TMPDIR:-/var/tmp}/gascity-test-local-parallel.lock}"
+  exec 9>"$lock_file"
+  if ! flock -n 9; then
+    echo "another Gas City parallel test suite already owns this host; reuse its result or retry after it finishes" >&2
+    exit 75
+  fi
+fi
+
 # GC_DOLT_PORT / BEADS_DOLT_SERVER_PORT point bd at the live shared city Dolt
 # server. They must never reach `go test`, or every bd-forking test writes to
 # PRODUCTION Dolt and stalls bd writes city-wide (ga-w2kh1r). The per-job
