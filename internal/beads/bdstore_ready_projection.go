@@ -117,6 +117,18 @@ func (s *BdStore) fetchReadyProjection(ids []string) (map[string]bool, error) {
 	// does not flap a spurious bead.updated.
 	out, err := s.runner(s.dir, "bd", "sql", readyProjectionSQL(), "--json")
 	if err != nil {
+		if isBdSQLUnsupportedInEmbeddedMode(err) {
+			// Postgres-capable bd releases can expose the ordinary CRUD surface
+			// while deliberately omitting the raw SQL escape hatch. The cache
+			// already supports older bd versions without this optional
+			// enrichment, so remember the observed capability and continue with
+			// the bounded list/ready projections instead of degrading the city on
+			// every reconcile.
+			s.readyProjectionMu.Lock()
+			s.readyProjectionEnabled = false
+			s.readyProjectionMu.Unlock()
+			return result, nil
+		}
 		return nil, fmt.Errorf("bd sql ready projection: %w", err)
 	}
 	var rows []bdReadyProjectionRow

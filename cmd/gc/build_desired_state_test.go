@@ -3660,7 +3660,10 @@ func TestBuildDesiredState_MaxOneAgentSkipsCanonicalDuplicateWhenStaleAssignedWo
 	if err != nil {
 		t.Fatal(err)
 	}
-	stalePriority := 10
+	// P0 is Beads' highest priority. Keep the already-materialized stale
+	// singleton as the bounded winner so this regression continues to exercise
+	// duplicate identity cleanup under canonical priority semantics.
+	stalePriority := 0
 	if _, err := store.Create(beads.Bead{
 		Title:    "stale assigned work",
 		Type:     "task",

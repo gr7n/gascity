@@ -566,9 +566,9 @@ func (s *Server) statusSessionSnapshot(ctx context.Context) statusSessionSnapsho
 
 // statusWorkResult is one store's contribution to the work counts.
 type statusWorkResult struct {
-	wc       workCounts
-	readyIDs []string
-	errs     []string
+	wc        workCounts
+	readyKeys []string
+	errs      []string
 }
 
 // statusWorkCounts tallies persisted open/in_progress work across BeadStores
@@ -630,11 +630,11 @@ func (s *Server) statusWorkCounts(ctx context.Context) (workCounts, []string) {
 	for _, r := range results {
 		wc.Open += r.wc.Open
 		wc.InProgress += r.wc.InProgress
-		for _, id := range r.readyIDs {
-			if seenReady[id] {
+		for _, key := range r.readyKeys {
+			if seenReady[key] {
 				continue
 			}
-			seenReady[id] = true
+			seenReady[key] = true
 			wc.Ready++
 		}
 		errs = append(errs, r.errs...)
@@ -724,9 +724,12 @@ func statusStoreWorkCountsFor(
 	}
 	if ready.err == nil || (beads.IsPartialResult(ready.err) && len(ready.rows) > 0) {
 		result.wc.Ready = len(ready.rows)
-		result.readyIDs = make([]string, 0, len(ready.rows))
+		result.readyKeys = make([]string, 0, len(ready.rows))
 		for _, row := range ready.rows {
-			result.readyIDs = append(result.readyIDs, row.ID)
+			// Bead IDs are local to a store. Match GET /beads/ready's identity
+			// semantics by retaining the owning store in the federation key so
+			// equal IDs from two independent stores remain distinct work.
+			result.readyKeys = append(result.readyKeys, label+"\x00"+row.ID)
 		}
 	}
 	return result

@@ -130,7 +130,10 @@ var sessionNudgeLocks sync.Map // map[string]chan struct{}
 var pasteBufferSeq uint64
 
 // validSessionNameRe validates session names to prevent shell injection
-var validSessionNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var (
+	validSessionNameRe     = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	validEnvironmentNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // Common errors
 var (
@@ -192,6 +195,10 @@ type executor interface {
 	executeCtx(ctx context.Context, args []string) (string, error)
 }
 
+type inputExecutor interface {
+	executeInput(ctx context.Context, args []string, input []byte) (string, error)
+}
+
 // realExecutor runs actual tmux subprocesses.
 type realExecutor struct{}
 
@@ -214,6 +221,18 @@ func (realExecutor) executeCtx(ctx context.Context, args []string) (string, erro
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
+		return "", wrapError(err, stderr.String(), args)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (realExecutor) executeInput(ctx context.Context, args []string, input []byte) (string, error) {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		return "", wrapError(err, stderr.String(), args)
 	}
 	return strings.TrimSpace(stdout.String()), nil
@@ -307,6 +326,20 @@ func (t *Tmux) runCtx(ctx context.Context, args ...string) (string, error) {
 // Every invocation is bounded by tmuxSubprocessTimeout via runCtx.
 func (t *Tmux) run(args ...string) (string, error) {
 	return t.runCtx(context.Background(), args...)
+}
+
+func (t *Tmux) runInput(input []byte, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxSubprocessTimeout)
+	defer cancel()
+	allArgs := []string{"-u"}
+	if t.cfg.SocketName != "" {
+		allArgs = append(allArgs, "-L", t.cfg.SocketName)
+	}
+	allArgs = append(allArgs, args...)
+	if runner, ok := t.exec.(inputExecutor); ok {
+		return runner.executeInput(ctx, allArgs, input)
+	}
+	return "", errors.New("tmux executor does not support stdin input")
 }
 
 // wrapError wraps tmux errors with context.
@@ -430,18 +463,15 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	return nil
 }
 
-// NewSessionWithCommandAndEnv creates a new detached tmux session with environment
-// variables set via -e flags. This ensures the initial shell process inherits the
-// correct environment from the session, rather than inheriting from the tmux server
-// or parent process. The -e flags set session-level environment before the shell
-// starts, preventing stale env vars (e.g., GT_ROLE from a parent mayor session)
-// from leaking into crew/polecat shells.
-//
-// The command should still use 'exec env' for WaitForCommand detection compatibility,
-// but -e provides defense-in-depth for the initial shell environment.
-// Requires tmux >= 3.2.
+// NewSessionWithCommandAndEnv creates a detached session, loads its environment
+// through tmux's stdin-only source-file boundary, then respawns the pane with the
+// requested command. Environment values never enter a process argument vector.
 func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env map[string]string) error {
 	if err := validateSessionName(name); err != nil {
+		return err
+	}
+	environment, err := tmuxEnvironmentSource(name, env)
+	if err != nil {
 		return err
 	}
 	if err := t.probeServerAlive(); err != nil {
@@ -451,43 +481,51 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 	if workDir != "" {
 		args = append(args, "-c", workDir)
 	}
-	// Add -e flags to set environment variables in the session before the shell starts.
-	// Keys are sorted for deterministic behavior.
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var unsetKeys []string
-	for _, k := range keys {
-		if env[k] == "" {
-			// Empty values mean "unset this var". Collect for env -u prefix.
-			unsetKeys = append(unsetKeys, k)
-		} else {
-			args = append(args, "-e", fmt.Sprintf("%s=%s", k, env[k]))
-		}
-	}
-	// For vars that need unsetting, prefix the command with env -u flags.
-	// tmux -e sets session-level env but the shell process still inherits
-	// from the tmux server's global environment. env -u ensures the var
-	// is actually absent from the child process.
-	if len(unsetKeys) > 0 && command != "" {
-		var prefix string
-		for _, k := range unsetKeys {
-			prefix += " -u " + k
-		}
-		command = "env" + prefix + " " + command
-	}
-	// Add the command as the last argument
-	args = append(args, t.wrapPaneCommand(command))
-	_, err := t.run(args...)
-	if err != nil {
+	args = append(args, "sleep 86400")
+	if _, err = t.run(args...); err != nil {
 		return err
 	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = t.KillSession(name)
+		}
+	}()
+	if _, err = t.runInput([]byte(environment), "source-file", "-"); err != nil {
+		return fmt.Errorf("loading tmux session environment: %w", err)
+	}
+	respawn := []string{"respawn-pane", "-k", "-t", name}
+	if command != "" {
+		respawn = append(respawn, t.wrapPaneCommand(command))
+	}
+	if _, err = t.run(respawn...); err != nil {
+		return err
+	}
+	failed = false
 	_ = t.ConfigureServer()
 	// tmux 3.3+: reset window-size from manual to latest (see NewSession).
 	t.run("set-option", "-wt", name, "window-size", "latest") //nolint:errcheck // best-effort
 	return nil
+}
+
+func tmuxEnvironmentSource(name string, env map[string]string) (string, error) {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		if !validEnvironmentNameRe.MatchString(key) {
+			return "", fmt.Errorf("invalid environment variable name %q", key)
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var source strings.Builder
+	for _, key := range keys {
+		if env[key] == "" {
+			fmt.Fprintf(&source, "set-environment -r -t %s %s\n", shellquote.Quote(name), shellquote.Quote(key))
+		} else {
+			fmt.Fprintf(&source, "set-environment -t %s %s %s\n", shellquote.Quote(name), shellquote.Quote(key), shellquote.Quote(env[key]))
+		}
+	}
+	return source.String(), nil
 }
 
 // EnsureSessionFresh ensures a session is available and healthy.
@@ -1619,8 +1657,13 @@ func nextPasteBufferName() string {
 	return fmt.Sprintf("gc-nudge-%d-%d", os.Getpid(), seq)
 }
 
-func (t *Tmux) sendLiteralText(target, text string) error {
-	if len(text) > maxSendKeysLiteralLen {
+func (t *Tmux) sendLiteralTextMode(target, text string, forcePaste bool) error {
+	// Codex handles an explicit bracketed-paste event atomically, while a raw
+	// send-keys burst is decoded as thousands of synthetic key events. The
+	// latter can leave a Context-enriched prompt partially drafted when Enter
+	// arrives even though the tmux command itself succeeded. Multiline prompts
+	// need the same semantic boundary for every provider.
+	if forcePaste || strings.ContainsAny(text, "\r\n") || len(text) > maxSendKeysLiteralLen {
 		return t.pasteLiteralText(target, text)
 	}
 	_, err := t.run("send-keys", "-t", target, "-l", text)
@@ -1680,13 +1723,13 @@ func (t *Tmux) pasteLiteralText(target, text string) error {
 //
 // This function ONLY addresses the startup race where the agent TUI hasn't
 // initialized yet, causing tmux send-keys to fail with "not in a mode".
-func (t *Tmux) sendKeysLiteralWithRetry(target, text string, timeout time.Duration) error {
+func (t *Tmux) sendKeysLiteralWithRetryMode(target, text string, timeout time.Duration, forcePaste bool) error {
 	deadline := time.Now().Add(timeout)
 	interval := t.cfg.NudgeRetryInterval
 	var lastErr error
 
 	for time.Now().Before(deadline) {
-		err := t.sendLiteralText(target, text)
+		err := t.sendLiteralTextMode(target, text, forcePaste)
 		if err == nil {
 			return nil
 		}
@@ -1725,6 +1768,7 @@ const (
 	submitConfirmPollsPerSend = 4
 	submitConfirmPollInterval = 150 * time.Millisecond
 	submitReEnterBackoff      = 200 * time.Millisecond
+	submitStatusTailLines     = 8
 )
 
 // submitEnterAndConfirm sends Enter and confirms the message submitted by
@@ -1742,8 +1786,15 @@ const (
 // All side effects are injected so the decision logic is unit-testable without
 // a live tmux server.
 func submitEnterAndConfirm(sendEnter func() error, wake func(), busy func() (bool, error), sleep func(time.Duration)) (bool, error) {
+	return submitEnterAndConfirmLimit(sendEnter, wake, busy, sleep, submitEnterMaxSends)
+}
+
+// submitEnterAndConfirmLimit is the bounded implementation shared by the
+// historical retrying path and Codex's one-shot path. Codex must never receive
+// a blind second Enter after an ambiguous first submit.
+func submitEnterAndConfirmLimit(sendEnter func() error, wake func(), busy func() (bool, error), sleep func(time.Duration), maximumSends int) (bool, error) {
 	var lastErr error
-	for send := 0; send < submitEnterMaxSends; send++ {
+	for send := 0; send < maximumSends; send++ {
 		if send > 0 {
 			// Re-confirm the pane is still idle before re-sending. A turn that
 			// already submitted (busy) must never receive a second Enter.
@@ -1771,26 +1822,50 @@ func submitEnterAndConfirm(sendEnter func() error, wake func(), busy func() (boo
 // paneBusy reports whether the target pane shows an active processing indicator
 // (Claude's live spinner / "esc to interrupt"). Used to confirm a submitted turn.
 func (t *Tmux) paneBusy(target string) (bool, error) {
-	lines, err := t.CapturePaneLines(target, promptObservationLines)
+	lines, err := t.CapturePaneVisibleLines(target)
 	if err != nil {
 		return false, err
+	}
+	if len(lines) > submitStatusTailLines {
+		lines = lines[len(lines)-submitStatusTailLines:]
 	}
 	return paneContainsBusyIndicator(lines), nil
 }
 
-// submitVerifyEligible reports whether the target runs a provider whose busy
-// indicator is reliable enough to confirm a submit. Scoped to the Claude family
-// (the confirmed ga-bwm failure); other providers keep best-effort single
-// delivery so this change cannot regress them.
-func (t *Tmux) submitVerifyEligible(target string) bool {
-	if provider := t.providerEnv(target); provider != "" {
-		return sessionlog.ProviderFamily(provider) == "claude"
+// providerSupportsVerifiedSubmit reports whether the provider exposes a busy
+// indicator that paneContainsBusyIndicator can reliably observe after submit.
+func providerSupportsVerifiedSubmit(provider string) bool {
+	switch sessionlog.ProviderFamily(provider) {
+	case "claude", "codex":
+		return true
+	default:
+		return false
 	}
-	return t.targetLooksLikeProvider(target, "claude")
 }
 
-// NudgeSession sends a message to a Claude Code session reliably.
-// This is the canonical way to send messages to Claude sessions.
+// submitVerifyEligible reports whether the target runs a provider whose busy
+// indicator is reliable enough to confirm a submit. Claude and Codex both
+// expose the "esc to interrupt" processing state recognized by
+// paneContainsBusyIndicator. Other providers keep best-effort single delivery.
+func (t *Tmux) submitVerifyEligible(target string) bool {
+	if providerSupportsVerifiedSubmit(t.providerEnv(target)) {
+		return true
+	}
+	return t.targetLooksLikeAnyProvider(target, "claude", "codex")
+}
+
+// targetIsCodex resolves both direct providers and aliases such as
+// "gr7n-router" whose pane process is still Codex. A nonempty alias must not
+// mask the actual runtime capability.
+func (t *Tmux) targetIsCodex(target string) bool {
+	if sessionlog.ProviderFamily(t.providerEnv(target)) == "codex" {
+		return true
+	}
+	return t.targetLooksLikeProvider(target, "codex")
+}
+
+// NudgeSession sends a message to an interactive agent session reliably.
+// This is the canonical way to send messages to tmux-backed agent sessions.
 // Uses: literal mode + 500ms debounce + separate Enter.
 // After sending, triggers SIGWINCH to wake Claude in detached sessions.
 // Verification is the Witness's job (AI), not this function.
@@ -1816,6 +1891,7 @@ func (t *Tmux) NudgeSession(session, message string) error {
 	if agentPane, err := t.FindAgentPane(session); err == nil && agentPane != "" {
 		target = agentPane
 	}
+	codexTarget := t.targetIsCodex(target)
 
 	// Snapshot genuine activity BEFORE the first keystroke, and stamp the poke
 	// only once delivery is actually confirmed (see delivered below). This
@@ -1843,7 +1919,7 @@ func (t *Tmux) NudgeSession(session, message string) error {
 	t.WakePaneIfDetached(session)
 
 	// 1. Send text in literal mode with retry on transient errors
-	if err := t.sendKeysLiteralWithRetry(target, message, t.cfg.NudgeReadyTimeout); err != nil {
+	if err := t.sendKeysLiteralWithRetryMode(target, message, t.cfg.NudgeReadyTimeout, codexTarget); err != nil {
 		return err
 	}
 
@@ -1874,8 +1950,16 @@ func (t *Tmux) NudgeSession(session, message string) error {
 	sendEnter := func() error { _, err := t.run("send-keys", "-t", target, "Enter"); return err }
 	wake := func() { t.WakePaneIfDetached(session) }
 	if t.submitVerifyEligible(target) {
-		if _, err := submitEnterAndConfirm(sendEnter, wake, func() (bool, error) { return t.paneBusy(target) }, time.Sleep); err != nil {
+		maximumSends := submitEnterMaxSends
+		if codexTarget {
+			maximumSends = 1
+		}
+		confirmed, err := submitEnterAndConfirmLimit(sendEnter, wake, func() (bool, error) { return t.paneBusy(target) }, time.Sleep, maximumSends)
+		if err != nil {
 			return fmt.Errorf("failed to send Enter: %w", err)
+		}
+		if !confirmed {
+			return fmt.Errorf("%w for provider %q", runtime.ErrDeliveryUnconfirmed, t.providerEnv(target))
 		}
 		delivered = true
 		return nil
@@ -1922,7 +2006,7 @@ func (t *Tmux) NudgePane(pane, message string) error {
 	}()
 
 	// 1. Send text in literal mode with retry on transient errors
-	if err := t.sendKeysLiteralWithRetry(pane, message, t.cfg.NudgeReadyTimeout); err != nil {
+	if err := t.sendKeysLiteralWithRetryMode(pane, message, t.cfg.NudgeReadyTimeout, t.targetIsCodex(pane)); err != nil {
 		return err
 	}
 
@@ -2626,6 +2710,20 @@ func (t *Tmux) CapturePaneAll(session string) (string, error) {
 // CapturePaneLines captures the last N lines of a pane as a slice.
 func (t *Tmux) CapturePaneLines(session string, lines int) ([]string, error) {
 	out, err := t.CapturePane(session, lines)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// CapturePaneVisibleLines captures only the pane's current viewport. Unlike
+// CapturePaneLines it never includes scrollback, so a historical provider
+// spinner cannot be mistaken for a fresh submit acknowledgement.
+func (t *Tmux) CapturePaneVisibleLines(session string) ([]string, error) {
+	out, err := t.run("capture-pane", "-p", "-t", session)
 	if err != nil {
 		return nil, err
 	}

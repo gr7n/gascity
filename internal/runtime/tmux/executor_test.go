@@ -11,12 +11,13 @@ import (
 
 // fakeExecutor captures tmux command arguments for unit testing.
 type fakeExecutor struct {
-	calls [][]string // each call's full args
-	out   string
-	err   error
-	outs  []string
-	errs  []error
-	idx   int
+	calls  [][]string // each call's full args
+	inputs [][]byte
+	out    string
+	err    error
+	outs   []string
+	errs   []error
+	idx    int
 }
 
 func (f *fakeExecutor) execute(args []string) (string, error) {
@@ -43,15 +44,21 @@ func (f *fakeExecutor) executeCtx(_ context.Context, args []string) (string, err
 	return f.execute(args)
 }
 
+func (f *fakeExecutor) executeInput(_ context.Context, args []string, input []byte) (string, error) {
+	f.inputs = append(f.inputs, append([]byte(nil), input...))
+	return f.execute(args)
+}
+
 func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	exec := &fakeExecutor{}
 	tm := NewTmux()
 	tm.exec = exec
 
 	env := map[string]string{
-		"LANG":     "en_US.UTF-8",
-		"LC_ALL":   "",
-		"LC_CTYPE": "",
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+		"LANG":                    "en_US.UTF-8",
+		"LC_ALL":                  "",
+		"LC_CTYPE":                "",
 	}
 	if err := tm.NewSessionWithCommandAndEnv("gc-test-locale-clear", "", "claude", env); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
@@ -60,14 +67,103 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 		t.Fatal("no tmux calls recorded")
 	}
 
-	args := exec.calls[0]
-	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
-		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	for _, args := range exec.calls {
+		if strings.Contains(strings.Join(args, "\x00"), "en_US.UTF-8") || strings.Contains(strings.Join(args, "\x00"), "synthetic-oauth-secret") {
+			t.Fatalf("environment value leaked into tmux argv: %v", args)
+		}
 	}
-	if got := args[len(args)-1]; got != "env -u LC_ALL -u LC_CTYPE claude" {
-		t.Fatalf("command = %q, want env -u LC_ALL -u LC_CTYPE claude", got)
+	if len(exec.inputs) != 1 || !strings.Contains(string(exec.inputs[0]), "LANG") || !strings.Contains(string(exec.inputs[0]), "LC_ALL") || !strings.Contains(string(exec.inputs[0]), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("stdin environment source is incomplete")
 	}
+	source := string(exec.inputs[0])
+	for _, key := range []string{"LC_ALL", "LC_CTYPE"} {
+		want := "set-environment -r -t 'gc-test-locale-clear' '" + key + "'\n"
+		if !strings.Contains(source, want) {
+			t.Fatalf("stdin environment source missing removal directive %q: %q", want, source)
+		}
+	}
+	if strings.Contains(source, "set-environment -u ") {
+		t.Fatalf("stdin environment source uses unset semantics that permit global fallback: %q", source)
+	}
+	if got := exec.calls[2][len(exec.calls[2])-1]; got != "claude" {
+		t.Fatalf("respawn command = %q, want claude", got)
+	}
+}
+
+func TestNewSessionWithCommandAndEnvCleansUpAfterSourceFailure(t *testing.T) {
+	sourceErr := errors.New("synthetic source failure")
+	exec := &fakeExecutor{errs: []error{nil, sourceErr}}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-source-failure", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if !errors.Is(err, sourceErr) {
+		t.Fatalf("error = %v, want source failure", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-source-failure")
+}
+
+func TestNewSessionWithCommandAndEnvCleansUpAfterRespawnFailure(t *testing.T) {
+	respawnErr := errors.New("synthetic respawn failure")
+	exec := &fakeExecutor{errs: []error{nil, nil, respawnErr}}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-respawn-failure", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if !errors.Is(err, respawnErr) {
+		t.Fatalf("error = %v, want respawn failure", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-respawn-failure")
+}
+
+type noInputExecutor struct {
+	calls [][]string
+}
+
+func (e *noInputExecutor) record(args []string) (string, error) {
+	e.calls = append(e.calls, append([]string(nil), args...))
+	return "", nil
+}
+
+func (e *noInputExecutor) execute(args []string) (string, error) {
+	return e.record(args)
+}
+
+func (e *noInputExecutor) executeCtx(_ context.Context, args []string) (string, error) {
+	return e.record(args)
+}
+
+func TestNewSessionWithCommandAndEnvFailsClosedWithoutInputExecutor(t *testing.T) {
+	exec := &noInputExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-no-input", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support stdin input") {
+		t.Fatalf("error = %v, want fail-closed stdin support error", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-no-input")
+	for _, args := range exec.calls {
+		if strings.Contains(strings.Join(args, "\x00"), "synthetic-oauth-secret") {
+			t.Fatalf("environment value leaked into tmux argv: %v", args)
+		}
+	}
+}
+
+func assertFailedSessionKilled(t *testing.T, calls [][]string, session string) {
+	t.Helper()
+	for _, args := range calls {
+		if len(args) >= 4 && args[len(args)-3] == "kill-session" && args[len(args)-2] == "-t" && args[len(args)-1] == session {
+			return
+		}
+	}
+	t.Fatalf("failed session %q was not killed; calls=%v", session, calls)
 }
 
 type promptFooterExecutor struct {
