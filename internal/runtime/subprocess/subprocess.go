@@ -564,8 +564,18 @@ func validatePrivateSocketDir(path string, euid int) error {
 }
 
 func ensurePrivateSocketDir(path string, euid int) error {
-	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("creating private socket directory %q: %w", path, err)
+	created := false
+	if err := os.Mkdir(path, 0o700); err != nil {
+		if !os.IsExist(err) {
+			return fmt.Errorf("creating private socket directory %q: %w", path, err)
+		}
+	} else {
+		created = true
+	}
+	if created {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("securing newly created private socket directory %q: %w", path, err)
+		}
 	}
 	return validatePrivateSocketDir(path, euid)
 }

@@ -64,6 +64,48 @@ func ensurePrivateFallbackRootForTest(t *testing.T) string {
 	return root
 }
 
+func TestEnsurePrivateSocketDirClearsInheritedSetgidForNewDirectory(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700|os.ModeSetgid); err != nil {
+		t.Fatalf("Chmod setgid parent: %v", err)
+	}
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatalf("Lstat setgid parent: %v", err)
+	}
+	if parentInfo.Mode()&os.ModeSetgid == 0 {
+		t.Skip("filesystem does not preserve setgid on directories")
+	}
+
+	child := filepath.Join(parent, "private")
+	if err := ensurePrivateSocketDir(child, os.Geteuid()); err != nil {
+		t.Fatalf("ensurePrivateSocketDir beneath setgid parent: %v", err)
+	}
+	requirePrivateSocketDirectory(t, child)
+}
+
+func TestEnsurePrivateSocketDirRejectsPreexistingPermissiveDirectoryWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preexisting")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir preexisting directory: %v", err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("Chmod preexisting directory: %v", err)
+	}
+
+	err := ensurePrivateSocketDir(path, os.Geteuid())
+	if err == nil || !strings.Contains(err.Error(), "private socket directory") {
+		t.Fatalf("ensurePrivateSocketDir error = %v, want private socket directory validation", err)
+	}
+	info, statErr := os.Lstat(path)
+	if statErr != nil {
+		t.Fatalf("Lstat preexisting directory: %v", statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("preexisting permissions = %04o, want unchanged 0755", got)
+	}
+}
+
 func requirePrivateFallbackRejected(t *testing.T, p *Provider, name string) {
 	t.Helper()
 	checks := []struct {
