@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -804,6 +805,77 @@ func TestReleaseOrphanedPoolAssignments_SkipsLiveSessionMissingFromSnapshot(t *t
 	}
 	if got.Assignee != sessionBead.Metadata["session_name"] {
 		t.Fatalf("assignee = %q, want %q", got.Assignee, sessionBead.Metadata["session_name"])
+	}
+}
+
+// A managed pool claim and its session-identity stamp are two writes. The
+// controller's exact trigger binding must bridge that interval; otherwise the
+// orphan pass can reopen a legitimate claim seconds after provider startup.
+func TestReleaseOrphanedPoolAssignments_FreshExactTriggerBridgesClaimStampRace(t *testing.T) {
+	store := beads.NewMemStore()
+	work, err := store.Create(beads.Bead{
+		Title:    "freshly claimed routed work",
+		Status:   "open",
+		Assignee: "worker",
+		Metadata: map[string]string{"gc.routed_to": "worker"},
+	})
+	if err != nil {
+		t.Fatalf("Create work: %v", err)
+	}
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("claim work: %v", err)
+	}
+	work, err = store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("reload work: %v", err)
+	}
+
+	now := time.Now().UTC()
+	sessionBead := beads.Bead{
+		ID:     "session-1",
+		Title:  "worker-1",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":              "worker-session-1",
+			"template":                  "worker",
+			"state":                     "active",
+			"state_reason":              "creation_complete",
+			"creation_complete_at":      now.Format(time.RFC3339),
+			poolManagedMetadataKey:      boolMetadata(true),
+			"gc.trigger_bead_id":        work.ID,
+			"gc.trigger_bead_store_ref": "city",
+		},
+	}
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:              "worker",
+		MinActiveSessions: intPtr(0),
+		MaxActiveSessions: intPtr(2),
+	}}}
+
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		store, cfg, "", []beads.Bead{sessionBead}, []beads.Bead{work},
+		[]beads.Store{store}, []string{"city"}, nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none during exact trigger claim/stamp window", released)
+	}
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get work: %v", err)
+	}
+	if got.Status != "in_progress" || got.Assignee != "worker" {
+		t.Fatalf("work = status %q assignee %q, want retained canonical claim", got.Status, got.Assignee)
+	}
+
+	sessionBead.Metadata["creation_complete_at"] = now.Add(-postCreateProtectionTimeout - time.Second).Format(time.RFC3339)
+	released = releaseOrphanedPoolAssignmentsFromBeads(
+		store, cfg, "", []beads.Bead{sessionBead}, []beads.Bead{got},
+		[]beads.Store{store}, []string{"city"}, nil,
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("expired trigger released = %v, want %s", released, work.ID)
 	}
 }
 

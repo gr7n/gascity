@@ -4226,16 +4226,20 @@ func writeBSDLikeGrep(t *testing.T, binDir string) {
 	if err != nil {
 		t.Fatalf("find grep: %v", err)
 	}
-	writeExecutable(t, filepath.Join(binDir, "grep"), fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
+	writeExecutable(t, filepath.Join(binDir, "grep"), fmt.Sprintf(`#!/bin/sh
+set -eu
 bre_alternation='\|'
-if [ "$#" -ge 2 ] && { [ "$1" = "-vi" ] || [ "$1" = "-i" ]; } && [[ "$2" == *"$bre_alternation"* ]]; then
-  if [ "$1" = "-vi" ]; then
-    shift 2
-    cat "$@"
-    exit 0
-  fi
-  exit 1
+if [ "$#" -ge 2 ] && { [ "$1" = "-vi" ] || [ "$1" = "-i" ]; }; then
+  case "$2" in
+    *"$bre_alternation"*)
+      if [ "$1" = "-vi" ]; then
+        shift 2
+        cat "$@"
+        exit 0
+      fi
+      exit 1
+      ;;
+  esac
 fi
 exec %s "$@"
 `, shellQuote(realGrep)))

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,26 @@ import (
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 )
+
+func TestSessionSubmitErrorCodeMarksUnconfirmedDelivery(t *testing.T) {
+	if got := sessionSubmitErrorCode(fmt.Errorf("wrapped: %w", runtime.ErrDeliveryUnconfirmed)); got != "delivery_unconfirmed" {
+		t.Fatalf("sessionSubmitErrorCode(unconfirmed) = %q", got)
+	}
+	if got := sessionSubmitErrorCode(errors.New("provider failed")); got != "submit_failed" {
+		t.Fatalf("sessionSubmitErrorCode(generic) = %q", got)
+	}
+}
+
+func TestSessionSubmitErrorCodeMarksProviderUnavailable(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &runtime.ProviderUnavailableError{
+		StatusCode: 429,
+		RetryAfter: "17s",
+		LimitID:    "codex",
+	})
+	if got := sessionSubmitErrorCode(err); got != "provider_unavailable" {
+		t.Fatalf("sessionSubmitErrorCode(provider unavailable) = %q", got)
+	}
+}
 
 func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	fs := newSessionFakeState(t)

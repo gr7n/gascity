@@ -78,6 +78,24 @@ func TestBdStoreDirHandlesNilReceiver(t *testing.T) {
 	}
 }
 
+func TestBdStoreHumanResponseIsOneShotOnAmbiguousTransportFailure(t *testing.T) {
+	calls := 0
+	runner := func(_ string, name string, args ...string) ([]byte, error) {
+		calls++
+		if name != "bd" || strings.Join(args, " ") != "human respond ex-decision --response Approve --actor email:operator@example.com" {
+			t.Fatalf("unexpected command: %s %s", name, strings.Join(args, " "))
+		}
+		return nil, errors.New("invalid connection: response may have committed")
+	}
+	store := beads.NewBdStore("/city", runner)
+	if err := store.RespondToHuman("ex-decision", "Approve", "email:operator@example.com"); err == nil {
+		t.Fatal("ambiguous response unexpectedly succeeded")
+	}
+	if calls != 1 {
+		t.Fatalf("human response calls = %d, want exactly 1", calls)
+	}
+}
+
 // --- Create ---
 
 func TestBdStoreCreate(t *testing.T) {
@@ -1003,6 +1021,25 @@ func TestBdStoreClaimConflictReturnsFalse(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("Claim ok = true, want false; claimed=%+v", claimed)
+	}
+}
+
+func TestBdStoreClaimAsPassesExplicitActor(t *testing.T) {
+	var gotArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		gotArgs = append([]string(nil), args...)
+		return []byte(`[{"id":"bd-42","status":"in_progress","assignee":"worker-1","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}]`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+	claimed, ok, err := s.ClaimAs("bd-42", "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.Assignee != "worker-1" {
+		t.Fatalf("ClaimAs = (%+v, %v), want worker-1 claim", claimed, ok)
+	}
+	if got := strings.Join(gotArgs, " "); got != "update bd-42 --claim --actor worker-1 --json" {
+		t.Fatalf("args = %q, want explicit actor claim args", got)
 	}
 }
 

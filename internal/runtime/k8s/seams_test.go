@@ -76,8 +76,10 @@ func TestSeamsK8sCapabilitiesAndTransport(t *testing.T) {
 	}
 }
 
-// TestSeamsK8sMetaStore proves the MetaStore seam round-trips through the tmux
-// session environment (set-environment / show-environment over execInPod).
+// TestSeamsK8sMetaStore proves the MetaStore seam round-trips through the pod's
+// global tmux environment (set-environment / show-environment over execInPod).
+// A tmux server inherits pod environment values globally; querying a session
+// environment would miss the managed startup identity before SetMeta runs.
 func TestSeamsK8sMetaStore(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -88,20 +90,20 @@ func TestSeamsK8sMetaStore(t *testing.T) {
 	if !ok {
 		t.Fatal("k8s Runtime should implement runtime.MetaStore")
 	}
-	fake.setExecResult("s", []string{"tmux", "set-environment", "-t", tmuxSession, "k", "v"}, "", nil)
+	fake.setExecResult("s", []string{"tmux", "set-environment", "-g", "k", "v"}, "", nil)
 	if err := ms.SetMeta("s", "k", "v"); err != nil {
 		t.Fatalf("SetMeta: %v", err)
 	}
-	fake.setExecResult("s", []string{"tmux", "show-environment", "-t", tmuxSession, "k"}, "k=v", nil)
+	fake.setExecResult("s", []string{"tmux", "show-environment", "-g", "k"}, "k=v", nil)
 	if got, err := ms.GetMeta("s", "k"); err != nil || got != "v" {
 		t.Fatalf("GetMeta = %q, %v; want v, nil", got, err)
 	}
 	// An explicitly-unset key (tmux prints "-KEY") parses to empty.
-	fake.setExecResult("s", []string{"tmux", "show-environment", "-t", tmuxSession, "missing"}, "-missing", nil)
+	fake.setExecResult("s", []string{"tmux", "show-environment", "-g", "missing"}, "-missing", nil)
 	if got, err := ms.GetMeta("s", "missing"); err != nil || got != "" {
 		t.Fatalf("GetMeta(unset) = %q, %v; want empty, nil", got, err)
 	}
-	fake.setExecResult("s", []string{"tmux", "set-environment", "-t", tmuxSession, "-u", "k"}, "", nil)
+	fake.setExecResult("s", []string{"tmux", "set-environment", "-g", "-u", "k"}, "", nil)
 	if err := ms.RemoveMeta("s", "k"); err != nil {
 		t.Fatalf("RemoveMeta: %v", err)
 	}

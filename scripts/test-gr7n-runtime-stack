@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+export CI=1 GOENV=off GOWORK=off GOFLAGS= GC_FAST_UNIT=1
+
+# Fill the shared, checksum-verified module cache once. Starting the package
+# gates concurrently against an empty cache otherwise downloads the same large
+# dependency graph in every process and turns a cold check into a network race.
+go mod download
+
+pids=()
+run() { "$@" & pids+=("$!"); }
+
+run go test -vet=off \
+  ./cmd/gc \
+  ./internal/api \
+  ./internal/beads \
+  ./internal/beads/contract \
+  ./internal/doctor/checks \
+  ./internal/pgauth \
+  ./internal/runtime/hybrid \
+  ./internal/runtime/k8s \
+  ./internal/runtime/subprocess \
+  ./internal/session \
+  ./internal/sessionlog \
+  ./internal/worker \
+  -run '^(Test(AllowLegacyDoltMetadataRepairRejectsPostgresDSN|ApplyResolvedScopePostgresEnv_.*|BdRuntimeEnvCity_PostgresBackendBdMainShape|ProjectedPostgresEnvKeysIncludeBeadsPgPassword|ApplyPostgresScopeManifest.*|FirstStoreWithWork.*|ApplyNestedCapsPreservesResumeBeforeNewAdmission|ComputePoolDesiredStates_GlobalReadyOrderIgnoresAgentOrder|StampObservedProviderKind|ReconcileSessionBeads_DesiredRemoteSessionLearnsObservedProviderFamily|ResolveTemplatePreloadedContextOmitsPrimeWithoutPretendingHooks|BeadReadyFederationUsesGlobalCanonicalOrder|SessionSubmitErrorCode.*|HandleSessionTranscriptUsesObservedProviderKindForWrapper|HandleStatusReadyPreservesCollidingStoreLocalIDsLikeCanonicalEndpoint|WorkReview.*|BdStoreHumanResponseIsOneShotOnAmbiguousTransportFailure|EnrichReadyProjectionForCacheDisablesUnsupportedBdSQL|EnsureCanonicalMetadata.*|LoadMetadataState.*Postgres.*|MetadataStatePostgresEndpoint|ParsePostgresDSNEndpoint|ResolveFromEnv_.*BeadsPg.*|SourceString_BeadsPgIdentifiers|PostgresAuthCheck_.*|BuildPod_ExtraProjectionFields|ParsePodProjectionEnv.*|ObserveLiveness.*|EnsurePrivateSocketDir.*|ObservedProviderKind|KnownProviderFamily|SessionHandleUsesObservedProviderKindForWrappedTranscript))$'
+run go test -vet=off ./internal/runtime/tmux
+run go test -vet=off ./internal/testpolicy/resourcecensus -run '^TestRepositoryLedgerMatchesCensusAndDocumentation$'
+
+status=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || status=1
+done
+exit "$status"

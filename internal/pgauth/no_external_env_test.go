@@ -97,10 +97,13 @@ func TestForbiddenPostgresEnvReadSubstringsCoverCommonAccessors(t *testing.T) {
 	cases := []string{
 		`os.Getenv("BEADS_POSTGRES_`,
 		`os.Getenv("GC_POSTGRES_`,
+		`os.Getenv("BEADS_PG_PASSWORD")`,
 		`os.LookupEnv("BEADS_POSTGRES_`,
 		`os.LookupEnv("GC_POSTGRES_`,
+		`os.LookupEnv("BEADS_PG_PASSWORD")`,
 		`syscall.Getenv("BEADS_POSTGRES_`,
 		`syscall.Getenv("GC_POSTGRES_`,
+		`syscall.Getenv("BEADS_PG_PASSWORD")`,
 	}
 	for _, line := range cases {
 		if !containsForbiddenPostgresEnvRead(line, forbiddenSubstrings) {
@@ -113,10 +116,13 @@ func forbiddenPostgresEnvReadSubstrings() []string {
 	return []string{
 		`os.Getenv("BEADS_POSTGRES_`,
 		`os.Getenv("GC_POSTGRES_`,
+		`os.Getenv("BEADS_PG_PASSWORD`,
 		`os.LookupEnv("BEADS_POSTGRES_`,
 		`os.LookupEnv("GC_POSTGRES_`,
+		`os.LookupEnv("BEADS_PG_PASSWORD`,
 		`syscall.Getenv("BEADS_POSTGRES_`,
 		`syscall.Getenv("GC_POSTGRES_`,
+		`syscall.Getenv("BEADS_PG_PASSWORD`,
 	}
 }
 

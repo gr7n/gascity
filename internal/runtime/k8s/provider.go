@@ -25,32 +25,45 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ runtime.Provider     = (*Provider)(nil)
-	_ runtime.ExecProvider = (*Provider)(nil)
+	_ runtime.Provider         = (*Provider)(nil)
+	_ runtime.ExecProvider     = (*Provider)(nil)
+	_ runtime.DialogProvider   = (*Provider)(nil)
+	_ runtime.LivenessObserver = (*Provider)(nil)
+)
+
+const (
+	maxObservedProcessNames     = 64
+	maxObservedProcessNameBytes = 256
+	maxProcessSnapshotBytes     = 64 << 10
+	livenessObservationTimeout  = 5 * time.Second
 )
 
 // Provider is a native Kubernetes session provider using client-go.
 // Eliminates subprocess overhead by making direct API calls over reused
 // HTTP/2 connections. Pod manifests are compatible with gc-session-k8s.
 type Provider struct {
-	ops                k8sOps
-	namespace          string
-	image              string
-	k8sContext         string
-	managedServiceHost string
-	managedServicePort string
-	cpuRequest         string
-	memRequest         string
-	cpuLimit           string
-	memLimit           string
-	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
-	prebaked           bool                // skip staging + init container for prebaked images
-	nodeSelector       map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
-	tolerations        []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
-	affinity           *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
-	priorityClassName  string              // GC_K8S_PRIORITY_CLASS_NAME
-	postStartSettle    time.Duration       // settle time before post-start liveness check
-	stderr             io.Writer           // warning output (default os.Stderr)
+	ops                  k8sOps
+	namespace            string
+	image                string
+	k8sContext           string
+	managedServiceHost   string
+	managedServicePort   string
+	cpuRequest           string
+	memRequest           string
+	cpuLimit             string
+	memLimit             string
+	serviceAccount       string               // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	prebaked             bool                 // skip staging + init container for prebaked images
+	nodeSelector         map[string]string    // GC_K8S_NODE_SELECTOR (JSON)
+	tolerations          []corev1.Toleration  // GC_K8S_TOLERATIONS (JSON)
+	affinity             *corev1.Affinity     // GC_K8S_AFFINITY (JSON)
+	priorityClassName    string               // GC_K8S_PRIORITY_CLASS_NAME
+	extraVolumes         []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
+	extraVolumeMounts    []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
+	extraEnv             []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
+	postStartSettle      time.Duration        // settle time before post-start liveness check
+	startupDialogTimeout time.Duration        // bounded transient startup-screen handling
+	stderr               io.Writer            // warning output (default os.Stderr)
 }
 
 type schedulingFields struct {
@@ -58,6 +71,12 @@ type schedulingFields struct {
 	tolerations       []corev1.Toleration
 	affinity          *corev1.Affinity
 	priorityClassName string
+}
+
+type podProjectionFields struct {
+	volumes      []corev1.Volume
+	volumeMounts []corev1.VolumeMount
+	env          []corev1.EnvVar
 }
 
 // NewProvider creates a K8s session provider.
@@ -68,6 +87,9 @@ type schedulingFields struct {
 //   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
+//   - GC_K8S_EXTRA_VOLUMES_JSON — extra corev1.Volume JSON array
+//   - GC_K8S_EXTRA_VOLUME_MOUNTS_JSON — extra corev1.VolumeMount JSON array
+//   - GC_K8S_EXTRA_ENV_JSON — extra corev1.EnvVar JSON array
 //
 // The in-cluster Dolt service alias defaults to the provider defaults
 // (dolt.gc.svc.cluster.local:3307). Pods receive projected GC_DOLT_* env;
@@ -101,29 +123,38 @@ func NewProvider() (*Provider, error) {
 		return nil, err
 	}
 
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Provider{
 		ops: &realK8sOps{
 			clientset:  clientset,
 			restConfig: restConfig,
 			namespace:  namespace,
 		},
-		namespace:          namespace,
-		image:              image,
-		k8sContext:         k8sContext,
-		managedServiceHost: managedServiceHost,
-		managedServicePort: managedServicePort,
-		cpuRequest:         envOrDefault("GC_K8S_CPU_REQUEST", "500m"),
-		memRequest:         envOrDefault("GC_K8S_MEM_REQUEST", "1Gi"),
-		cpuLimit:           envOrDefault("GC_K8S_CPU_LIMIT", "2"),
-		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
-		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
-		prebaked:           os.Getenv("GC_K8S_PREBAKED") == "true",
-		postStartSettle:    3 * time.Second,
-		stderr:             os.Stderr,
-		nodeSelector:       scheduling.nodeSelector,
-		tolerations:        scheduling.tolerations,
-		affinity:           scheduling.affinity,
-		priorityClassName:  scheduling.priorityClassName,
+		namespace:            namespace,
+		image:                image,
+		k8sContext:           k8sContext,
+		managedServiceHost:   managedServiceHost,
+		managedServicePort:   managedServicePort,
+		cpuRequest:           envOrDefault("GC_K8S_CPU_REQUEST", "500m"),
+		memRequest:           envOrDefault("GC_K8S_MEM_REQUEST", "1Gi"),
+		cpuLimit:             envOrDefault("GC_K8S_CPU_LIMIT", "2"),
+		memLimit:             envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
+		serviceAccount:       os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
+		prebaked:             os.Getenv("GC_K8S_PREBAKED") == "true",
+		postStartSettle:      3 * time.Second,
+		stderr:               os.Stderr,
+		nodeSelector:         scheduling.nodeSelector,
+		tolerations:          scheduling.tolerations,
+		affinity:             scheduling.affinity,
+		priorityClassName:    scheduling.priorityClassName,
+		extraVolumes:         projection.volumes,
+		extraVolumeMounts:    projection.volumeMounts,
+		extraEnv:             projection.env,
+		startupDialogTimeout: runtime.StartupDialogTimeout(),
 	}, nil
 }
 
@@ -148,19 +179,45 @@ func parseSchedulingEnv() (schedulingFields, error) {
 	return scheduling, nil
 }
 
+func parsePodProjectionEnv() (podProjectionFields, error) {
+	var projection podProjectionFields
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUMES_JSON", &projection.volumes); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", &projection.volumeMounts); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_ENV_JSON", &projection.env); err != nil {
+		return podProjectionFields{}, err
+	}
+	return projection, nil
+}
+
+func parseJSONEnv(name string, target any) error {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), target); err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	return nil
+}
+
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).
 func newProviderWithOps(ops k8sOps) *Provider {
 	return &Provider{
-		ops:                ops,
-		namespace:          "test-ns",
-		image:              "test-image:latest",
-		managedServiceHost: podManagedDoltHost,
-		managedServicePort: podManagedDoltPort,
-		cpuRequest:         "500m",
-		memRequest:         "1Gi",
-		cpuLimit:           "2",
-		memLimit:           "4Gi",
-		stderr:             io.Discard,
+		ops:                  ops,
+		namespace:            "test-ns",
+		image:                "test-image:latest",
+		managedServiceHost:   podManagedDoltHost,
+		managedServicePort:   podManagedDoltPort,
+		cpuRequest:           "500m",
+		memRequest:           "1Gi",
+		cpuLimit:             "2",
+		memLimit:             "4Gi",
+		startupDialogTimeout: 0,
+		stderr:               io.Discard,
 	}
 }
 
@@ -290,29 +347,64 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_, tmuxErr := p.ops.execInPod(ctx, podName, "agent",
 			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
 		if tmuxErr != nil {
+			exitDetail := p.agentExitDetail(ctx, podName)
 			cleanup("session died immediately after startup")
-			return fmt.Errorf("%w: session %q died immediately after startup: %w",
-				runtime.ErrSessionDiedDuringStartup, name, tmuxErr)
+			return fmt.Errorf("%w: session %q died immediately after startup%s: %w",
+				runtime.ErrSessionDiedDuringStartup, name, exitDetail, tmuxErr)
 		}
+	}
+
+	// Match local tmux startup: clear known provider dialogs before and after
+	// readiness. A process can be alive while Codex is still asking whether to
+	// trust the workspace; sending the role prompt at that point discards it
+	// into the dialog instead of starting a turn.
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		cleanup("startup dialog handling canceled")
+		return fmt.Errorf("handling startup dialogs for session %q: %w", name, err)
+	}
+
+	// ReadyDelayMs is the provider-neutral fallback readiness contract when no
+	// prompt probe is available. The tmux and exec adapters already honor it;
+	// k8s must not report creation complete or deliver the initial nudge before
+	// the same delay has elapsed.
+	if err := waitForK8sReadyDelay(ctx, cfg.ReadyDelayMs); err != nil {
+		cleanup("ready delay canceled")
+		return fmt.Errorf("waiting for runtime readiness for session %q: %w", name, err)
+	}
+	if requiresPostStartLiveness && cfg.ReadyDelayMs > 0 &&
+		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
+		exitDetail := p.agentExitDetail(ctx, podName)
+		cleanup("agent process not ready after ready delay")
+		return fmt.Errorf("%w: session %q has no live agent process after ready delay%s",
+			runtime.ErrSessionDiedDuringStartup, name, exitDetail)
+	}
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		cleanup("late startup dialog handling canceled")
+		return fmt.Errorf("handling late startup dialogs for session %q: %w", name, err)
 	}
 
 	// Send initial nudge if configured (matches tmux adapter step 6).
 	if cfg.Nudge != "" {
-		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
+		if err := p.carrier().Nudge(ctx, name, runtime.TextContent(cfg.Nudge)); err != nil {
+			exitDetail := p.agentExitDetail(ctx, podName)
+			cleanup("initial nudge delivery failed")
+			return fmt.Errorf("%w: session %q could not receive its initial nudge%s: %v",
+				runtime.ErrSessionDiedDuringStartup, name, exitDetail, err)
+		}
 	}
 
 	return nil
 }
 
-// runPodPostLaunchSetup enables pane logging and runs session_setup and
-// session_setup_script inside the pod, best-effort. Shared by Start (after the
-// entrypoint launches the agent) and Relaunch (after the respawn). k8s does not
-// run SessionLive (RunLive is a no-op), matching the pre-un-weld behavior.
+// runPodPostLaunchSetup runs session_setup and session_setup_script inside the
+// pod, best-effort. Shared by Start (after the entrypoint launches the agent)
+// and Relaunch (after the respawn). k8s does not retain pane content merely for
+// diagnostics; the launch wrapper records a bounded numeric exit status.
+// k8s does not run SessionLive (RunLive is a no-op), matching the pre-un-weld
+// behavior.
 func (p *Provider) runPodPostLaunchSetup(ctx context.Context, podName string, cfg runtime.Config) {
-	// Enable pane logging for diagnostics.
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"}, nil)
-
 	// Run session_setup commands inside the pod.
 	for _, cmd := range cfg.SessionSetup {
 		if cmd == "" {
@@ -391,15 +483,92 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		}
 		if _, err := p.ops.execInPod(ctx, podName, "agent",
 			[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
-			return fmt.Errorf("%w: session %q died immediately after relaunch: %w",
-				runtime.ErrSessionDiedDuringStartup, name, err)
+			return fmt.Errorf("%w: session %q died immediately after relaunch%s: %w",
+				runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName), err)
 		}
 	}
 
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("handling startup dialogs after relaunch for session %q: %w", name, err)
+	}
+	if err := waitForK8sReadyDelay(ctx, cfg.ReadyDelayMs); err != nil {
+		return fmt.Errorf("waiting for runtime readiness after relaunch for session %q: %w", name, err)
+	}
+	if k8sRequiresPostStartLiveness(cfg) && cfg.ReadyDelayMs > 0 &&
+		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
+		return fmt.Errorf("%w: session %q has no live agent process after relaunch ready delay%s",
+			runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName))
+	}
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("handling late startup dialogs after relaunch for session %q: %w", name, err)
+	}
+
 	if cfg.Nudge != "" {
-		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
+		if err := p.carrier().Nudge(ctx, name, runtime.TextContent(cfg.Nudge)); err != nil {
+			return fmt.Errorf("%w: session %q could not receive its relaunch nudge%s: %v",
+				runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName), err)
+		}
 	}
 	return nil
+}
+
+// dismissStartupDialogs reuses the shared dialog matcher while retaining no
+// pane content. The controller-side worktree establishes the first-party import
+// trust root; projected pod paths contain the same repository bytes.
+func (p *Provider) dismissStartupDialogs(ctx context.Context, name string, cfg runtime.Config) {
+	if !runtime.ShouldAcceptStartupDialogs(cfg) || p.startupDialogTimeout <= 0 {
+		return
+	}
+	trustRoot := runtime.WorkspaceImportTrustRoot(ctx, cfg.WorkDir)
+	_ = p.dismissKnownDialogs(ctx, name, p.startupDialogTimeout, trustRoot)
+}
+
+// DismissKnownDialogs implements runtime.DialogProvider for later submissions.
+// Without a resolved session worktree, external imports remain untrusted.
+func (p *Provider) DismissKnownDialogs(ctx context.Context, name string, timeout time.Duration) error {
+	return p.dismissKnownDialogs(ctx, name, timeout, "")
+}
+
+func (p *Provider) dismissKnownDialogs(ctx context.Context, name string, timeout time.Duration, trustRoot string) error {
+	carrier := p.carrier()
+	return runtime.AcceptStartupDialogsWithTimeout(
+		ctx,
+		timeout,
+		func(lines int) (string, error) { return carrier.Peek(ctx, name, lines) },
+		func(keys ...string) error { return carrier.SendKeys(ctx, name, keys...) },
+		runtime.WithTrustedImportRoot(trustRoot),
+	)
+}
+
+// agentExitDetail reads only the bounded numeric receipt written by the launch
+// wrapper. Missing, incomplete, or malformed receipts remain silent.
+func (p *Provider) agentExitDetail(ctx context.Context, podName string) string {
+	output, err := p.ops.execInPod(ctx, podName, "agent",
+		[]string{"cat", agentExitStatusPath}, nil)
+	if err != nil {
+		return ""
+	}
+	status, err := strconv.ParseUint(strings.TrimSpace(output), 10, 8)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(" (agent exit status %d)", status)
+}
+
+func waitForK8sReadyDelay(ctx context.Context, readyDelayMs int) error {
+	if readyDelayMs <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(time.Duration(readyDelayMs) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func k8sRequiresPostStartLiveness(cfg runtime.Config) bool {
@@ -529,6 +698,80 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	return false
 }
 
+// ObserveLiveness reports tmux and configured agent-process liveness for a
+// dedicated agent container. Identity evidence is limited to exact executable
+// basenames from a bounded process snapshot; configured hints never enter the
+// remote command line, so the probe cannot match itself.
+func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
+	if strings.TrimSpace(name) == "" {
+		return runtime.Liveness{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), livenessObservationTimeout)
+	defer cancel()
+	podName, err := p.findRunningPod(ctx, name)
+	if err != nil {
+		return runtime.Liveness{}
+	}
+
+	_, err = p.ops.execInPod(ctx, podName, "agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+	if err != nil {
+		return runtime.Liveness{}
+	}
+	running := runtime.Liveness{Running: true, Alive: true}
+
+	if len(processNames) == 0 || len(processNames) > maxObservedProcessNames {
+		return running
+	}
+
+	output, err := p.ops.execInPod(ctx, podName, "agent", processSnapshotCommand(), nil)
+	if err != nil || output == "" || len(output) > maxProcessSnapshotBytes {
+		return running
+	}
+	observed := make(map[string]struct{})
+	for _, command := range strings.Fields(output) {
+		observed[command] = struct{}{}
+	}
+	matched := make([]string, 0, len(processNames))
+	seen := make(map[string]struct{}, len(processNames))
+	for _, hint := range processNames {
+		hint = strings.TrimSpace(hint)
+		if len(hint) > maxObservedProcessNameBytes || strings.ContainsAny(hint, "\x00\r\n") {
+			return running
+		}
+		if hint == "" {
+			continue
+		}
+		if _, duplicate := seen[hint]; duplicate {
+			continue
+		}
+		seen[hint] = struct{}{}
+		if _, exists := observed[hint]; exists {
+			matched = append(matched, hint)
+		}
+	}
+	if len(seen) == 0 {
+		return running
+	}
+	if len(matched) == 0 {
+		return runtime.Liveness{Running: true}
+	}
+	return runtime.Liveness{
+		Running:             true,
+		Alive:               true,
+		MatchedProcessNames: matched,
+	}
+}
+
+func processSnapshotCommand() []string {
+	return []string{
+		"sh", "-c",
+		`ps -eo comm= | head -c "$1"`,
+		"gc-liveness",
+		strconv.Itoa(maxProcessSnapshotBytes + 1),
+	}
+}
+
 // Nudge types a message into the tmux session followed by Enter.
 // Uses -l (literal mode) so tmux key names in the message text are not
 // interpreted as keystrokes. Content blocks are flattened to text.
@@ -551,7 +794,14 @@ func (p *Provider) RunLive(_ string, _ runtime.Config) error {
 	return nil
 }
 
-// SetMeta stores a key-value pair in the tmux environment.
+// SetMeta stores a key-value pair in the pod's tmux server environment.
+//
+// K8s runs exactly one tmux server/session per pod. The server inherits the
+// managed session identity (GC_SESSION_ID, GC_INSTANCE_TOKEN, and friends) from
+// the pod environment, but tmux exposes those inherited values only through its
+// global environment. Using the per-session environment here made GetMeta miss
+// the startup identity and caused the reconciler to roll back healthy async
+// starts as runtimes belonging to another session.
 func (p *Provider) SetMeta(name, key, value string) error {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -559,11 +809,11 @@ func (p *Provider) SetMeta(name, key, value string) error {
 		return nil // best-effort
 	}
 	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value}, nil)
+		[]string{"tmux", "set-environment", "-g", key, value}, nil)
 	return nil
 }
 
-// GetMeta retrieves a metadata value from the tmux environment.
+// GetMeta retrieves a metadata value from the pod's tmux server environment.
 func (p *Provider) GetMeta(name, key string) (string, error) {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -571,7 +821,7 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 		return "", nil
 	}
 	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "show-environment", "-t", tmuxSession, key}, nil)
+		[]string{"tmux", "show-environment", "-g", key}, nil)
 	if err != nil {
 		return "", nil
 	}
@@ -586,7 +836,7 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 	return "", nil
 }
 
-// RemoveMeta removes a metadata key from the tmux environment.
+// RemoveMeta removes a metadata key from the pod's tmux server environment.
 func (p *Provider) RemoveMeta(name, key string) error {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -594,7 +844,7 @@ func (p *Provider) RemoveMeta(name, key string) error {
 		return nil // best-effort
 	}
 	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key}, nil)
+		[]string{"tmux", "set-environment", "-g", "-u", key}, nil)
 	return nil
 }
 

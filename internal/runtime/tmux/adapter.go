@@ -94,8 +94,17 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if errors.Is(err, ErrServerDegraded) {
 		return err
 	}
-	p.cleanupFailedStart(name, cfg)
+	if failedStartMustCleanup(err) {
+		p.cleanupFailedStart(name, cfg)
+	} else {
+		p.cache.Invalidate()
+	}
 	return err
+}
+
+func failedStartMustCleanup(err error) bool {
+	return !errors.Is(err, runtime.ErrProviderUnavailable) &&
+		!errors.Is(err, runtime.ErrDeliveryUnconfirmed)
 }
 
 func stageStartFiles(cfg runtime.Config, warnings io.Writer) error {
@@ -414,9 +423,14 @@ func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.L
 	if alive && !running {
 		running = true
 	}
+	var matched []string
+	if alive {
+		matched = p.cache.MatchedProcessNames(name, processNames)
+	}
 	return runtime.Liveness{
-		Running: running,
-		Alive:   alive,
+		Running:             running,
+		Alive:               alive,
+		MatchedProcessNames: matched,
 	}
 }
 

@@ -153,6 +153,20 @@ func releaseOrphanedPoolAssignments(
 		if wb.Status != "open" && wb.Status != "in_progress" {
 			continue
 		}
+		workStoreRef := ""
+		if storeRefAware {
+			workStoreRef = assignedWorkStoreRefs[i]
+		}
+		// A fresh pool process can claim its routed bead before the follow-up
+		// identity stamp reaches the store. During that narrow claim->stamp
+		// interval the assignee still looks canonical rather than concrete, so
+		// the ordinary session-identity indexes below cannot prove ownership.
+		// The controller already binds the exact trigger bead and store to the
+		// session before start; honor that exact binding through the same short
+		// post-create window used by the lifecycle sweep.
+		if freshTriggeredSessionOwnsWork(openSessionInfos, wb.ID, workStoreRef, storeRefAware, time.Now()) {
+			continue
+		}
 		assignee := strings.TrimSpace(wb.Assignee)
 		if assignee == "" && wb.Status == "in_progress" && isCanonicalWorkflowRoot(wb) {
 			continue
@@ -170,10 +184,6 @@ func releaseOrphanedPoolAssignments(
 				continue
 			}
 		} else {
-			workStoreRef := ""
-			if storeRefAware {
-				workStoreRef = assignedWorkStoreRefs[i]
-			}
 			if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
@@ -211,6 +221,35 @@ func releaseOrphanedPoolAssignments(
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
 	return released
+}
+
+// freshTriggeredSessionOwnsWork bridges the only interval in which a fresh
+// pool claim is not yet attributable through its assignee: claim is atomic,
+// while the gc.session_id/name identity stamp is the immediately following
+// write. Trigger identity is bound before provider start, so an exact
+// work-ID/store-ref match is safe to retain briefly without confusing sibling
+// rigs or unrelated workers.
+func freshTriggeredSessionOwnsWork(openSessionInfos []session.Info, workID, workStoreRef string, storeRefAware bool, now time.Time) bool {
+	workID = strings.TrimSpace(workID)
+	workStoreRef = strings.TrimSpace(workStoreRef)
+	if workID == "" {
+		return false
+	}
+	for _, info := range openSessionInfos {
+		if info.Closed ||
+			strings.TrimSpace(info.TriggerBeadID) != workID ||
+			!withinPostCreateProtectionWindowInfo(info, now) {
+			continue
+		}
+		if storeRefAware {
+			triggerStoreRef := strings.TrimSpace(info.TriggerBeadStoreRef)
+			if triggerStoreRef == "" || triggerStoreRef != workStoreRef {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {

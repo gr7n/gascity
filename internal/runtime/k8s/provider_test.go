@@ -18,6 +18,8 @@ import (
 func TestProviderImplementsInterface(_ *testing.T) {
 	// Compile-time check is in provider.go, but verify at test time too.
 	var _ runtime.Provider = (*Provider)(nil)
+	var _ runtime.DialogProvider = (*Provider)(nil)
+	var _ runtime.LivenessObserver = (*Provider)(nil)
 }
 
 func TestManagedServiceAliasDefaults(t *testing.T) {
@@ -51,6 +53,59 @@ func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	}
 	if port != "3308" {
 		t.Fatalf("port = %q, want 3308", port)
+	}
+}
+
+func TestParsePodProjectionEnv(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `[
+		{"name":"agent-tools","configMap":{"name":"agent-tools","defaultMode":365}}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", `[
+		{"name":"agent-tools","mountPath":"/opt/agent-tools","readOnly":true}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_ENV_JSON", `[
+		{"name":"PROVIDER_API_KEY","valueFrom":{"secretKeyRef":{"name":"provider-api-key","key":"PROVIDER_API_KEY"}}}
+	]`)
+
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		t.Fatalf("parsePodProjectionEnv() error = %v", err)
+	}
+	if got := projection.volumes[0].Name; got != "agent-tools" {
+		t.Fatalf("volume name = %q, want agent-tools", got)
+	}
+	if got := projection.volumes[0].ConfigMap.Name; got != "agent-tools" {
+		t.Fatalf("configmap name = %q, want agent-tools", got)
+	}
+	if got := *projection.volumes[0].ConfigMap.DefaultMode; got != 365 {
+		t.Fatalf("defaultMode = %d, want 365", got)
+	}
+	if got := projection.volumeMounts[0].MountPath; got != "/opt/agent-tools" {
+		t.Fatalf("mount path = %q, want /opt/agent-tools", got)
+	}
+	if got := projection.env[0].ValueFrom.SecretKeyRef.Name; got != "provider-api-key" {
+		t.Fatalf("secret name = %q, want provider-api-key", got)
+	}
+}
+
+func TestParsePodProjectionEnvRejectsInvalidJSON(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `not-json`)
+
+	if _, err := parsePodProjectionEnv(); err == nil || !strings.Contains(err.Error(), "GC_K8S_EXTRA_VOLUMES_JSON") {
+		t.Fatalf("parsePodProjectionEnv() error = %v, want GC_K8S_EXTRA_VOLUMES_JSON context", err)
+	}
+}
+
+func clearPodProjectionEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_EXTRA_VOLUMES_JSON",
+		"GC_K8S_EXTRA_VOLUME_MOUNTS_JSON",
+		"GC_K8S_EXTRA_ENV_JSON",
+	} {
+		t.Setenv(key, "")
 	}
 }
 
@@ -322,6 +377,36 @@ func TestNudge(t *testing.T) {
 	}
 }
 
+func TestNudgeMultilineUsesAtomicPaste(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	message := "role context\n\nRun the assigned task."
+
+	if err := p.Nudge("gc-test-agent", runtime.TextContent(message)); err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	var foundBuffer, foundPaste, foundEnter bool
+	for _, c := range fake.calls {
+		if c.method != "execInPod" {
+			continue
+		}
+		if len(c.cmd) == 6 && c.cmd[0] == "tmux" && c.cmd[1] == "set-buffer" &&
+			c.cmd[4] == "--" && c.cmd[5] == message {
+			foundBuffer = true
+		}
+		if len(c.cmd) >= 2 && c.cmd[0] == "tmux" && c.cmd[1] == "paste-buffer" {
+			foundPaste = true
+		}
+		if len(c.cmd) == 5 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "Enter" {
+			foundEnter = true
+		}
+	}
+	if !foundBuffer || !foundPaste || !foundEnter {
+		t.Fatalf("multiline nudge calls did not include atomic paste and submit: %+v", fake.calls)
+	}
+}
+
 func TestSendKeys(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -474,7 +559,7 @@ func TestMetaOps(t *testing.T) {
 
 	// GetMeta — configure fake to return the value.
 	fake.setExecResult("gc-test-agent",
-		[]string{"tmux", "show-environment", "-t", "main", "GC_DRAIN"},
+		[]string{"tmux", "show-environment", "-g", "GC_DRAIN"},
 		"GC_DRAIN=true\n", nil)
 
 	val, err := p.GetMeta("gc-test-agent", "GC_DRAIN")
@@ -487,7 +572,7 @@ func TestMetaOps(t *testing.T) {
 
 	// GetMeta with unset key.
 	fake.setExecResult("gc-test-agent",
-		[]string{"tmux", "show-environment", "-t", "main", "MISSING"},
+		[]string{"tmux", "show-environment", "-g", "MISSING"},
 		"-MISSING\n", nil)
 
 	val, err = p.GetMeta("gc-test-agent", "MISSING")
@@ -606,6 +691,144 @@ func TestProcessAlive(t *testing.T) {
 	if p.ProcessAlive("gc-test-agent", []string{"claude"}) {
 		t.Error("ProcessAlive returned true for terminating pod")
 	}
+}
+
+func TestObserveLivenessReportsExactMatchedProcessNames(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+	fake.setExecResult("gc-test-agent", processSnapshotCommand(), strings.Join([]string{
+		"bash",
+		"codex",
+		"head",
+	}, "\n"), nil)
+
+	got := p.ObserveLiveness("gc-test-agent", []string{"codex", "claude", "node", "codex"})
+	if !got.Running || !got.Alive {
+		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+	}
+	if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "codex" {
+		t.Fatalf("MatchedProcessNames = %v, want [codex]", got.MatchedProcessNames)
+	}
+
+	var execCalls int
+	for _, call := range fake.calls {
+		if call.method == "execInPod" {
+			execCalls++
+		}
+	}
+	if execCalls != 2 {
+		t.Fatalf("execInPod calls = %d, want exactly 2 independent of hint count", execCalls)
+	}
+}
+
+func TestObserveLivenessWithoutHintsNeedsOnlyTmuxRoot(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+
+	got := p.ObserveLiveness("gc-test-agent", nil)
+	if !got.Running || !got.Alive {
+		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+	}
+	if got.MatchedProcessNames != nil {
+		t.Fatalf("MatchedProcessNames = %v, want nil without hints", got.MatchedProcessNames)
+	}
+
+	var execCalls int
+	for _, call := range fake.calls {
+		if call.method == "execInPod" {
+			execCalls++
+		}
+	}
+	if execCalls != 1 {
+		t.Fatalf("execInPod calls = %d, want 1 without process hints", execCalls)
+	}
+}
+
+func TestObserveLivenessBoundsIdentityEvidence(t *testing.T) {
+	t.Run("oversized process snapshot", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(),
+			strings.Repeat("x", maxProcessSnapshotBytes+1), nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex"})
+		if !got.Running || !got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want optimistic liveness without identity evidence", got)
+		}
+	})
+
+	t.Run("too many hints", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		hints := make([]string, maxObservedProcessNames+1)
+		for i := range hints {
+			hints[i] = fmt.Sprintf("agent-%d", i)
+		}
+
+		got := p.ObserveLiveness("gc-test-agent", hints)
+		if !got.Running || !got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want optimistic liveness without rejected identity evidence", got)
+		}
+		for _, call := range fake.calls {
+			if call.method == "execInPod" && strings.Join(call.cmd, " ") == strings.Join(processSnapshotCommand(), " ") {
+				t.Fatal("oversized hint set must be rejected before taking a process snapshot")
+			}
+		}
+	})
+
+	t.Run("multiple provider families", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(), strings.Join([]string{
+			"bash",
+			"codex",
+			"claude",
+		}, "\n"), nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex", "claude"})
+		if !got.Running || !got.Alive {
+			t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+		}
+		want := []string{"codex", "claude"}
+		if len(got.MatchedProcessNames) != len(want) {
+			t.Fatalf("MatchedProcessNames = %v, want %v", got.MatchedProcessNames, want)
+		}
+		for i := range want {
+			if got.MatchedProcessNames[i] != want[i] {
+				t.Fatalf("MatchedProcessNames = %v, want %v", got.MatchedProcessNames, want)
+			}
+		}
+	})
+
+	t.Run("complete snapshot without a matching process is dead", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(),
+			"bash\ncodex-helper\n", nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex"})
+		if !got.Running || got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want running zombie with no process match", got)
+		}
+	})
 }
 
 func TestStartRequiresImage(t *testing.T) {
@@ -1457,6 +1680,30 @@ func TestBuildPodPrebaked(t *testing.T) {
 	if containsStr(entrypoint, ".gc-workspace-ready") {
 		t.Error("prebaked entrypoint should not wait for .gc-workspace-ready")
 	}
+	if !strings.Contains(entrypoint, agentExitReceiptB64()) ||
+		!strings.Contains(entrypoint, agentExitStatusPath) {
+		t.Error("prebaked entrypoint should install the numeric agent exit receipt")
+	}
+	if strings.Contains(entrypoint, "agent-output.log") {
+		t.Error("prebaked entrypoint must not retain pane output for diagnostics")
+	}
+}
+
+func TestAgentExitReceiptContainsOnlyBoundedLifecycleData(t *testing.T) {
+	decoded, err := base64.StdEncoding.DecodeString(agentExitReceiptB64())
+	if err != nil {
+		t.Fatalf("decode agent exit receipt: %v", err)
+	}
+	receipt := string(decoded)
+	if !strings.Contains(receipt, agentExitStatusPath) ||
+		!strings.Contains(receipt, `printf '%s\n' "$gr7n_agent_exit_status"`) {
+		t.Fatalf("agent exit receipt = %q, want numeric status write", receipt)
+	}
+	for _, forbidden := range []string{"tee ", "pipe-pane", "capture-pane", "agent-output"} {
+		if strings.Contains(receipt, forbidden) {
+			t.Fatalf("agent exit receipt = %q, must not retain content via %q", receipt, forbidden)
+		}
+	}
 }
 
 func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
@@ -1787,6 +2034,9 @@ func TestStartDetectsImmediateSessionDeath(t *testing.T) {
 			}
 			return "", fmt.Errorf("no server running on /tmp/tmux-1000/default")
 		}
+		if len(cmd) == 2 && cmd[0] == "cat" && cmd[1] == agentExitStatusPath {
+			return "17\n", nil
+		}
 		return "", nil
 	}
 
@@ -1801,6 +2051,9 @@ func TestStartDetectsImmediateSessionDeath(t *testing.T) {
 	}
 	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
 		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if !strings.Contains(err.Error(), "(agent exit status 17)") {
+		t.Fatalf("Start error = %v, want bounded numeric agent exit status", err)
 	}
 
 	// Pod should have been cleaned up.
@@ -2039,6 +2292,209 @@ func TestStartSendsNudge(t *testing.T) {
 	}
 }
 
+func TestStartDismissesWorkspaceTrustBeforeNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+	p.startupDialogTimeout = 50 * time.Millisecond
+
+	trusted := false
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		switch {
+		case len(cmd) >= 2 && cmd[0] == "tmux" && cmd[1] == "capture-pane":
+			if trusted {
+				return "› ready", nil
+			}
+			return "Do you trust the contents of this directory?", nil
+		case len(cmd) == 5 && cmd[0] == "tmux" && cmd[1] == "send-keys" && cmd[4] == "Enter":
+			if !trusted {
+				trusted = true
+			}
+		}
+		return "", nil
+	}
+
+	cfg := runtime.Config{
+		Command:      "codex",
+		ProcessNames: []string{"codex"},
+		WorkDir:      "/workspace",
+		Env: map[string]string{
+			"GC_AGENT": "worker",
+			"GC_CITY":  "/workspace",
+		},
+		Nudge: "Run the assigned task.",
+	}
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var trustEnter, nudgeText int
+	for i, c := range fake.calls {
+		if c.method != "execInPod" {
+			continue
+		}
+		if len(c.cmd) == 5 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "Enter" && trustEnter == 0 {
+			trustEnter = i + 1
+		}
+		if len(c.cmd) >= 6 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "-l" && c.cmd[5] == cfg.Nudge {
+			nudgeText = i + 1
+		}
+	}
+	if trustEnter == 0 || nudgeText == 0 || trustEnter >= nudgeText {
+		t.Fatalf("workspace trust was not accepted before nudge: trust=%d nudge=%d calls=%+v", trustEnter, nudgeText, fake.calls)
+	}
+}
+
+func TestStartHonorsReadyDelayBeforeNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 25,
+		Nudge:        "Run the assigned task.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	started := time.Now()
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("Start returned after %v, want ready delay before nudge", elapsed)
+	}
+
+	foundText := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 6 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" &&
+			c.cmd[4] == "-l" &&
+			c.cmd[5] == cfg.Nudge {
+			foundText = true
+			break
+		}
+	}
+	if !foundText {
+		t.Fatal("Start did not send the nudge after the ready delay")
+	}
+}
+
+func TestStartFailsClosedWhenInitialNudgeCannotBeDelivered(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 2 && cmd[0] == "tmux" && cmd[1] == "send-keys" {
+			return "", errors.New("tmux session disappeared")
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command: "claude --settings .gc/settings.json",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+		Nudge: "Run the assigned task.",
+	}
+	err := p.Start(context.Background(), "gc-test-agent", cfg)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Fatal("pod was retained after initial nudge delivery failed")
+	}
+}
+
+func TestStartReadyDelayCancellationCleansUpWithoutNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hasSessionCalls := 0
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 3 && cmd[0] == "tmux" && cmd[1] == "has-session" {
+			hasSessionCalls++
+			if hasSessionCalls == 2 {
+				cancel()
+			}
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 250,
+		Nudge:        "This must not be delivered.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	err := p.Start(ctx, "gc-test-agent", cfg)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error = %v, want context canceled", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Error("pod should have been deleted after ready-delay cancellation")
+	}
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 2 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" {
+			t.Fatal("Start delivered a nudge after ready-delay cancellation")
+		}
+	}
+}
+
+func TestStartReadyDelayRequiresConfiguredAgentProcess(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 2 && cmd[0] == "sh" && cmd[1] == "-c" &&
+			strings.Contains(cmd[2], "ps -eo comm=") {
+			return "bash\npython3\n", nil
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 1,
+		ProcessNames: []string{"claude", "codex"},
+		Nudge:        "This must not be delivered.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	err := p.Start(context.Background(), "gc-test-agent", cfg)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Error("pod should have been deleted when no configured agent process became ready")
+	}
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 2 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" {
+			t.Fatal("Start delivered a nudge before a configured agent process was ready")
+		}
+	}
+}
+
 func TestStartSkipsNudgeWhenEmpty(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -2106,6 +2562,10 @@ func TestProvider_RelaunchRespawnsAgentInWarmPod(t *testing.T) {
 	}
 	if strings.Contains(body, "agent --resume") {
 		t.Errorf("respawn body = %q leaked the raw command; it must be base64-shipped", body)
+	}
+	if !strings.Contains(body, agentExitReceiptB64()) ||
+		!strings.Contains(body, agentExitStatusPath) {
+		t.Errorf("respawn body = %q, want bounded numeric exit receipt", body)
 	}
 	// Warm reuse: no pod was created or deleted.
 	for _, c := range fake.calls {

@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	podManagedDoltHost = "dolt.gc.svc.cluster.local"
-	podManagedDoltPort = "3307"
+	podManagedDoltHost  = "dolt.gc.svc.cluster.local"
+	podManagedDoltPort  = "3307"
+	agentExitStatusPath = "/tmp/gc-agent-exit-status"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -73,21 +74,34 @@ func agentCommandB64(cfg runtime.Config) string {
 	return base64.StdEncoding.EncodeToString([]byte(cmd))
 }
 
+// agentExitReceiptB64 returns a shell suffix that records only the agent
+// process exit status. Keeping this separate from the command preserves the
+// command's base64 transport and avoids retaining prompt/output content merely
+// to diagnose an early provider exit.
+func agentExitReceiptB64() string {
+	suffix := fmt.Sprintf(
+		`; gr7n_agent_exit_status=$?; printf '%%s\n' "$gr7n_agent_exit_status" > %s; exit "$gr7n_agent_exit_status"`,
+		agentExitStatusPath,
+	)
+	return base64.StdEncoding.EncodeToString([]byte(suffix))
+}
+
 // buildRespawnCommand builds the in-pod shell command that respawns the agent in
 // the existing tmux "main" session (respawn-pane -k), reusing the warm pod. When
 // LINUX_USERNAME is set the entrypoint runs tmux under `su - <user>`, so the
 // respawn is wrapped in the same su to reach that user's tmux socket.
 func buildRespawnCommand(cfg runtime.Config) string {
 	cmdB64 := agentCommandB64(cfg)
+	exitReceiptB64 := agentExitReceiptB64()
 	if user := cfg.Env["LINUX_USERNAME"]; user != "" {
 		return fmt.Sprintf(
-			`CMD=$(echo '%s' | base64 -d) && su - %s -c "cd %s && tmux respawn-pane -k -t %s \"$CMD\""`,
-			cmdB64, user, projectedPodWorkDir(cfg), tmuxSession,
+			`CMD=$(echo '%s' | base64 -d) && EXIT_RECEIPT=$(echo '%s' | base64 -d) && : > %s && su - %s -c "cd %s && tmux respawn-pane -k -t %s \"$CMD$EXIT_RECEIPT\""`,
+			cmdB64, exitReceiptB64, agentExitStatusPath, user, projectedPodWorkDir(cfg), tmuxSession,
 		)
 	}
 	return fmt.Sprintf(
-		`CMD=$(echo '%s' | base64 -d) && tmux respawn-pane -k -t %s "$CMD"`,
-		cmdB64, tmuxSession,
+		`CMD=$(echo '%s' | base64 -d) && EXIT_RECEIPT=$(echo '%s' | base64 -d) && : > %s && tmux respawn-pane -k -t %s "$CMD$EXIT_RECEIPT"`,
+		cmdB64, exitReceiptB64, agentExitStatusPath, tmuxSession,
 	)
 }
 
@@ -213,10 +227,12 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	// Build the agent command (base64-encoded to avoid quoting issues) — shared
 	// with the relaunch path so the entrypoint and a respawn launch identically.
 	cmdB64 := agentCommandB64(cfg)
+	exitReceiptB64 := agentExitReceiptB64()
 
 	// Pod entrypoint: wait for workspace ready → pre_start → tmux → keepalive.
 	// Each pre_start command is base64-encoded and decoded at runtime to prevent
-	// shell metacharacter injection from user-supplied commands.
+	// shell metacharacter injection from user-supplied commands. The && chain is
+	// deliberate: a provisioning failure must stop before the agent launches.
 	var preStartCmds string
 	for _, cmd := range cfg.PreStart {
 		c := cmd
@@ -224,7 +240,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			c = strings.ReplaceAll(c, ctrlCity, "/workspace")
 		}
 		b64 := base64.StdEncoding.EncodeToString([]byte(c))
-		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh; ", b64)
+		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh && ", b64)
 	}
 
 	// Dynamic user creation: when LINUX_USERNAME is set, the container starts
@@ -254,15 +270,15 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if linuxUsername != "" {
 		// Run tmux session as the dynamic user via su.
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
-				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
-			userSetup, credCopy, wsWait, preStartCmds, cmdB64,
+			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && EXIT_RECEIPT=$(echo '%s' | base64 -d) && : > %s && "+
+				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD$EXIT_RECEIPT\" && sleep infinity"`,
+			userSetup, credCopy, wsWait, preStartCmds, cmdB64, exitReceiptB64, agentExitStatusPath,
 			linuxUsername, podWorkDir, tmuxSession,
 		)
 	} else {
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%sCMD=$(echo '%s' | base64 -d) && tmux new-session -d -s %s \"$CMD\" && sleep infinity",
-			credCopy, wsWait, preStartCmds, cmdB64, tmuxSession,
+			"%s%s%sCMD=$(echo '%s' | base64 -d) && EXIT_RECEIPT=$(echo '%s' | base64 -d) && : > %s && tmux new-session -d -s %s \"$CMD$EXIT_RECEIPT\" && sleep infinity",
+			credCopy, wsWait, preStartCmds, cmdB64, exitReceiptB64, agentExitStatusPath, tmuxSession,
 		)
 	}
 
@@ -308,6 +324,8 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 	}
+	mainVolMounts = append(mainVolMounts, p.extraVolumeMounts...)
+	volumes = append(volumes, p.extraVolumes...)
 
 	// Resources.
 	resources, err := buildResources(p)
@@ -338,7 +356,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 				WorkingDir:      podWorkDir,
 				Command:         []string{"/bin/sh", "-c"},
 				Args:            []string{tmuxCmd},
-				Env:             env,
+				Env:             appendOverrideEnvVars(env, p.extraEnv),
 				Stdin:           true,
 				TTY:             true,
 				Resources:       resources,
@@ -377,6 +395,27 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	}
 
 	return pod, nil
+}
+
+func appendOverrideEnvVars(base []corev1.EnvVar, overrides []corev1.EnvVar) []corev1.EnvVar {
+	if len(overrides) == 0 {
+		return base
+	}
+	overrideNames := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		if entry.Name != "" {
+			overrideNames[entry.Name] = struct{}{}
+		}
+	}
+	out := make([]corev1.EnvVar, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		if _, ok := overrideNames[entry.Name]; ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, overrides...)
+	return out
 }
 
 func cloneTolerations(in []corev1.Toleration) []corev1.Toleration {

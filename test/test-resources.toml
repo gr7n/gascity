@@ -10,7 +10,7 @@ version = 2
 [[audit_baseline]]
 scope = "all"
 resource = "subprocess"
-baseline_calls = 544
+baseline_calls = 545
 baseline_files = 164
 reported_calls = 495
 reported_files = 135
@@ -23,7 +23,7 @@ expires = "2026-10-01"
 [[audit_baseline]]
 scope = "all"
 resource = "fixed_sleep"
-baseline_calls = 423
+baseline_calls = 424
 baseline_files = 156
 reported_calls = 447
 reported_files = 157
@@ -142,8 +142,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "net_listen"
-baseline_calls = 94
-baseline_files = 35
+baseline_calls = 93
+baseline_files = 34
 reported_calls = 92
 reported_files = 34
 owner_bead = "ga-80po0c.2.2.2"
@@ -424,8 +424,8 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "net_listen"
-baseline_calls = 92
-baseline_files = 34
+baseline_calls = 91
+baseline_files = 33
 reported_calls = 92
 reported_files = 34
 owner_bead = "ga-80po0c.2.2.2"

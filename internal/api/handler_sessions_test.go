@@ -5528,6 +5528,76 @@ func TestHandleSessionTranscriptUsesSessionKey(t *testing.T) {
 	}
 }
 
+func TestHandleSessionTranscriptUsesObservedProviderKindForWrapper(t *testing.T) {
+	fs := newSessionFakeState(t)
+	searchBase := newHermeticCodexSessionSearchPath(t)
+	srv := New(fs)
+	srv.sessionLogSearchPaths = []string{searchBase}
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	workDir := t.TempDir()
+	mgr := session.NewManagerWithOptions(fs.cityBeadStore, fs.sp)
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+		Template: "director",
+		Title:    "Director",
+		Command:  "gr7n-router",
+		WorkDir:  workDir,
+		Provider: "gr7n-router",
+		Hints:    runtime.Config{},
+		ExtraMeta: map[string]string{
+			"session_origin": "manual",
+			"provider_kind":  "codex",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	now := time.Now()
+	local := now.In(time.Local)
+	dayDir := filepath.Join(searchBase, local.Format("2006"), local.Format("01"), local.Format("02"))
+	if err := os.MkdirAll(dayDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll Codex rollout dir: %v", err)
+	}
+	path := filepath.Join(dayDir, "rollout-"+local.Format("2006-01-02T15-04-05")+"-019f93e2-72c7-75d0-a077-7973bec9b514.jsonl")
+	lines := []string{
+		fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"cwd":%q}}`, now.UTC().Format(time.RFC3339Nano), workDir),
+		fmt.Sprintf(`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"hello"}]}}`, now.Add(time.Second).UTC().Format(time.RFC3339Nano)),
+		fmt.Sprintf(`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"world"}]}}`, now.Add(2*time.Second).UTC().Format(time.RFC3339Nano)),
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile Codex rollout: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID+"/transcript", nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("conversation status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var conversation SessionStreamMessageEvent
+	if err := json.NewDecoder(w.Body).Decode(&conversation); err != nil {
+		t.Fatalf("decode conversation: %v", err)
+	}
+	if len(conversation.Turns) != 2 || conversation.Turns[0].Text != "hello" || conversation.Turns[1].Text != "world" {
+		t.Fatalf("conversation turns = %+v, want hello/world", conversation.Turns)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID+"/transcript?format=raw", nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("raw status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var raw sessionRawTranscriptResponse
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if got := len(raw.Messages); got != 2 {
+		t.Fatalf("len(raw.messages) = %d, want 2", got)
+	}
+}
+
 func TestHandleSessionTranscriptClosedSession(t *testing.T) {
 	fs := newSessionFakeState(t)
 	searchBase := t.TempDir()

@@ -38,9 +38,24 @@ type captureGraphStore struct {
 	storage beads.StorageClass
 }
 
+type prefixedPolicyBacking struct{ beads.Store }
+
+func (s prefixedPolicyBacking) IDPrefix() string { return "gr" }
+
 func underlyingPolicyStoreForTest(store beads.Store) beads.Store {
 	base, _, _ := unwrapBeadPolicyStore(store)
 	return base
+}
+
+func TestBeadPolicyStorePreservesIDPrefix(t *testing.T) {
+	wrapped := wrapStoreWithBeadPolicies(prefixedPolicyBacking{Store: beads.NewMemStore()}, nil)
+	owner, ok := wrapped.(interface{ IDPrefix() string })
+	if !ok {
+		t.Fatal("wrapped store hides IDPrefix")
+	}
+	if got := owner.IDPrefix(); got != "gr" {
+		t.Fatalf("IDPrefix = %q, want gr", got)
+	}
 }
 
 func TestBeadPolicyStorePreservesConditionalAssignmentReleaser(t *testing.T) {

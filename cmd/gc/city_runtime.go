@@ -215,6 +215,27 @@ const cityRuntimeReloadLifecycleRetryLimit = 2
 // plus the first patrol can legitimately exceed one minute.
 const postCreateProtectionTimeout = 2 * time.Minute
 
+// withinPostCreateProtectionWindowInfo reports whether a session is in the
+// short interval after a successful provider start where its routed work may
+// not have been claimed yet. Both the startup sweep and the steady-state
+// reconciler must honor this window; otherwise the reconciler can drain a
+// freshly started pool worker before its first claim reaches the store.
+func withinPostCreateProtectionWindowInfo(info sessionpkg.Info, now time.Time) bool {
+	state := strings.TrimSpace(info.MetadataState)
+	if state != "active" && state != "awake" {
+		return false
+	}
+	if strings.TrimSpace(info.StateReason) != "creation_complete" {
+		return false
+	}
+	creationCompleteAt, ok := parseRFC3339Metadata(info.CreationCompleteAt)
+	if !ok {
+		return false
+	}
+	age := now.Sub(creationCompleteAt)
+	return age >= 0 && age < postCreateProtectionTimeout
+}
+
 // newCityRuntime creates a CityRuntime, building internal components
 // (crash tracker, idle tracker, wisp GC, order dispatcher) from the
 // provided parameters.
@@ -2850,12 +2871,8 @@ func sweepUndesiredPoolSessionBeads(
 		// "mid-start" window. The atomicity requirement therefore only
 		// binds within a single binary (writers and sweep are the same
 		// process); the rollout needs no cross-version coordination.
-		if state := strings.TrimSpace(info.MetadataState); (state == "active" || state == "awake") &&
-			strings.TrimSpace(info.StateReason) == "creation_complete" {
-			if creationCompleteAt, ok := parseRFC3339Metadata(info.CreationCompleteAt); ok &&
-				time.Since(creationCompleteAt) < postCreateProtectionTimeout {
-				continue
-			}
+		if withinPostCreateProtectionWindowInfo(info, time.Now()) {
+			continue
 		}
 		template := normalizedSessionTemplateInfo(info, cfg)
 		agentCfg := findAgentByTemplate(cfg, template)

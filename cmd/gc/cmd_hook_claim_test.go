@@ -25,7 +25,7 @@ func TestHookClaimWithBdStoreReloadsCanonicalBeadAfterPartialMutation(t *testing
 			}
 			calls = append(calls, append([]string(nil), args...))
 			switch {
-			case reflect.DeepEqual(args, []string{"update", "work-1", "--claim", "--json"}):
+			case reflect.DeepEqual(args, []string{"update", "work-1", "--claim", "--actor", "worker-1", "--json"}):
 				return []byte(`[{"id":"work-1","status":"in_progress","assignee":"worker-1","metadata":{"gc.routed_to":"rig/worker"}}]`), nil
 			case reflect.DeepEqual(args, []string{"show", "--json", "work-1"}):
 				return []byte(`[{"id":"work-1","status":"in_progress","assignee":"worker-1","metadata":{"gc.routed_to":"rig/worker","gc.root_bead_id":"root-1","gc.continuation_group":"review"}}]`), nil

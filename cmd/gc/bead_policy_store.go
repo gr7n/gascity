@@ -50,6 +50,18 @@ var (
 // *beadPolicyStore.
 func (s *beadPolicyStore) ConditionalWritesResolveTarget() beads.Store { return s.Store }
 
+// IDPrefix preserves the optional stable-ID ownership capability of the
+// wrapped store. The API create boundary uses this capability to verify a
+// caller-supplied ID before writing; embedding beads.Store alone cannot
+// promote methods outside that interface.
+func (s *beadPolicyStore) IDPrefix() string {
+	owner, ok := s.Store.(interface{ IDPrefix() string })
+	if !ok {
+		return ""
+	}
+	return owner.IDPrefix()
+}
+
 var (
 	_ beads.BatchDeleter = (*beadPolicyStore)(nil)
 	_ beads.BatchDeleter = (*beadPolicyGraphStore)(nil)

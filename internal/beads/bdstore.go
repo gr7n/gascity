@@ -1360,10 +1360,21 @@ func bdSQLStringLiteral(value string) string {
 // Claim atomically claims an open bead through bd update --claim.
 //
 // It returns ok=false when bd reports that another actor won the claim race.
-// The caller controls the claim actor through the store's CommandRunner
-// environment, typically BEADS_ACTOR.
 func (s *BdStore) Claim(id string) (Bead, bool, error) {
-	out, err := s.runBDTransientWriteOutput("update", id, "--claim", "--json")
+	return s.ClaimAs(id, "")
+}
+
+// ClaimAs atomically claims an open bead with an explicit actor. Passing the
+// actor as a bd flag keeps the assignee stable across bd versions and execution
+// adapters that do not honor BEADS_ACTOR for --claim. An empty actor preserves
+// Claim's environment-derived behavior.
+func (s *BdStore) ClaimAs(id, actor string) (Bead, bool, error) {
+	args := []string{"update", id, "--claim"}
+	if actor = strings.TrimSpace(actor); actor != "" {
+		args = append(args, "--actor", actor)
+	}
+	args = append(args, "--json")
+	out, err := s.runBDTransientWriteOutput(args...)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if isBdClaimConflictMessage(msg) || isBdClaimConflictMessage(err.Error()) {
@@ -2164,6 +2175,30 @@ func (s *BdStore) Close(id string) error {
 	return s.close(id, reason)
 }
 
+// RespondToHuman records a human response and closes the decision through bd's
+// dedicated atomic command. The durable request fence is owned by the API
+// caller; this method deliberately performs the semantic backend action once.
+func (s *BdStore) RespondToHuman(id, response, actor string) error {
+	id = strings.TrimSpace(id)
+	response = strings.TrimSpace(response)
+	actor = strings.TrimSpace(actor)
+	if id == "" || response == "" || actor == "" {
+		return fmt.Errorf("responding to human decision: id, response, and actor are required")
+	}
+	// A response has no backend idempotency key. Never use the ordinary
+	// transient-write retry loop here: a lost response after commit is ambiguous
+	// and replaying could append/close twice. The API's durable intent fence owns
+	// reconciliation above this one-shot call.
+	_, err := s.runBDTransientWriteOutputWhen(func(error) bool { return false }, "human", "respond", id, "--response", response, "--actor", actor)
+	if err != nil {
+		if isBdNotFound(err) {
+			return fmt.Errorf("responding to human decision %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("responding to human decision %q: %w", id, err)
+	}
+	return nil
+}
+
 // CloseWithReason closes a bead with an explicit reason without first reading
 // the bead metadata. Callers that need close_reason persisted for audit trails
 // should write metadata before calling this method.
@@ -2696,9 +2731,10 @@ func (s *BdStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 			continue
 		}
 		result = append(result, bead)
-		if q.Limit > 0 && len(result) >= q.Limit {
-			break
-		}
+	}
+	SortReady(result)
+	if q.Limit > 0 && len(result) > q.Limit {
+		result = result[:q.Limit]
 	}
 	if parseErr != nil {
 		if len(result) == 0 {

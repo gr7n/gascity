@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 func putExecutableOnPath(t *testing.T, name string) {
@@ -113,6 +115,58 @@ func (p *falseNegativeSessionProvider) IsRunning(name string) bool {
 type sessionProviderOverrideState struct {
 	*fakeState
 	provider runtime.Provider
+}
+
+type rigListCountingProvider struct {
+	*runtime.Fake
+	listCalls int
+}
+
+func (p *rigListCountingProvider) ListRunning(prefix string) ([]string, error) {
+	p.listCalls++
+	return p.Fake.ListRunning(prefix)
+}
+
+func TestRigRuntimeSnapshotUsesSessionReadModelWithoutProviderList(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:  "worker",
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"template":     "myrig/worker",
+			"state":        "awake",
+			"session_name": "worker-session-1",
+		},
+	}); err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	provider := &rigListCountingProvider{Fake: runtime.NewFake()}
+	snapshot := loadRigRuntimeSnapshot(beads.SessionStore{Store: store}, provider)
+	if !snapshot.hasSessionReadModel {
+		t.Fatal("snapshot did not select the session read model")
+	}
+	if provider.listCalls != 0 {
+		t.Fatalf("ListRunning calls = %d, want 0 with projected sessions", provider.listCalls)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "myrig", Path: "/rigs/myrig"}},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Dir:               "myrig",
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+	resp := (&Server{}).buildRigResponse(cfg, cfg.Rigs[0], snapshot, "test-city", "/city")
+	if resp.RunningCount != 1 {
+		t.Fatalf("RunningCount = %d, want 1 from projected session", resp.RunningCount)
+	}
+	if provider.listCalls != 0 {
+		t.Fatalf("ListRunning calls after response build = %d, want 0", provider.listCalls)
+	}
 }
 
 func (s *sessionProviderOverrideState) SessionProvider() runtime.Provider {

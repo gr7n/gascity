@@ -2,7 +2,11 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // Carrier drives the high-level session interactions — input delivery, output
@@ -58,6 +62,16 @@ type tmuxCarrier struct {
 	target string
 }
 
+var tmuxCarrierBufferSeq uint64
+
+const tmuxCarrierLiteralLimit = 4096
+
+// Match the mature local tmux delivery path: provider TUIs need a short
+// boundary between accepting a paste/key burst and receiving the submit Enter.
+// Without it, tmux can report success while a detached Codex pane leaves the
+// text drafted and drops the Enter.
+const tmuxCarrierSubmitDebounce = 500 * time.Millisecond
+
 // NewTmuxCarrier returns a [Carrier] that drives the in-box tmux session
 // target over conn.
 func NewTmuxCarrier(conn ExecProvider, target string) Carrier {
@@ -65,11 +79,23 @@ func NewTmuxCarrier(conn ExecProvider, target string) Carrier {
 }
 
 // tmux runs `tmux <args...>` in the box over the connection and returns its
-// standard output. A non-zero command exit is reported via err only when the
-// connection itself surfaces it; callers that are best-effort discard err.
+// standard output. ExecProvider distinguishes a command exit from a transport
+// failure with its integer result, so preserve both as errors here; otherwise a
+// missing tmux session looks like successful input delivery over providers such
+// as Kubernetes.
 func (c *tmuxCarrier) tmux(ctx context.Context, name string, args ...string) ([]byte, error) {
-	out, _, err := c.conn.Exec(ctx, name, append([]string{"tmux"}, args...))
-	return out, err
+	out, code, err := c.conn.Exec(ctx, name, append([]string{"tmux"}, args...))
+	if err != nil {
+		return out, err
+	}
+	if code != 0 {
+		command := "command"
+		if len(args) > 0 {
+			command = args[0]
+		}
+		return out, fmt.Errorf("tmux %s exited with status %d", command, code)
+	}
+	return out, nil
 }
 
 func (c *tmuxCarrier) Nudge(ctx context.Context, name string, content []ContentBlock) error {
@@ -77,13 +103,36 @@ func (c *tmuxCarrier) Nudge(ctx context.Context, name string, content []ContentB
 	if message == "" {
 		return nil
 	}
-	// Type the literal text, then submit — the two-step send-keys the k8s
-	// provider uses (a single send-keys would interpret the text as key names).
-	// If typing fails, the error surfaces and Enter is skipped: the caller
-	// learns delivery failed (the pane may hold a half-typed, unsubmitted line).
-	if _, err := c.tmux(ctx, name, "send-keys", "-t", c.target, "-l", message); err != nil {
+
+	// Keep the two-call fast path for ordinary one-line nudges. A rendered
+	// startup prompt is multiline, however: send-keys -l turns its newlines into
+	// a stream of synthetic terminal keys, so a provider TUI can submit fragments
+	// or exit before the final Enter. Large single-line messages can also exceed
+	// the remote command boundary. The local tmux driver already uses an atomic
+	// bracketed paste for both shapes; tmux-in-a-box providers must match it.
+	if !strings.ContainsAny(message, "\r\n") && len(message) <= tmuxCarrierLiteralLimit {
+		if _, err := c.tmux(ctx, name, "send-keys", "-t", c.target, "-l", message); err != nil {
+			return err
+		}
+		_, err := c.tmux(ctx, name, "send-keys", "-t", c.target, "Enter")
 		return err
 	}
+
+	buffer := "gc-carrier-nudge-" + strconv.FormatUint(atomic.AddUint64(&tmuxCarrierBufferSeq, 1), 10)
+	if _, err := c.tmux(ctx, name, "set-buffer", "-b", buffer, "--", message); err != nil {
+		return err
+	}
+	loaded := true
+	defer func() {
+		if loaded {
+			_, _ = c.tmux(context.Background(), name, "delete-buffer", "-b", buffer)
+		}
+	}()
+	if _, err := c.tmux(ctx, name, "paste-buffer", "-p", "-d", "-b", buffer, "-t", c.target); err != nil {
+		return err
+	}
+	loaded = false
+	time.Sleep(tmuxCarrierSubmitDebounce)
 	_, err := c.tmux(ctx, name, "send-keys", "-t", c.target, "Enter")
 	return err
 }
