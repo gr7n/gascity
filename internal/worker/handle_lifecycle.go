@@ -495,10 +495,7 @@ func (h *SessionHandle) historyProvider(info sessionpkg.Info) string {
 	if h.session.Profile != "" {
 		return string(h.session.Profile)
 	}
-	if strings.TrimSpace(info.Provider) != "" {
-		return info.Provider
-	}
-	return h.session.Provider
+	return sessionpkg.ProviderFamilyFromInfo(info, h.session.Provider)
 }
 
 func (h *SessionHandle) runtimeHints() runtime.Config {
