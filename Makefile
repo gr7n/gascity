@@ -465,7 +465,7 @@ test-productmetrics-testhook:
 	$(TEST_ENV) scripts/go-test-observable test-productmetrics-testhook -- -tags productmetrics_testhook -count=1 -run '^(TestProductMetricsTaggedBinaryProcessContracts|TestProductMetricsTesthookEndpointAcceptsOnlyLoopbackHTTPS|TestProductMetricsTaggedRunnerReadsInjectionOnlyAtInvocation|TestProductMetricsTesthookCAReadIsBounded|TestProductMetricsTaggedProcessFixtureIsEnabled|TestProductMetricsTestOnlyCensusEscapeIsNarrow)$$' ./cmd/gc
 
 CMD_GC_PROCESS_SHARD ?= 1
-CMD_GC_PROCESS_TOTAL ?= 6
+CMD_GC_PROCESS_TOTAL ?= 1
 CMD_GC_COVER_TOTAL ?= 6
 CMD_GC_COVER_SHARD ?= 1
 test-cmd-gc-process-shard:
