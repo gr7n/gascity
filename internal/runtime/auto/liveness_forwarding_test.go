@@ -1,6 +1,7 @@
 package auto
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -30,10 +31,10 @@ func TestProvider_ForwardsObserveLivenessToRoutedBackend(t *testing.T) {
 	p := New(def, acp)
 	p.RouteACP("acpsess")
 
-	if got := p.ObserveLiveness("plain", []string{"claude"}); got != def.obs {
+	if got := p.ObserveLiveness("plain", []string{"claude"}); !reflect.DeepEqual(got, def.obs) {
 		t.Errorf("default route ObserveLiveness = %+v; want %+v (backend fast-path lost)", got, def.obs)
 	}
-	if got := p.ObserveLiveness("acpsess", []string{"claude"}); got != acp.obs {
+	if got := p.ObserveLiveness("acpsess", []string{"claude"}); !reflect.DeepEqual(got, acp.obs) {
 		t.Errorf("acp route ObserveLiveness = %+v; want %+v", got, acp.obs)
 	}
 }
@@ -49,7 +50,7 @@ func TestProvider_ObserveLivenessFallsThroughOnStaleRoute(t *testing.T) {
 	p := New(def, acp)
 	// No RouteACP entry: routing is stale, so route() sends "acpsess" to def.
 
-	if got := p.ObserveLiveness("acpsess", []string{"claude"}); got != acp.obs {
+	if got := p.ObserveLiveness("acpsess", []string{"claude"}); !reflect.DeepEqual(got, acp.obs) {
 		t.Errorf("stale-route ObserveLiveness = %+v; want %+v (fallthrough to ACP backend lost)", got, acp.obs)
 	}
 }
