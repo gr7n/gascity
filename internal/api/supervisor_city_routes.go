@@ -215,6 +215,13 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	cityPatch(sm, "/bead/{id}", (*Server).humaHandleBeadUpdate, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict))
 	cityPost(sm, "/bead/{id}/assign", (*Server).humaHandleBeadAssign, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict))
 	cityDelete(sm, "/bead/{id}", (*Server).humaHandleBeadDelete, errorStatuses(http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict))
+	cityRegister(sm, huma.Operation{
+		OperationID: "review-work",
+		Method:      http.MethodPost,
+		Path:        "/work/{id}/review",
+		Summary:     "Respond to a human Work decision",
+		Errors:      []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusNotImplemented},
+	}, (*Server).humaHandleWorkReview)
 
 	// Mail. Part of the P12 error-contract slice (see Beads above): each op
 	// enumerates the error statuses it can return (Huma adds auto 422/500);
