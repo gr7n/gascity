@@ -83,23 +83,45 @@ func (f *livenessObserverFake) ObserveLiveness(_ string, _ []string) runtime.Liv
 }
 
 func TestObserveLiveness_DelegatesToRoutedObserver(t *testing.T) {
-	local := &livenessObserverFake{
-		Provider: runtime.NewFake(),
-		observed: runtime.Liveness{Running: true, Alive: true, MatchedProcessNames: []string{"claude"}},
-	}
-	remote := runtime.NewFake()
-	h := New(local, remote, isRemote)
+	t.Run("local", func(t *testing.T) {
+		local := &livenessObserverFake{
+			Provider: runtime.NewFake(),
+			observed: runtime.Liveness{Running: true, Alive: true, MatchedProcessNames: []string{"claude"}},
+		}
+		remote := runtime.NewFake()
+		h := New(local, remote, isRemote)
 
-	got := h.ObserveLiveness("refinery", []string{"claude", "codex"})
-	if !got.Running || !got.Alive {
-		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
-	}
-	if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "claude" {
-		t.Fatalf("MatchedProcessNames = %v, want [claude] from local observer", got.MatchedProcessNames)
-	}
-	if local.calls != 1 {
-		t.Fatalf("local observer calls = %d, want 1", local.calls)
-	}
+		got := h.ObserveLiveness("refinery", []string{"claude", "codex"})
+		if !got.Running || !got.Alive {
+			t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+		}
+		if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "claude" {
+			t.Fatalf("MatchedProcessNames = %v, want [claude] from local observer", got.MatchedProcessNames)
+		}
+		if local.calls != 1 {
+			t.Fatalf("local observer calls = %d, want 1", local.calls)
+		}
+	})
+
+	t.Run("remote", func(t *testing.T) {
+		local := runtime.NewFake()
+		remote := &livenessObserverFake{
+			Provider: runtime.NewFake(),
+			observed: runtime.Liveness{Running: true, Alive: true, MatchedProcessNames: []string{"codex"}},
+		}
+		h := New(local, remote, isRemote)
+
+		got := h.ObserveLiveness("remote-agent-1", []string{"claude", "codex"})
+		if !got.Running || !got.Alive {
+			t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+		}
+		if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "codex" {
+			t.Fatalf("MatchedProcessNames = %v, want [codex] from remote observer", got.MatchedProcessNames)
+		}
+		if remote.calls != 1 {
+			t.Fatalf("remote observer calls = %d, want 1", remote.calls)
+		}
+	})
 }
 
 func TestObserveLiveness_FallsBackForNonObserverBackend(t *testing.T) {
