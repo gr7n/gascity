@@ -18,6 +18,7 @@ import (
 func TestProviderImplementsInterface(_ *testing.T) {
 	// Compile-time check is in provider.go, but verify at test time too.
 	var _ runtime.Provider = (*Provider)(nil)
+	var _ runtime.LivenessObserver = (*Provider)(nil)
 }
 
 func TestManagedServiceAliasDefaults(t *testing.T) {
@@ -523,6 +524,144 @@ func TestProcessAlive(t *testing.T) {
 	if p.ProcessAlive("gc-test-agent", []string{"claude"}) {
 		t.Error("ProcessAlive returned true for terminating pod")
 	}
+}
+
+func TestObserveLivenessReportsExactMatchedProcessNames(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+	fake.setExecResult("gc-test-agent", processSnapshotCommand(), strings.Join([]string{
+		"bash",
+		"codex",
+		"head",
+	}, "\n"), nil)
+
+	got := p.ObserveLiveness("gc-test-agent", []string{"codex", "claude", "node", "codex"})
+	if !got.Running || !got.Alive {
+		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+	}
+	if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "codex" {
+		t.Fatalf("MatchedProcessNames = %v, want [codex]", got.MatchedProcessNames)
+	}
+
+	var execCalls int
+	for _, call := range fake.calls {
+		if call.method == "execInPod" {
+			execCalls++
+		}
+	}
+	if execCalls != 2 {
+		t.Fatalf("execInPod calls = %d, want exactly 2 independent of hint count", execCalls)
+	}
+}
+
+func TestObserveLivenessWithoutHintsNeedsOnlyTmuxRoot(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+
+	got := p.ObserveLiveness("gc-test-agent", nil)
+	if !got.Running || !got.Alive {
+		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+	}
+	if got.MatchedProcessNames != nil {
+		t.Fatalf("MatchedProcessNames = %v, want nil without hints", got.MatchedProcessNames)
+	}
+
+	var execCalls int
+	for _, call := range fake.calls {
+		if call.method == "execInPod" {
+			execCalls++
+		}
+	}
+	if execCalls != 1 {
+		t.Fatalf("execInPod calls = %d, want 1 without process hints", execCalls)
+	}
+}
+
+func TestObserveLivenessBoundsIdentityEvidence(t *testing.T) {
+	t.Run("oversized process snapshot", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(),
+			strings.Repeat("x", maxProcessSnapshotBytes+1), nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex"})
+		if !got.Running || !got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want optimistic liveness without identity evidence", got)
+		}
+	})
+
+	t.Run("too many hints", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		hints := make([]string, maxObservedProcessNames+1)
+		for i := range hints {
+			hints[i] = fmt.Sprintf("agent-%d", i)
+		}
+
+		got := p.ObserveLiveness("gc-test-agent", hints)
+		if !got.Running || !got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want optimistic liveness without rejected identity evidence", got)
+		}
+		for _, call := range fake.calls {
+			if call.method == "execInPod" && strings.Join(call.cmd, " ") == strings.Join(processSnapshotCommand(), " ") {
+				t.Fatal("oversized hint set must be rejected before taking a process snapshot")
+			}
+		}
+	})
+
+	t.Run("multiple provider families", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(), strings.Join([]string{
+			"bash",
+			"codex",
+			"claude",
+		}, "\n"), nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex", "claude"})
+		if !got.Running || !got.Alive {
+			t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+		}
+		want := []string{"codex", "claude"}
+		if len(got.MatchedProcessNames) != len(want) {
+			t.Fatalf("MatchedProcessNames = %v, want %v", got.MatchedProcessNames, want)
+		}
+		for i := range want {
+			if got.MatchedProcessNames[i] != want[i] {
+				t.Fatalf("MatchedProcessNames = %v, want %v", got.MatchedProcessNames, want)
+			}
+		}
+	})
+
+	t.Run("complete snapshot without a matching process is dead", func(t *testing.T) {
+		fake := newFakeK8sOps()
+		p := newProviderWithOps(fake)
+		addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+		fake.setExecResult("gc-test-agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, "", nil)
+		fake.setExecResult("gc-test-agent", processSnapshotCommand(),
+			"bash\ncodex-helper\n", nil)
+
+		got := p.ObserveLiveness("gc-test-agent", []string{"codex"})
+		if !got.Running || got.Alive || got.MatchedProcessNames != nil {
+			t.Fatalf("ObserveLiveness = %+v, want running zombie with no process match", got)
+		}
+	})
 }
 
 func TestStartRequiresImage(t *testing.T) {
