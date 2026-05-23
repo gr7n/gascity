@@ -1,6 +1,7 @@
 import { api, cityScope, type DashboardSchema } from "../api";
 import { logWarn } from "../logger";
 import { currentCityStatus, isKnownUnavailableCity } from "../state";
+import { isDashboardInternalBead } from "../util/beads";
 import { byId, clear, el } from "../util/dom";
 import { ACTIVE_WINDOW_MS, beadPriority, formatTimestamp } from "../util/legacy";
 
@@ -14,7 +15,7 @@ type SessionList = DashboardSchema["ListBodySessionResponse"];
 type BeadList = DashboardSchema["ListBodyBead"];
 type SessionSummary = DashboardSchema["SessionResponse"];
 
-const STATUS_REQUEST_TIMEOUT_MS = 1_000;
+const STATUS_REQUEST_TIMEOUT_MS = 2_500;
 
 export async function renderStatus(): Promise<void> {
   const city = cityScope();
@@ -73,6 +74,8 @@ export async function renderStatus(): Promise<void> {
 
   const sessions = (sessionsR.data?.items ?? []) as SessionSummary[];
   const beads = beadsR.data?.items ?? [];
+  const hasBeadData = Boolean(beadsR.data?.items);
+  const workBeads = beads.filter((bead) => !isDashboardInternalBead(bead));
   const convoys = convoysR.data?.items ?? [];
   renderCityScopeFromSessions(city, sessionsR);
 
@@ -82,14 +85,14 @@ export async function renderStatus(): Promise<void> {
     if (!session.pool || !session.running || !session.last_active) return false;
     return Date.now() - new Date(session.last_active).getTime() >= 30 * 60 * 1000;
   }).length;
-  const staleAssigned = beads.filter((bead) => bead.assignee && bead.status !== "closed").length;
-  const highPriorityIssues = beads.filter((bead) => beadPriority(bead.priority) <= 2).length;
+  const staleAssigned = workBeads.filter((bead) => bead.assignee && bead.status !== "closed").length;
+  const highPriorityIssues = workBeads.filter((bead) => beadPriority(bead.priority) <= 2).length;
   const deadSessions = sessions.filter((session) => !session.running).length;
   const statusUnavailable = Boolean(statusR.error || !statusR.data);
   const partialUnavailable = statusUnavailable || Boolean(sessionsR.error || beadsR.error || convoysR.error);
   const runningAgents = statusR.data?.agents.running ?? sessions.filter((session) => session.running).length;
-  const assignedWork = statusR.data?.work.in_progress ?? staleAssigned;
-  const openWork = statusR.data?.work.open ?? beads.length;
+  const assignedWork = hasBeadData ? staleAssigned : statusR.data?.work.in_progress ?? staleAssigned;
+  const openWork = hasBeadData ? workBeads.length : statusR.data?.work.open ?? beads.length;
   const unreadMail = statusR.data?.mail.unread ?? "n/a";
 
   const statsKey = `${city}|${runningAgents}|${assignedWork}|${openWork}|${convoys.length}|${unreadMail}|${stuckAgents}|${staleAssigned}|${highPriorityIssues}|${deadSessions}|${partialUnavailable}|${statusUnavailable}`;

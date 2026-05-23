@@ -118,18 +118,19 @@ export function stopActivityStream(): void {
 }
 
 export function renderActivity(): void {
-  renderFilters();
+  const visibleEntries = visibleActivityEntries();
+  renderFilters(visibleEntries);
   const feed = byId("activity-feed");
   if (!feed) return;
   clear(feed);
 
-  const filtered = entries.filter((entry) => {
+  const filtered = visibleEntries.filter((entry) => {
     if (categoryFilter !== "all" && entry.category !== categoryFilter) return false;
     if (rigFilter !== "all" && entry.rig !== rigFilter) return false;
     if (agentFilter !== "all" && entry.actor !== agentFilter) return false;
     return true;
   });
-  byId("activity-count")!.textContent = String(entries.length);
+  byId("activity-count")!.textContent = String(visibleEntries.length);
 
   if (filtered.length === 0) {
     feed.append(el("div", { class: "empty-state" }, [el("p", {}, ["No recent activity"])]));
@@ -186,13 +187,13 @@ export function installActivityInteractions(): void {
   });
 }
 
-function renderFilters(): void {
+function renderFilters(sourceEntries: ActivityEntry[]): void {
   const container = byId("activity-filters");
   if (!container) return;
   clear(container);
-  if (entries.length === 0) return;
-  const rigs = [...new Set(entries.map((entry) => entry.rig).filter(Boolean))].sort();
-  const agents = [...new Set(entries.map((entry) => entry.actor).filter(Boolean))].sort() as string[];
+  if (sourceEntries.length === 0) return;
+  const rigs = [...new Set(sourceEntries.map((entry) => entry.rig).filter(Boolean))].sort();
+  const agents = [...new Set(sourceEntries.map((entry) => entry.actor).filter(Boolean))].sort() as string[];
 
   const rigSelect = el("select", { class: "tl-filter-select", id: "tl-rig-filter" }) as HTMLSelectElement;
   rigSelect.append(el("option", { value: "all" }, ["All rigs"]));
@@ -275,6 +276,20 @@ function normalizeEntries(nextEntries: ActivityEntry[]): ActivityEntry[] {
   return [...deduped.values()]
     .sort(compareEntries)
     .slice(0, MAX_ENTRIES);
+}
+
+function visibleActivityEntries(): ActivityEntry[] {
+  return entries.filter((entry) => !isRoutineControllerActivity(entry));
+}
+
+function isRoutineControllerActivity(entry: ActivityEntry): boolean {
+  const actor = (entry.actor ?? "").toLowerCase();
+  const subject = entry.subject ?? "";
+  const type = entry.type.toLowerCase();
+  const isWispBeadEvent = subject.startsWith("gr-wisp-") &&
+    (type === "bead.created" || type === "bead.updated" || type === "bead.closed");
+  if (isWispBeadEvent && (actor === "controller" || actor === "cache-reconcile" || actor === "")) return true;
+  return actor === "controller" && (type === "order.fired" || type === "order.completed");
 }
 
 function compareEntries(a: ActivityEntry, b: ActivityEntry): number {

@@ -62,6 +62,57 @@ describe("activity feed ordering", () => {
     expect(document.getElementById("activity-count")?.textContent).toBe("3");
   });
 
+  it("hides routine controller sweeps while keeping failures and real work", async () => {
+    await seedActivity([{
+      actor: "controller",
+      category: "work",
+      id: "mc-city:16",
+      rig: "city",
+      scope: "mc-city",
+      seq: 16,
+      subject: "gate-sweep",
+      ts: "2026-04-01T10:04:00Z",
+      type: "order.completed",
+    }, {
+      actor: "controller",
+      category: "work",
+      id: "mc-city:15",
+      rig: "city",
+      scope: "mc-city",
+      seq: 15,
+      subject: "gr-wisp-ab123",
+      ts: "2026-04-01T10:03:00Z",
+      type: "bead.created",
+    }, {
+      actor: "controller",
+      category: "work",
+      id: "mc-city:14",
+      rig: "city",
+      scope: "mc-city",
+      seq: 14,
+      subject: "dolt-remotes-patrol",
+      ts: "2026-04-01T10:02:00Z",
+      type: "order.failed",
+    }, {
+      actor: "mayor",
+      category: "work",
+      id: "mc-city:13",
+      rig: "city",
+      scope: "mc-city",
+      seq: 13,
+      subject: "gr-feature",
+      ts: "2026-04-01T10:01:00Z",
+      type: "bead.created",
+    }]);
+    renderActivity();
+
+    const types = [...document.querySelectorAll<HTMLElement>(".tl-entry")].map((node) => node.dataset.type);
+    expect(types).toEqual(["order.failed", "bead.created"]);
+    expect(document.getElementById("activity-count")?.textContent).toBe("2");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("dolt-remotes-patrol");
+    expect(document.getElementById("activity-feed")?.textContent).not.toContain("gr-wisp-ab123");
+  });
+
   it("computes a city stream cursor from loaded history", () => {
     const cursor = activityStreamCursorFromRecordsForTest([
       { seq: 12, type: "bead.created", actor: "human", ts: "2026-04-01T10:00:00Z" },

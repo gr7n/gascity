@@ -51,6 +51,16 @@ function scopeStats(): Record<string, string> {
   return stats;
 }
 
+function summaryStats(): Record<string, string> {
+  const stats: Record<string, string> = {};
+  document.querySelectorAll("#status-banner .stat").forEach((stat) => {
+    const label = stat.querySelector(".stat-label")?.textContent ?? "";
+    const value = stat.querySelector(".stat-value")?.textContent ?? "";
+    stats[label] = value;
+  });
+  return stats;
+}
+
 describe("status panel scope rendering", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -204,13 +214,67 @@ describe("status panel scope rendering", () => {
 
     const { renderStatus } = await import("./status");
     const render = renderStatus();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_500);
     await render;
 
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
     expect(scopeStats().Terminal).toBe("Detached");
     expect(document.getElementById("status-banner")?.textContent).toContain("Status API slow");
     expect(document.getElementById("status-banner")?.textContent).toContain("1");
+  });
+
+  it("does not count session beads as open city work", async () => {
+    window.history.pushState({}, "", "/dashboard?city=alpha");
+    const now = new Date().toISOString();
+    apiGet.mockImplementation((path: string) => {
+      if (path.includes("/status")) {
+        return Promise.resolve(ok({
+          agents: { running: 2 },
+          mail: { unread: 0 },
+          work: { in_progress: 0, open: 2 },
+        }));
+      }
+      if (path.includes("/sessions")) {
+        return Promise.resolve(ok({
+          items: [{
+            attached: false,
+            configured_named_session: true,
+            last_active: now,
+            running: true,
+            template: "mayor",
+          }],
+        }));
+      }
+      if (path.includes("/beads")) {
+        return Promise.resolve(ok({
+          items: [{
+            id: "gr-ixw",
+            issue_type: "session",
+            labels: ["gc:session", "template:mayor"],
+            priority: 2,
+            status: "open",
+            title: "mayor",
+          }, {
+            id: "gr-real",
+            issue_type: "task",
+            labels: [],
+            priority: 1,
+            status: "open",
+            title: "Real work",
+          }],
+        }));
+      }
+      if (path.includes("/convoys")) return Promise.resolve(ok({ items: [] }));
+      return Promise.resolve(ok({}));
+    });
+
+    const { renderStatus } = await import("./status");
+    await renderStatus();
+
+    const bannerText = document.getElementById("status-banner")?.textContent ?? "";
+    expect(summaryStats().Beads).toBe("1");
+    expect(bannerText).toContain("1 P1/P2");
+    expect(bannerText).not.toContain("2 P1/P2");
   });
 
   it("renders city scope from session data instead of leaving the placeholder idle", async () => {

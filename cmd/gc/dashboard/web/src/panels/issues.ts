@@ -2,6 +2,7 @@ import type { BeadRecord } from "../api";
 import { api, cityScope, mutationHeaders } from "../api";
 import { promptActionDialog } from "../modals";
 import { byId, clear, el } from "../util/dom";
+import { isDashboardInternalBead } from "../util/beads";
 import { beadPriority, formatTimestamp, priorityBadgeClass, truncate } from "../util/legacy";
 import { getOptions } from "./options";
 import { popPause, pushPause, showToast } from "../ui";
@@ -37,7 +38,7 @@ export async function renderIssues(): Promise<void> {
 
   allIssues = sortIssues(
     [...(openR.data?.items ?? []), ...(progressR.data?.items ?? [])]
-      .filter((bead) => !isInternalBead(bead)),
+      .filter((bead) => !isDashboardInternalBead(bead)),
   );
   byId("issues-count")!.textContent = String(allIssues.length);
 
@@ -171,11 +172,6 @@ function rigButton(rig: string, active: boolean): HTMLElement {
 
 function inferRig(issue: BeadRecord): string {
   return issue.id?.split("-")[0] ?? "city";
-}
-
-function isInternalBead(issue: BeadRecord): boolean {
-  if ((issue.issue_type ?? "").toLowerCase() === "convoy") return true;
-  return (issue.labels ?? []).some((label) => label.startsWith("gc:queue") || label.startsWith("gc:message"));
 }
 
 function sortIssues(issues: BeadRecord[]): BeadRecord[] {
