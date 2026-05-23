@@ -71,6 +71,7 @@ export async function loadActivityHistory(): Promise<void> {
 export function resetActivity(): void {
   entries.splice(0, entries.length);
   streamCursor = {};
+  resetActivityFilters();
   renderActivity();
 }
 
@@ -132,10 +133,18 @@ export function renderActivity(): void {
     if (agentFilter !== "all" && entry.actor !== agentFilter) return false;
     return true;
   });
-  byId("activity-count")!.textContent = String(sourceEntries.length);
+  byId("activity-count")!.textContent = activityCountText(foregroundEntries, routineEntries, sourceEntries);
 
   if (filtered.length === 0) {
-    feed.append(el("div", { class: "empty-state" }, [el("p", {}, ["No recent activity"])]));
+    if (categoryFilter !== "routine" && foregroundEntries.length === 0 && routineEntries.length > 0) {
+      feed.append(el("div", { class: "empty-state" }, [
+        el("p", {}, ["No foreground activity"]),
+        filterButton("routine", `Show routine (${routineEntries.length})`),
+      ]));
+      return;
+    }
+    const emptyCopy = categoryFilter === "routine" ? "No routine activity" : "No recent activity";
+    feed.append(el("div", { class: "empty-state" }, [el("p", {}, [emptyCopy])]));
     return;
   }
 
@@ -222,11 +231,23 @@ function renderFilters(foregroundEntries: ActivityEntry[], routineEntries: Activ
       filterButton("work", "Work"),
       filterButton("comms", "Comms"),
       filterButton("system", "System"),
-      filterButton("routine", `Routine ${routineEntries.length}`),
+      filterButton("routine", `Routine (${routineEntries.length})`),
     ]),
     el("div", { class: "tl-filter-group" }, [el("label", { for: "tl-rig-filter" }, ["Rig:"]), rigSelect]),
     el("div", { class: "tl-filter-group" }, [el("label", { for: "tl-agent-filter" }, ["Agent:"]), agentSelect]),
   ]));
+}
+
+function activityCountText(
+  foregroundEntries: ActivityEntry[],
+  routineEntries: ActivityEntry[],
+  sourceEntries: ActivityEntry[],
+): string {
+  if (categoryFilter === "routine") return String(routineEntries.length);
+  if (foregroundEntries.length === 0 && routineEntries.length > 0) {
+    return `0 + ${routineEntries.length} routine`;
+  }
+  return String(sourceEntries.length);
 }
 
 function filterButton(value: string, label: string): HTMLElement {
@@ -241,6 +262,12 @@ function filterButton(value: string, label: string): HTMLElement {
     renderActivity();
   });
   return btn;
+}
+
+function resetActivityFilters(): void {
+  categoryFilter = "all";
+  rigFilter = "all";
+  agentFilter = "all";
 }
 
 function toEntryFromMessage(msg: DashboardEventMessage): ActivityEntry | null {

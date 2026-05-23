@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   activityStreamCursorFromRecordsForTest,
   renderActivity,
+  resetActivity,
   seedActivity,
   type ActivityEntry,
 } from "./activity";
@@ -16,8 +17,8 @@ describe("activity feed ordering", () => {
     `;
   });
 
-  afterEach(async () => {
-    await seedActivity([]);
+  afterEach(() => {
+    resetActivity();
   });
 
   it("dedupes repeated events and keeps newest entries first", async () => {
@@ -109,7 +110,7 @@ describe("activity feed ordering", () => {
     const types = [...document.querySelectorAll<HTMLElement>(".tl-entry")].map((node) => node.dataset.type);
     expect(types).toEqual(["order.failed", "bead.created"]);
     expect(document.getElementById("activity-count")?.textContent).toBe("2");
-    expect(document.getElementById("activity-filters")?.textContent).toContain("Routine 2");
+    expect(document.getElementById("activity-filters")?.textContent).toContain("Routine (2)");
     expect(document.getElementById("activity-feed")?.textContent).toContain("dolt-remotes-patrol");
     expect(document.getElementById("activity-feed")?.textContent).not.toContain("gr-wisp-ab123");
 
@@ -120,6 +121,44 @@ describe("activity feed ordering", () => {
     expect(document.getElementById("activity-count")?.textContent).toBe("2");
     expect(document.getElementById("activity-feed")?.textContent).toContain("gate-sweep");
     expect(document.getElementById("activity-feed")?.textContent).toContain("gr-wisp-ab123");
+  });
+
+  it("surfaces routine controller activity when the dashboard has no foreground work", async () => {
+    await seedActivity([{
+      actor: "controller",
+      category: "work",
+      id: "mc-city:22",
+      rig: "city",
+      scope: "mc-city",
+      seq: 22,
+      subject: "dolt-health",
+      ts: "2026-04-01T10:06:00Z",
+      type: "order.completed",
+    }, {
+      actor: "controller",
+      category: "work",
+      id: "mc-city:21",
+      rig: "city",
+      scope: "mc-city",
+      seq: 21,
+      subject: "gr-wisp-health",
+      ts: "2026-04-01T10:05:00Z",
+      type: "bead.closed",
+    }]);
+    renderActivity();
+
+    expect(document.getElementById("activity-count")?.textContent).toBe("0 + 2 routine");
+    expect(document.getElementById("activity-filters")?.textContent).toContain("Routine (2)");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("No foreground activity");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("Show routine (2)");
+
+    document.querySelector<HTMLButtonElement>('#activity-feed .tl-filter-btn[data-value="routine"]')?.click();
+
+    const routineTypes = [...document.querySelectorAll<HTMLElement>(".tl-entry")].map((node) => node.dataset.type);
+    expect(routineTypes).toEqual(["order.completed", "bead.closed"]);
+    expect(document.getElementById("activity-count")?.textContent).toBe("2");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("dolt-health");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("gr-wisp-health");
   });
 
   it("computes a city stream cursor from loaded history", () => {
