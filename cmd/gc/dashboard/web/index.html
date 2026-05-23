@@ -164,9 +164,15 @@
             </div>
           </div>
           <form class="log-drawer-composer" id="log-drawer-composer">
-            <label class="sr-only" for="log-drawer-input">Message</label>
-            <textarea id="log-drawer-input" class="log-drawer-input" rows="3" placeholder="Message this session..." autocomplete="off"></textarea>
-            <button class="log-drawer-send-btn" id="log-drawer-send-btn" type="submit">Send</button>
+            <div class="log-drawer-attachments" id="log-drawer-attachments"></div>
+            <div class="log-drawer-compose-row">
+              <button class="log-drawer-attach-btn" id="log-drawer-attach-btn" type="button" title="Attach images">+</button>
+              <label class="sr-only" for="log-drawer-file-input">Attach images</label>
+              <input id="log-drawer-file-input" type="file" accept="image/*" multiple hidden />
+              <label class="sr-only" for="log-drawer-input">Message</label>
+              <textarea id="log-drawer-input" class="log-drawer-input" rows="3" placeholder="Message this session..." autocomplete="off"></textarea>
+              <button class="log-drawer-send-btn" id="log-drawer-send-btn" type="submit">Send</button>
+            </div>
           </form>
         </div>
 

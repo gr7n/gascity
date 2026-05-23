@@ -12,6 +12,18 @@ let logBeforeCursor = "";
 let logCount = 0;
 let logSubmitting = false;
 
+interface ChatAttachment {
+  dataURL: string;
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
+const MAX_CHAT_ATTACHMENTS = 4;
+const MAX_INLINE_IMAGE_BYTES = 350_000;
+let pendingAttachments: ChatAttachment[] = [];
+
 export async function renderCrew(): Promise<void> {
   const city = cityScope();
   if (!city) {
@@ -258,6 +270,15 @@ function renderSimpleEmpty(container: HTMLElement, message: string): void {
 
 export function installCrewInteractions(): void {
   byId("log-drawer-close-btn")?.addEventListener("click", () => closeLogDrawer());
+  byId<HTMLButtonElement>("log-drawer-attach-btn")?.addEventListener("click", () => {
+    byId<HTMLInputElement>("log-drawer-file-input")?.click();
+  });
+  byId<HTMLInputElement>("log-drawer-file-input")?.addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    if (!(input instanceof HTMLInputElement)) return;
+    void addSelectedAttachments(input.files);
+    input.value = "";
+  });
   byId<HTMLFormElement>("log-drawer-composer")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitLogDrawerMessage();
@@ -266,6 +287,12 @@ export function installCrewInteractions(): void {
     if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
     event.preventDefault();
     void submitLogDrawerMessage();
+  });
+  byId<HTMLTextAreaElement>("log-drawer-input")?.addEventListener("paste", (event) => {
+    const imageFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    void addSelectedAttachments(imageFiles);
   });
   byId("log-drawer-older-btn")?.addEventListener("click", () => {
     logDebug("crew", "Load older transcript clicked", {
@@ -337,8 +364,11 @@ async function loadTranscript(sessionID: string, prepend: boolean): Promise<void
   const loadingEl = byId("log-drawer-loading");
   const olderBtn = byId<HTMLButtonElement>("log-drawer-older-btn");
   const countEl = byId("log-drawer-count");
+  const body = byId("log-drawer-body");
   if (!city || !messagesEl || !loadingEl || !olderBtn || !countEl) return;
 
+  const previousScrollHeight = body?.scrollHeight ?? 0;
+  const previousScrollTop = body?.scrollTop ?? 0;
   loadingEl.style.display = "block";
   const res = await api.GET("/v0/city/{cityName}/session/{id}/transcript", {
     params: {
@@ -369,6 +399,12 @@ async function loadTranscript(sessionID: string, prepend: boolean): Promise<void
 
   logBeforeCursor = res.data.pagination?.truncated_before_message ?? "";
   olderBtn.style.display = res.data.pagination?.has_older_messages && logBeforeCursor ? "inline-flex" : "none";
+  if (prepend && body) {
+    body.scrollTop = body.scrollHeight - previousScrollHeight + previousScrollTop;
+  } else {
+    scrollLogDrawerToBottom();
+    byId<HTMLTextAreaElement>("log-drawer-input")?.focus();
+  }
   logDebug("crew", "Transcript loaded", {
     hasOlderMessages: res.data.pagination?.has_older_messages ?? false,
     nextBeforeCursor: logBeforeCursor,
@@ -386,8 +422,7 @@ function appendStreamEvent(msg: AgentOutputMessage): void {
   messagesEl.append(renderTurn(payload.data.message.role ?? "agent", payload.data.message.text ?? "", payload.data.message.timestamp));
   logCount += 1;
   byId("log-drawer-count")!.textContent = String(logCount);
-  const body = byId("log-drawer-body");
-  if (body) body.scrollTop = body.scrollHeight;
+  scrollLogDrawerToBottom();
 }
 
 async function submitLogDrawerMessage(): Promise<void> {
@@ -397,18 +432,20 @@ async function submitLogDrawerMessage(): Promise<void> {
   const statusEl = byId("log-drawer-status");
   const sessionID = logSessionID;
   const message = input?.value.trim() ?? "";
+  const attachments = [...pendingAttachments];
   if (!city || !sessionID || !input || !sendBtn || logSubmitting) return;
-  if (!message) {
+  if (!message && attachments.length === 0) {
     input.focus();
     return;
   }
+  const submitMessage = buildSubmitMessage(message, attachments);
 
   logSubmitting = true;
   sendBtn.disabled = true;
   statusEl?.replaceChildren(document.createTextNode("Sending..."));
   const res = await api.POST("/v0/city/{cityName}/session/{id}/submit", {
     params: { path: { cityName: city, id: sessionID }, header: mutationHeaders },
-    body: { intent: "follow_up", message },
+    body: { intent: "default", message: submitMessage },
   });
   logSubmitting = false;
   sendBtn.disabled = false;
@@ -421,20 +458,21 @@ async function submitLogDrawerMessage(): Promise<void> {
   }
 
   input.value = "";
-  appendLocalTurn("user", message);
-  statusEl?.replaceChildren(document.createTextNode("Queued"));
-  showToast("success", "Message queued", res.data?.request_id ?? sessionID);
+  pendingAttachments = [];
+  renderPendingAttachments();
+  appendLocalTurn("user", message || attachmentOnlyLabel(attachments), attachments);
+  statusEl?.replaceChildren(document.createTextNode("Sent"));
+  showToast("success", "Message sent", res.data?.request_id ?? sessionID);
   input.focus();
 }
 
-function appendLocalTurn(role: string, text: string): void {
+function appendLocalTurn(role: string, text: string, attachments: ChatAttachment[] = []): void {
   const messagesEl = byId("log-drawer-messages");
   if (!messagesEl) return;
-  messagesEl.append(renderTurn(role, text, new Date().toISOString()));
+  messagesEl.append(renderTurn(role, text, new Date().toISOString(), attachments));
   logCount += 1;
   byId("log-drawer-count")!.textContent = String(logCount);
-  const body = byId("log-drawer-body");
-  if (body) body.scrollTop = body.scrollHeight;
+  scrollLogDrawerToBottom();
 }
 
 function resetLogComposer(): void {
@@ -442,17 +480,131 @@ function resetLogComposer(): void {
   const sendBtn = byId<HTMLButtonElement>("log-drawer-send-btn");
   if (input) input.value = "";
   if (sendBtn) sendBtn.disabled = false;
+  pendingAttachments = [];
+  renderPendingAttachments();
   byId("log-drawer-status")?.replaceChildren(document.createTextNode(""));
 }
 
-function renderTurn(role: string, text: string, timestamp: string | undefined): HTMLElement {
-  return el("div", { class: "log-msg" }, [
+async function addSelectedAttachments(files: FileList | File[] | null): Promise<void> {
+  if (!files) return;
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith("image/")) {
+      showToast("error", "Attachment skipped", `${file.name} is not an image`);
+      continue;
+    }
+    if (pendingAttachments.length >= MAX_CHAT_ATTACHMENTS) {
+      showToast("error", "Attachment limit", `Use at most ${MAX_CHAT_ATTACHMENTS} images`);
+      break;
+    }
+    if (file.size > MAX_INLINE_IMAGE_BYTES) {
+      showToast("error", "Image too large", `${file.name} is over 350 KB`);
+      continue;
+    }
+    try {
+      pendingAttachments.push(await readAttachment(file));
+      renderPendingAttachments();
+    } catch {
+      showToast("error", "Attachment failed", file.name);
+    }
+  }
+}
+
+function readAttachment(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("image read did not produce a data URL"));
+        return;
+      }
+      resolve({
+        dataURL: reader.result,
+        id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("image read failed")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPendingAttachments(): void {
+  const container = byId("log-drawer-attachments");
+  if (!container) return;
+  clear(container);
+  pendingAttachments.forEach((attachment) => {
+    const remove = el("button", {
+      class: "chat-attachment-remove",
+      "data-attachment-id": attachment.id,
+      title: "Remove",
+      type: "button",
+    }, ["x"]);
+    remove.addEventListener("click", () => {
+      pendingAttachments = pendingAttachments.filter((item) => item.id !== attachment.id);
+      renderPendingAttachments();
+    });
+    container.append(el("div", { class: "chat-attachment-chip" }, [
+      el("img", { alt: "", class: "chat-attachment-thumb", src: attachment.dataURL }),
+      el("span", { class: "chat-attachment-name" }, [attachment.name]),
+      remove,
+    ]));
+  });
+}
+
+function buildSubmitMessage(message: string, attachments: ChatAttachment[]): string {
+  const parts = message ? [message] : [];
+  attachments.forEach((attachment) => {
+    parts.push(`![${attachmentMarkdownAlt(attachment.name)}](${attachment.dataURL})`);
+  });
+  return parts.join("\n\n");
+}
+
+function attachmentMarkdownAlt(name: string): string {
+  return name.replace(/[\]\r\n]/g, " ").trim() || "image";
+}
+
+function attachmentOnlyLabel(attachments: ChatAttachment[]): string {
+  if (attachments.length === 0) return "";
+  return attachments.length === 1 ? attachments[0]?.name ?? "image" : `${attachments.length} images`;
+}
+
+function renderTurn(role: string, text: string, timestamp: string | undefined, localAttachments: ChatAttachment[] = []): HTMLElement {
+  const className = roleClass(role);
+  const parsed = extractInlineImageAttachments(text);
+  const bodyText = parsed.text.trim();
+  const attachments = [
+    ...parsed.attachments,
+    ...localAttachments.map((attachment) => ({ dataURL: attachment.dataURL, name: attachment.name })),
+  ];
+  return el("div", { class: `log-msg log-msg-${className}` }, [
     el("div", { class: "log-msg-header" }, [
-      el("span", { class: `log-msg-type log-msg-type-${roleClass(role)}` }, [role]),
+      el("span", { class: `log-msg-type log-msg-type-${className}` }, [role]),
       el("span", { class: "log-msg-time" }, [formatTimestamp(timestamp)]),
     ]),
-    el("div", { class: "log-msg-body" }, [text]),
+    bodyText ? el("div", { class: "log-msg-body" }, [bodyText]) : null,
+    attachments.length > 0 ? el("div", { class: "log-msg-attachments" }, attachments.map((attachment) => (
+      el("img", { alt: attachment.name, class: "log-msg-image", src: attachment.dataURL })
+    ))) : null,
   ]);
+}
+
+function extractInlineImageAttachments(text: string): { attachments: Array<{ dataURL: string; name: string }>; text: string } {
+  const attachments: Array<{ dataURL: string; name: string }> = [];
+  const cleaned = text.replace(/!\[([^\]]*)\]\((data:image\/[^;)]+;base64,[^)]+)\)/g, (_match, name: string, dataURL: string) => {
+    attachments.push({ dataURL, name: name || "image" });
+    return "";
+  });
+  return { attachments, text: cleaned };
+}
+
+function scrollLogDrawerToBottom(): void {
+  const body = byId("log-drawer-body");
+  if (!body) return;
+  window.requestAnimationFrame(() => {
+    body.scrollTop = body.scrollHeight;
+  });
 }
 
 function roleClass(role: string): string {
@@ -462,7 +614,10 @@ function roleClass(role: string): string {
       return "assistant";
     case "system":
       return "system";
+    case "output":
     case "result":
+    case "tool":
+    case "tool_result":
       return "result";
     default:
       return "user";

@@ -350,11 +350,12 @@ describe("crew empty states", () => {
     });
     expect(posts[0]).toEqual({
       path: "/v0/city/{cityName}/session/{id}/submit",
-      body: { intent: "follow_up", message: "Can you check the queue?" },
+      body: { intent: "default", message: "Can you check the queue?" },
     });
     expect(input.value).toBe("");
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("Can you check the queue?");
-    expect(document.getElementById("log-drawer-status")?.textContent).toBe("Queued");
+    expect(document.querySelector(".log-msg-user")?.textContent).toContain("Can you check the queue?");
+    expect(document.getElementById("log-drawer-status")?.textContent).toBe("Sent");
     expect(document.getElementById("log-drawer-count")?.textContent).toBe("1");
   });
 });
