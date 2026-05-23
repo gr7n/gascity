@@ -500,6 +500,9 @@ describe("crew empty states", () => {
           </div>
         </div>
         <form id="log-drawer-composer">
+          <button id="log-drawer-attach-btn" type="button">Attach images</button>
+          <input id="log-drawer-file-input" type="file" />
+          <div id="log-drawer-attachments"></div>
           <textarea id="log-drawer-input"></textarea>
           <button id="log-drawer-send-btn" type="submit">Send</button>
         </form>
@@ -553,6 +556,14 @@ describe("crew empty states", () => {
       expect((document.getElementById("agent-log-drawer") as HTMLElement).style.display).toBe("block");
     });
 
+    const fileInput = document.getElementById("log-drawer-file-input") as HTMLInputElement;
+    const screenshot = new File([new Uint8Array(400_000)], "screenshot.png", { type: "image/png" });
+    Object.defineProperty(fileInput, "files", { configurable: true, value: [screenshot] });
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => {
+      expect(document.getElementById("log-drawer-attachments")?.textContent).toContain("screenshot.png");
+    });
+
     const input = document.getElementById("log-drawer-input") as HTMLTextAreaElement;
     input.value = "Can you check the queue?";
     document.getElementById("log-drawer-composer")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -560,10 +571,10 @@ describe("crew empty states", () => {
     await waitFor(() => {
       expect(posts.length).toBe(1);
     });
-    expect(posts[0]).toEqual({
-      path: "/v0/city/{cityName}/session/{id}/submit",
-      body: { intent: "default", message: "Can you check the queue?" },
-    });
+    expect(posts[0]?.path).toBe("/v0/city/{cityName}/session/{id}/submit");
+    expect(posts[0]?.body?.intent).toBe("default");
+    expect(posts[0]?.body?.message).toContain("Can you check the queue?");
+    expect(posts[0]?.body?.message).toContain("![screenshot.png](data:image/png;base64,");
     expect(input.value).toBe("");
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("Can you check the queue?");
     expect(document.querySelector(".log-msg-user")?.textContent).toContain("Can you check the queue?");

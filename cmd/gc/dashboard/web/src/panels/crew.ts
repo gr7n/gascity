@@ -16,6 +16,7 @@ interface ChatAttachment {
   dataURL: string;
   id: string;
   name: string;
+  originalSize?: number;
   size: number;
   type: string;
 }
@@ -40,7 +41,11 @@ interface StreamTurnPayload {
 }
 
 const MAX_CHAT_ATTACHMENTS = 4;
-const MAX_INLINE_IMAGE_BYTES = 350_000;
+const MAX_INLINE_IMAGE_BYTES = 2_000_000;
+const MAX_SOURCE_IMAGE_BYTES = 15_000_000;
+const IMAGE_RESIZE_MAX_EDGE = 1600;
+const IMAGE_COMPRESS_MIME_TYPE = "image/jpeg";
+const IMAGE_COMPRESS_QUALITIES = [0.88, 0.78, 0.68, 0.58] as const;
 let pendingAttachments: ChatAttachment[] = [];
 
 export async function renderCrew(): Promise<void> {
@@ -521,20 +526,34 @@ async function addSelectedAttachments(files: FileList | File[] | null): Promise<
       showToast("error", "Attachment limit", `Use at most ${MAX_CHAT_ATTACHMENTS} images`);
       break;
     }
-    if (file.size > MAX_INLINE_IMAGE_BYTES) {
-      showToast("error", "Image too large", `${file.name} is over 350 KB`);
+    if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+      showToast("error", "Image too large", `${file.name} is over ${formatBytes(MAX_SOURCE_IMAGE_BYTES)}`);
       continue;
     }
     try {
-      pendingAttachments.push(await readAttachment(file));
+      const attachment = await prepareAttachment(file);
+      pendingAttachments.push(attachment);
       renderPendingAttachments();
-    } catch {
-      showToast("error", "Attachment failed", file.name);
+      if (attachment.originalSize && attachment.size < attachment.originalSize) {
+        showToast("success", "Image resized", `${file.name} -> ${formatBytes(attachment.size)}`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : file.name;
+      showToast("error", "Attachment failed", detail);
     }
   }
 }
 
-function readAttachment(file: File): Promise<ChatAttachment> {
+async function prepareAttachment(file: File): Promise<ChatAttachment> {
+  if (file.size <= MAX_INLINE_IMAGE_BYTES) {
+    return readAttachment(file, file.name, file.type);
+  }
+  const attachment = await compressImageAttachment(file);
+  if (attachment.size <= MAX_INLINE_IMAGE_BYTES) return attachment;
+  throw new Error(`${file.name} is still over ${formatBytes(MAX_INLINE_IMAGE_BYTES)} after resizing`);
+}
+
+function readAttachment(blob: Blob, name: string, type: string, originalSize?: number): Promise<ChatAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
@@ -544,15 +563,94 @@ function readAttachment(file: File): Promise<ChatAttachment> {
       }
       resolve({
         dataURL: reader.result,
-        id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
+        id: `${name}-${blob.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name,
+        originalSize,
+        size: blob.size,
+        type,
       });
     });
     reader.addEventListener("error", () => reject(reader.error ?? new Error("image read failed")));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+async function compressImageAttachment(file: File): Promise<ChatAttachment> {
+  const image = await loadImageSource(file);
+  const scale = Math.min(1, IMAGE_RESIZE_MAX_EDGE / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    image.close?.();
+    throw new Error(`Could not resize ${file.name}`);
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image.source, 0, 0, canvas.width, canvas.height);
+  image.close?.();
+
+  let smallest: Blob | null = null;
+  for (const quality of IMAGE_COMPRESS_QUALITIES) {
+    const blob = await canvasToBlob(canvas, IMAGE_COMPRESS_MIME_TYPE, quality);
+    if (!smallest || blob.size < smallest.size) smallest = blob;
+    if (blob.size <= MAX_INLINE_IMAGE_BYTES) {
+      return readAttachment(blob, imageAttachmentName(file.name), IMAGE_COMPRESS_MIME_TYPE, file.size);
+    }
+  }
+  if (!smallest) throw new Error(`Could not resize ${file.name}`);
+  throw new Error(`${file.name} is still over ${formatBytes(MAX_INLINE_IMAGE_BYTES)} after resizing`);
+}
+
+function loadImageSource(file: File): Promise<{ close?: () => void; height: number; source: CanvasImageSource; width: number }> {
+  if (typeof createImageBitmap === "function") {
+    return createImageBitmap(file).then((bitmap) => ({
+      close: () => bitmap.close(),
+      height: bitmap.height,
+      source: bitmap,
+      width: bitmap.width,
+    }));
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.addEventListener("load", () => {
+      URL.revokeObjectURL(url);
+      resolve({
+        height: image.naturalHeight || image.height,
+        source: image,
+        width: image.naturalWidth || image.width,
+      });
+    }, { once: true });
+    image.addEventListener("error", () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Could not read ${file.name}`));
+    }, { once: true });
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("image compression failed"));
+        return;
+      }
+      resolve(blob);
+    }, type, quality);
+  });
+}
+
+function imageAttachmentName(name: string): string {
+  const base = name.replace(/\.[^.]+$/, "").trim() || "image";
+  return `${base}.jpg`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(bytes >= 10_000_000 ? 0 : 1)} MB`;
+  return `${Math.round(bytes / 1000)} KB`;
 }
 
 function renderPendingAttachments(): void {
