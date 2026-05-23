@@ -35,6 +35,8 @@ func (c *routeStoreScopeCheck) Name() string { return "route-store-scope" }
 
 func (c *routeStoreScopeCheck) CanFix() bool { return true }
 
+func (c *routeStoreScopeCheck) WarmupEligible() bool { return false }
+
 func (c *routeStoreScopeCheck) Run(_ *doctor.CheckContext) *doctor.CheckResult {
 	findings, skipped := c.findings()
 	if len(findings) == 0 && len(skipped) == 0 {
