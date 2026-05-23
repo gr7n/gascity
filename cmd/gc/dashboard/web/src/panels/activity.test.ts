@@ -62,7 +62,7 @@ describe("activity feed ordering", () => {
     expect(document.getElementById("activity-count")?.textContent).toBe("3");
   });
 
-  it("hides routine controller sweeps while keeping failures and real work", async () => {
+  it("separates routine controller sweeps while keeping failures and real work visible", async () => {
     await seedActivity([{
       actor: "controller",
       category: "work",
@@ -109,8 +109,17 @@ describe("activity feed ordering", () => {
     const types = [...document.querySelectorAll<HTMLElement>(".tl-entry")].map((node) => node.dataset.type);
     expect(types).toEqual(["order.failed", "bead.created"]);
     expect(document.getElementById("activity-count")?.textContent).toBe("2");
+    expect(document.getElementById("activity-filters")?.textContent).toContain("Routine 2");
     expect(document.getElementById("activity-feed")?.textContent).toContain("dolt-remotes-patrol");
     expect(document.getElementById("activity-feed")?.textContent).not.toContain("gr-wisp-ab123");
+
+    document.querySelector<HTMLButtonElement>('.tl-filter-btn[data-value="routine"]')?.click();
+
+    const routineTypes = [...document.querySelectorAll<HTMLElement>(".tl-entry")].map((node) => node.dataset.type);
+    expect(routineTypes).toEqual(["order.completed", "bead.created"]);
+    expect(document.getElementById("activity-count")?.textContent).toBe("2");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("gate-sweep");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("gr-wisp-ab123");
   });
 
   it("computes a city stream cursor from loaded history", () => {

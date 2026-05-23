@@ -118,19 +118,21 @@ export function stopActivityStream(): void {
 }
 
 export function renderActivity(): void {
-  const visibleEntries = visibleActivityEntries();
-  renderFilters(visibleEntries);
+  const routineEntries = routineActivityEntries();
+  const foregroundEntries = entries.filter((entry) => !isRoutineControllerActivity(entry));
+  const sourceEntries = categoryFilter === "routine" ? routineEntries : foregroundEntries;
+  renderFilters(foregroundEntries, routineEntries);
   const feed = byId("activity-feed");
   if (!feed) return;
   clear(feed);
 
-  const filtered = visibleEntries.filter((entry) => {
-    if (categoryFilter !== "all" && entry.category !== categoryFilter) return false;
+  const filtered = sourceEntries.filter((entry) => {
+    if (categoryFilter !== "all" && categoryFilter !== "routine" && entry.category !== categoryFilter) return false;
     if (rigFilter !== "all" && entry.rig !== rigFilter) return false;
     if (agentFilter !== "all" && entry.actor !== agentFilter) return false;
     return true;
   });
-  byId("activity-count")!.textContent = String(visibleEntries.length);
+  byId("activity-count")!.textContent = String(sourceEntries.length);
 
   if (filtered.length === 0) {
     feed.append(el("div", { class: "empty-state" }, [el("p", {}, ["No recent activity"])]));
@@ -187,11 +189,12 @@ export function installActivityInteractions(): void {
   });
 }
 
-function renderFilters(sourceEntries: ActivityEntry[]): void {
+function renderFilters(foregroundEntries: ActivityEntry[], routineEntries: ActivityEntry[]): void {
   const container = byId("activity-filters");
   if (!container) return;
   clear(container);
-  if (sourceEntries.length === 0) return;
+  if (foregroundEntries.length === 0 && routineEntries.length === 0) return;
+  const sourceEntries = categoryFilter === "routine" ? routineEntries : foregroundEntries;
   const rigs = [...new Set(sourceEntries.map((entry) => entry.rig).filter(Boolean))].sort();
   const agents = [...new Set(sourceEntries.map((entry) => entry.actor).filter(Boolean))].sort() as string[];
 
@@ -219,6 +222,7 @@ function renderFilters(sourceEntries: ActivityEntry[]): void {
       filterButton("work", "Work"),
       filterButton("comms", "Comms"),
       filterButton("system", "System"),
+      filterButton("routine", `Routine ${routineEntries.length}`),
     ]),
     el("div", { class: "tl-filter-group" }, [el("label", { for: "tl-rig-filter" }, ["Rig:"]), rigSelect]),
     el("div", { class: "tl-filter-group" }, [el("label", { for: "tl-agent-filter" }, ["Agent:"]), agentSelect]),
@@ -278,8 +282,8 @@ function normalizeEntries(nextEntries: ActivityEntry[]): ActivityEntry[] {
     .slice(0, MAX_ENTRIES);
 }
 
-function visibleActivityEntries(): ActivityEntry[] {
-  return entries.filter((entry) => !isRoutineControllerActivity(entry));
+function routineActivityEntries(): ActivityEntry[] {
+  return entries.filter((entry) => isRoutineControllerActivity(entry));
 }
 
 function isRoutineControllerActivity(entry: ActivityEntry): boolean {
