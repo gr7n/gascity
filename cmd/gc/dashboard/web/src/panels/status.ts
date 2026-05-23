@@ -89,7 +89,8 @@ export async function renderStatus(): Promise<void> {
   const highPriorityIssues = workBeads.filter((bead) => beadPriority(bead.priority) <= 2).length;
   const deadSessions = sessions.filter((session) => !session.running).length;
   const statusUnavailable = Boolean(statusR.error || !statusR.data);
-  const partialUnavailable = statusUnavailable || Boolean(sessionsR.error || beadsR.error || convoysR.error);
+  const panelDataUnavailable = Boolean(sessionsR.error || beadsR.error || convoysR.error);
+  const partialUnavailable = statusUnavailable || panelDataUnavailable;
   const runningAgents = statusR.data?.agents.running ?? sessions.filter((session) => session.running).length;
   const assignedWork = hasBeadData ? staleAssigned : statusR.data?.work.in_progress ?? staleAssigned;
   const openWork = hasBeadData ? workBeads.length : statusR.data?.work.open ?? beads.length;
@@ -107,8 +108,9 @@ export async function renderStatus(): Promise<void> {
     ]);
 
     const alerts = el("div", { class: "summary-alerts" });
-    appendAlert(alerts, statusUnavailable, "alert-yellow", "Status API slow");
-    appendAlert(alerts, partialUnavailable && !statusUnavailable, "alert-yellow", "Partial data");
+    appendAlert(alerts, statusUnavailable && !panelDataUnavailable, "alert-yellow", "Summary delayed");
+    appendAlert(alerts, statusUnavailable && panelDataUnavailable, "alert-yellow", "Status API slow");
+    appendAlert(alerts, panelDataUnavailable && !statusUnavailable, "alert-yellow", "Partial data");
     appendAlert(alerts, stuckAgents > 0, "alert-red", `${stuckAgents} stuck`);
     appendAlert(alerts, staleAssigned > 0, "alert-yellow", `${staleAssigned} assigned`);
     appendAlert(alerts, highPriorityIssues > 0, "alert-red", `${highPriorityIssues} P1/P2`);

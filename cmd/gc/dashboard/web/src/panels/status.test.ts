@@ -219,8 +219,28 @@ describe("status panel scope rendering", () => {
 
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
     expect(scopeStats().Terminal).toBe("Detached");
-    expect(document.getElementById("status-banner")?.textContent).toContain("Status API slow");
+    expect(document.getElementById("status-banner")?.textContent).toContain("Summary delayed");
     expect(document.getElementById("status-banner")?.textContent).toContain("1");
+  });
+
+  it("warns more strongly when status and panel data are both unavailable", async () => {
+    vi.useFakeTimers();
+    window.history.pushState({}, "", "/dashboard?city=alpha");
+    apiGet.mockImplementation((path: string) => {
+      if (path.includes("/status")) return new Promise(() => {});
+      if (path.includes("/sessions")) return Promise.reject(new Error("sessions down"));
+      if (path.includes("/beads")) return Promise.resolve(ok({ items: [] }));
+      if (path.includes("/convoys")) return Promise.resolve(ok({ items: [] }));
+      return Promise.resolve(ok({}));
+    });
+
+    const { renderStatus } = await import("./status");
+    const render = renderStatus();
+    await vi.advanceTimersByTimeAsync(2_500);
+    await render;
+
+    expect(document.getElementById("status-banner")?.textContent).toContain("Status API slow");
+    expect(document.getElementById("status-banner")?.textContent).not.toContain("Summary delayed");
   });
 
   it("does not count session beads as open city work", async () => {
