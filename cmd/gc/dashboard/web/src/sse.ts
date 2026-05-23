@@ -149,6 +149,11 @@ export function connectEvents(
     let errorReported = false;
     while (!controller.signal.aborted) {
       try {
+        // Some proxies do not deliver an idle SSE response to fetch()
+        // until the first frame arrives. The REST panels have already
+        // loaded by this point, so show the dashboard as listening now;
+        // real failures still flip to reconnecting through the catch path.
+        opts?.onStatus?.("live");
         const { stream } = await streamSupervisorEvents({
           client,
           query: afterCursor ? { after_cursor: afterCursor } : undefined,
@@ -232,6 +237,9 @@ export function connectCityEvents(
     let errorReported = false;
     while (!controller.signal.aborted) {
       try {
+        // See connectEvents: an idle stream can be healthy even before
+        // fetch() receives its first frame through the proxy.
+        opts?.onStatus?.("live");
         const { stream } = await streamEvents({
           client,
           path: { cityName: city },

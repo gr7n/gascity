@@ -214,7 +214,7 @@ describe("status panel scope rendering", () => {
 
     const { renderStatus } = await import("./status");
     const render = renderStatus();
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(8_000);
     await render;
 
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
@@ -236,7 +236,7 @@ describe("status panel scope rendering", () => {
 
     const { renderStatus } = await import("./status");
     const render = renderStatus();
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(8_000);
     await render;
 
     expect(document.getElementById("status-banner")?.textContent).toContain("Status API slow");

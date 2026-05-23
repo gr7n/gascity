@@ -15,7 +15,7 @@ type SessionList = DashboardSchema["ListBodySessionResponse"];
 type BeadList = DashboardSchema["ListBodyBead"];
 type SessionSummary = DashboardSchema["SessionResponse"];
 
-const STATUS_REQUEST_TIMEOUT_MS = 2_500;
+const STATUS_REQUEST_TIMEOUT_MS = 8_000;
 
 export async function renderStatus(): Promise<void> {
   const city = cityScope();
