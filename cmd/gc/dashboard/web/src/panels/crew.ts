@@ -26,6 +26,19 @@ interface DisplayTurn {
   timestamp?: string;
 }
 
+interface TranscriptTurn {
+  role?: string;
+  text?: string;
+  timestamp?: string;
+}
+
+interface StreamTurnPayload {
+  data?: { message?: TranscriptTurn };
+  event?: string;
+  format?: string;
+  turns?: TranscriptTurn[];
+}
+
 const MAX_CHAT_ATTACHMENTS = 4;
 const MAX_INLINE_IMAGE_BYTES = 350_000;
 let pendingAttachments: ChatAttachment[] = [];
@@ -389,9 +402,7 @@ async function loadTranscript(sessionID: string, prepend: boolean): Promise<void
   }
 
   const fragment = document.createDocumentFragment();
-  for (const turn of res.data.turns ?? []) {
-    logCount += appendDisplayTurns(fragment, expandTranscriptTurn(turn.role, turn.text, turn.timestamp));
-  }
+  logCount += appendDisplayTurns(fragment, expandTranscriptTurns(res.data.turns ?? []));
   if (prepend) {
     messagesEl.prepend(fragment);
   } else {
@@ -422,14 +433,20 @@ async function loadTranscript(sessionID: string, prepend: boolean): Promise<void
 function appendStreamEvent(msg: AgentOutputMessage): void {
   const messagesEl = byId("log-drawer-messages");
   if (!messagesEl) return;
-  const payload = msg.data as { data?: { message?: { role?: string; text?: string; timestamp?: string } }; event?: string } | null;
+  const payload = msg.data as StreamTurnPayload | null;
+  if ((msg.type === "turn" || msg.type === "message") && Array.isArray(payload?.turns)) {
+    if (shouldReplaceWithStreamSnapshot(payload)) {
+      replaceTranscriptTurns(payload.turns);
+      return;
+    }
+    logCount += appendDisplayTurns(messagesEl, expandTranscriptTurns(payload.turns));
+    updateLogCount();
+    scrollLogDrawerToBottom();
+    return;
+  }
   if (msg.type !== "message" || !payload?.data?.message) return;
-  logCount += appendDisplayTurns(messagesEl, expandTranscriptTurn(
-    payload.data.message.role ?? "agent",
-    payload.data.message.text ?? "",
-    payload.data.message.timestamp,
-  ));
-  byId("log-drawer-count")!.textContent = String(logCount);
+  logCount += appendDisplayTurns(messagesEl, expandTranscriptTurns([payload.data.message]));
+  updateLogCount();
   scrollLogDrawerToBottom();
 }
 
@@ -479,7 +496,7 @@ function appendLocalTurn(role: string, text: string, attachments: ChatAttachment
   if (!messagesEl) return;
   messagesEl.append(renderTurn(role, text, new Date().toISOString(), attachments));
   logCount += 1;
-  byId("log-drawer-count")!.textContent = String(logCount);
+  updateLogCount();
   scrollLogDrawerToBottom();
 }
 
@@ -583,6 +600,34 @@ function appendDisplayTurns(container: Node, turns: DisplayTurn[]): number {
     container.appendChild(renderTurn(turn.role, turn.text, turn.timestamp));
   }
   return turns.length;
+}
+
+function expandTranscriptTurns(turns: TranscriptTurn[]): DisplayTurn[] {
+  return turns.flatMap((turn) => expandTranscriptTurn(turn.role ?? "agent", turn.text ?? "", turn.timestamp));
+}
+
+function shouldReplaceWithStreamSnapshot(payload: StreamTurnPayload): boolean {
+  const turns = payload.turns ?? [];
+  return payload.format === "text" || turns.some((turn) => isTerminalTranscript(turn.role ?? "", turn.text ?? ""));
+}
+
+function replaceTranscriptTurns(turns: TranscriptTurn[]): void {
+  const messagesEl = byId("log-drawer-messages");
+  const loadingEl = byId("log-drawer-loading");
+  if (!messagesEl || !loadingEl) return;
+  const displayTurns = expandTranscriptTurns(turns);
+  const fragment = document.createDocumentFragment();
+  appendDisplayTurns(fragment, displayTurns);
+  clear(messagesEl);
+  messagesEl.append(fragment, loadingEl);
+  loadingEl.style.display = "none";
+  logCount = displayTurns.length;
+  updateLogCount();
+  scrollLogDrawerToBottom();
+}
+
+function updateLogCount(): void {
+  byId("log-drawer-count")!.textContent = String(logCount);
 }
 
 function expandTranscriptTurn(role: string, text: string, timestamp: string | undefined): DisplayTurn[] {
