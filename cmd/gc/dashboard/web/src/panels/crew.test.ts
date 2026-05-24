@@ -365,7 +365,7 @@ describe("crew empty states", () => {
 
   it("collapses wrapped base64 image payloads in terminal transcripts", async () => {
     const encoded = "ACc+7nX4cJ2Rgb+u5vx7aFMH8dJLSAxwuQAQCo3P3fOM6/FiOyMb".repeat(50);
-    const wrapped = encoded.match(/.{1,80}/g)?.join("\n") ?? encoded;
+    const wrapped = encoded.match(/.{1,80}/g)?.map((line) => `  ${line}`).join("\n") ?? encoded;
     document.body.innerHTML = `
       <div id="crew-loading">Loading crew...</div>
       <table id="crew-table" style="display:none"><tbody id="crew-tbody"></tbody></table>

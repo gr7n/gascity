@@ -742,7 +742,7 @@ function collapseLooseDataImagePayloads(text: string): string {
 }
 
 function collapseLooseBase64Payloads(text: string): string {
-  return text.replace(/[A-Za-z0-9+/=\r\n]{2000,}/g, (chunk) => {
+  return text.replace(/[A-Za-z0-9+/=\s]{2000,}/g, (chunk) => {
     if (!looksLikeBase64Payload(chunk)) return chunk;
     return "[large encoded image data omitted from transcript]";
   });
