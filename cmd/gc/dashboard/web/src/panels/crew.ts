@@ -16,7 +16,6 @@ interface ChatAttachment {
   dataURL: string;
   id: string;
   name: string;
-  originalSize?: number;
   size: number;
   type: string;
 }
@@ -40,16 +39,8 @@ interface StreamTurnPayload {
   turns?: TranscriptTurn[];
 }
 
-const MAX_CHAT_ATTACHMENTS = 4;
 const SESSION_SUBMIT_BODY_LIMIT_BYTES = 1_048_576;
 const SESSION_SUBMIT_SAFE_BYTES = 900_000;
-const CHAT_TEXT_RESERVE_BYTES = 40_000;
-const MIN_ATTACHMENT_MESSAGE_BYTES = 120_000;
-const MAX_DIRECT_IMAGE_BYTES = 650_000;
-const MAX_SOURCE_IMAGE_BYTES = 15_000_000;
-const IMAGE_RESIZE_MAX_EDGES = [1600, 1280, 1024, 768, 512] as const;
-const IMAGE_COMPRESS_MIME_TYPE = "image/jpeg";
-const IMAGE_COMPRESS_QUALITIES = [0.86, 0.74, 0.62, 0.5] as const;
 let pendingAttachments: ChatAttachment[] = [];
 
 export async function renderCrew(): Promise<void> {
@@ -298,9 +289,11 @@ function renderSimpleEmpty(container: HTMLElement, message: string): void {
 
 export function installCrewInteractions(): void {
   byId("log-drawer-close-btn")?.addEventListener("click", () => closeLogDrawer());
-  byId<HTMLButtonElement>("log-drawer-attach-btn")?.addEventListener("click", () => {
-    byId<HTMLInputElement>("log-drawer-file-input")?.click();
-  });
+  const attachBtn = byId<HTMLButtonElement>("log-drawer-attach-btn");
+  if (attachBtn) {
+    attachBtn.title = "Image upload needs a server attachment endpoint before it can be sent safely";
+    attachBtn.addEventListener("click", () => showImageUploadUnsupported());
+  }
   byId<HTMLInputElement>("log-drawer-file-input")?.addEventListener("change", (event) => {
     const input = event.currentTarget;
     if (!(input instanceof HTMLInputElement)) return;
@@ -320,7 +313,7 @@ export function installCrewInteractions(): void {
     const imageFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
     if (imageFiles.length === 0) return;
     event.preventDefault();
-    void addSelectedAttachments(imageFiles);
+    showImageUploadUnsupported();
   });
   byId("log-drawer-older-btn")?.addEventListener("click", () => {
     logDebug("crew", "Load older transcript clicked", {
@@ -472,6 +465,11 @@ async function submitLogDrawerMessage(): Promise<void> {
     input.focus();
     return;
   }
+  if (attachments.length > 0) {
+    showImageUploadUnsupported();
+    input.focus();
+    return;
+  }
   const submitMessage = buildSubmitMessage(message, attachments);
   const submitBytes = submitRequestBytes(submitMessage);
   if (submitBytes > SESSION_SUBMIT_SAFE_BYTES) {
@@ -505,7 +503,7 @@ async function submitLogDrawerMessage(): Promise<void> {
   input.value = "";
   pendingAttachments = [];
   renderPendingAttachments();
-  appendLocalTurn("user", message || attachmentOnlyLabel(attachments), attachments);
+  appendLocalTurn("user", message, attachments);
   statusEl?.replaceChildren(document.createTextNode("Sent"));
   showToast("success", "Message sent", res.data?.request_id ?? sessionID);
   input.focus();
@@ -532,165 +530,17 @@ function resetLogComposer(): void {
 
 async function addSelectedAttachments(files: FileList | File[] | null): Promise<void> {
   if (!files) return;
-  for (const file of Array.from(files)) {
-    if (!file.type.startsWith("image/")) {
-      showToast("error", "Attachment skipped", `${file.name} is not an image`);
-      continue;
-    }
-    if (pendingAttachments.length >= MAX_CHAT_ATTACHMENTS) {
-      showToast("error", "Attachment limit", `Use at most ${MAX_CHAT_ATTACHMENTS} images`);
-      break;
-    }
-    if (file.size > MAX_SOURCE_IMAGE_BYTES) {
-      showToast("error", "Image too large", `${file.name} is over ${formatBytes(MAX_SOURCE_IMAGE_BYTES)}`);
-      continue;
-    }
-    try {
-      const remainingBudget = remainingAttachmentBudgetBytes();
-      if (remainingBudget < MIN_ATTACHMENT_MESSAGE_BYTES) {
-        showToast("error", "Attachment limit", "Remove an image before adding another");
-        break;
-      }
-      const attachment = await prepareAttachment(file, remainingBudget);
-      pendingAttachments.push(attachment);
-      renderPendingAttachments();
-      if (attachment.originalSize && attachment.size < attachment.originalSize) {
-        showToast("success", "Image resized", `${file.name} -> ${formatBytes(attachment.size)}`);
-      }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : file.name;
-      showToast("error", "Attachment failed", detail);
-    }
+  if (Array.from(files).some((file) => file.type.startsWith("image/"))) {
+    showImageUploadUnsupported();
   }
 }
 
-async function prepareAttachment(file: File, maxMessageBytes: number): Promise<ChatAttachment> {
-  if (file.size <= MAX_DIRECT_IMAGE_BYTES) {
-    const direct = await readAttachment(file, file.name, file.type);
-    if (attachmentMessageBytes(direct) <= maxMessageBytes) return direct;
-  }
-  return compressImageAttachment(file, maxMessageBytes);
-}
-
-function readAttachment(blob: Blob, name: string, type: string, originalSize?: number): Promise<ChatAttachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error("image read did not produce a data URL"));
-        return;
-      }
-      resolve({
-        dataURL: reader.result,
-        id: `${name}-${blob.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name,
-        originalSize,
-        size: blob.size,
-        type,
-      });
-    });
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("image read failed")));
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function compressImageAttachment(file: File, maxMessageBytes: number): Promise<ChatAttachment> {
-  const image = await loadImageSource(file);
-  try {
-    let smallest: Blob | null = null;
-    for (const edge of IMAGE_RESIZE_MAX_EDGES) {
-      const canvas = resizedCanvas(image.source, image.width, image.height, edge);
-      for (const quality of IMAGE_COMPRESS_QUALITIES) {
-        const blob = await canvasToBlob(canvas, IMAGE_COMPRESS_MIME_TYPE, quality);
-        if (!smallest || blob.size < smallest.size) smallest = blob;
-        if (estimatedAttachmentMessageBytes(imageAttachmentName(file.name), blob, IMAGE_COMPRESS_MIME_TYPE) <= maxMessageBytes) {
-          return readAttachment(blob, imageAttachmentName(file.name), IMAGE_COMPRESS_MIME_TYPE, file.size);
-        }
-      }
-    }
-    if (!smallest) throw new Error(`Could not resize ${file.name}`);
-    throw new Error(`${file.name} is still too large after resizing`);
-  } finally {
-    image.close?.();
-  }
-}
-
-function loadImageSource(file: File): Promise<{ close?: () => void; height: number; source: CanvasImageSource; width: number }> {
-  if (typeof createImageBitmap === "function") {
-    return createImageBitmap(file).then((bitmap) => ({
-      close: () => bitmap.close(),
-      height: bitmap.height,
-      source: bitmap,
-      width: bitmap.width,
-    }));
-  }
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.addEventListener("load", () => {
-      URL.revokeObjectURL(url);
-      resolve({
-        height: image.naturalHeight || image.height,
-        source: image,
-        width: image.naturalWidth || image.width,
-      });
-    }, { once: true });
-    image.addEventListener("error", () => {
-      URL.revokeObjectURL(url);
-      reject(new Error(`Could not read ${file.name}`));
-    }, { once: true });
-    image.src = url;
-  });
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("image compression failed"));
-        return;
-      }
-      resolve(blob);
-    }, type, quality);
-  });
-}
-
-function resizedCanvas(source: CanvasImageSource, width: number, height: number, maxEdge: number): HTMLCanvasElement {
-  const scale = Math.min(1, maxEdge / Math.max(width, height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("image resize failed");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-  return canvas;
-}
-
-function imageAttachmentName(name: string): string {
-  const base = name.replace(/\.[^.]+$/, "").trim() || "image";
-  return `${base}.jpg`;
-}
-
-function remainingAttachmentBudgetBytes(): number {
-  return Math.max(
-    0,
-    SESSION_SUBMIT_SAFE_BYTES - CHAT_TEXT_RESERVE_BYTES - submitRequestBytes(buildSubmitMessage("", pendingAttachments)),
-  );
+function showImageUploadUnsupported(): void {
+  showToast("error", "Images not sent", "Session chat needs a real attachment endpoint before images are safe to deliver");
 }
 
 function submitRequestBytes(message: string): number {
   return utf8Bytes(JSON.stringify({ intent: "default", message }));
-}
-
-function attachmentMessageBytes(attachment: ChatAttachment): number {
-  return utf8Bytes(`\n\n${attachmentMarkdown(attachment)}`);
-}
-
-function estimatedAttachmentMessageBytes(name: string, blob: Blob, type: string): number {
-  const dataURLLength = `data:${type};base64,`.length + Math.ceil(blob.size / 3) * 4;
-  return utf8Bytes(`\n\n![${attachmentMarkdownAlt(name)}]()` + "x".repeat(dataURLLength));
 }
 
 function utf8Bytes(value: string): number {
@@ -727,23 +577,8 @@ function renderPendingAttachments(): void {
 
 function buildSubmitMessage(message: string, attachments: ChatAttachment[]): string {
   const parts = message ? [message] : [];
-  attachments.forEach((attachment) => {
-    parts.push(attachmentMarkdown(attachment));
-  });
+  void attachments;
   return parts.join("\n\n");
-}
-
-function attachmentMarkdown(attachment: ChatAttachment): string {
-  return `![${attachmentMarkdownAlt(attachment.name)}](${attachment.dataURL})`;
-}
-
-function attachmentMarkdownAlt(name: string): string {
-  return name.replace(/[\]\r\n]/g, " ").trim() || "image";
-}
-
-function attachmentOnlyLabel(attachments: ChatAttachment[]): string {
-  if (attachments.length === 0) return "";
-  return attachments.length === 1 ? attachments[0]?.name ?? "image" : `${attachments.length} images`;
 }
 
 function appendDisplayTurns(container: Node, turns: DisplayTurn[]): number {
@@ -889,11 +724,33 @@ function renderTurn(role: string, text: string, timestamp: string | undefined, l
 
 function extractInlineImageAttachments(text: string): { attachments: Array<{ dataURL: string; name: string }>; text: string } {
   const attachments: Array<{ dataURL: string; name: string }> = [];
-  const cleaned = text.replace(/!\[([^\]]*)\]\((data:image\/[^;)]+;base64,[^)]+)\)/g, (_match, name: string, dataURL: string) => {
-    attachments.push({ dataURL, name: name || "image" });
+  let cleaned = text.replace(/!\[([^\]]*)\]\((data:image\/[^;)]+;base64,[A-Za-z0-9+/=\s]+)\)/g, (_match, name: string, dataURL: string) => {
+    const normalizedDataURL = dataURL.replace(/\s+/g, "");
+    if (normalizedDataURL.length > SESSION_SUBMIT_SAFE_BYTES) {
+      return `[inline image data omitted: ${name || "image"}]`;
+    }
+    attachments.push({ dataURL: normalizedDataURL, name: name || "image" });
     return "";
   });
+  cleaned = collapseLooseDataImagePayloads(cleaned);
+  cleaned = collapseLooseBase64Payloads(cleaned);
   return { attachments, text: cleaned };
+}
+
+function collapseLooseDataImagePayloads(text: string): string {
+  return text.replace(/data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]{2000,}/g, "[inline image data omitted]");
+}
+
+function collapseLooseBase64Payloads(text: string): string {
+  return text.replace(/[A-Za-z0-9+/=\r\n]{2000,}/g, (chunk) => {
+    if (!looksLikeBase64Payload(chunk)) return chunk;
+    return "[large encoded image data omitted from transcript]";
+  });
+}
+
+function looksLikeBase64Payload(chunk: string): boolean {
+  const compact = chunk.replace(/\s+/g, "");
+  return compact.length > 1500 && /^[A-Za-z0-9+/=]+$/.test(compact) && /[+/]/.test(compact);
 }
 
 function scrollLogDrawerToBottom(): void {
