@@ -629,6 +629,14 @@ describe("crew empty states", () => {
       posts.push({ path, body: (options as { body?: { intent?: string; message?: string } } | undefined)?.body });
       return { data: { event_cursor: "12", request_id: "req-chat-1", status: "accepted" } } as never;
     });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      id: "att-123",
+      mime_type: "image/png",
+      name: "screenshot.png",
+      path: "/tmp/test-city/.gc/dashboard/attachments/s-mayor/att-123/screenshot.png",
+      size: 400_000,
+      url: "/v0/city/mc-city/session/s-mayor/attachments/att-123/screenshot.png",
+    }), { headers: { "Content-Type": "application/json" }, status: 201 }));
 
     installCrewInteractions();
     await renderCrew();
@@ -641,8 +649,13 @@ describe("crew empty states", () => {
     const screenshot = new File([new Uint8Array(400_000)], "screenshot.png", { type: "image/png" });
     Object.defineProperty(fileInput, "files", { configurable: true, value: [screenshot] });
     fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(document.getElementById("log-drawer-attachments")?.textContent).not.toContain("screenshot.png");
+    await waitFor(() => {
+      expect(document.getElementById("log-drawer-attachments")?.textContent).toContain("screenshot.png");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v0/city/mc-city/session/s-mayor/attachments",
+      expect.objectContaining({ method: "POST" }),
+    );
 
     const input = document.getElementById("log-drawer-input") as HTMLTextAreaElement;
     input.value = "Can you check the queue?";
@@ -653,12 +666,16 @@ describe("crew empty states", () => {
     });
     expect(posts[0]?.path).toBe("/v0/city/{cityName}/session/{id}/submit");
     expect(posts[0]?.body?.intent).toBe("default");
-    expect(posts[0]?.body?.message).toBe("Can you check the queue?");
+    expect(posts[0]?.body?.message).toContain("Can you check the queue?");
+    expect(posts[0]?.body?.message).toContain("Attached images:");
+    expect(posts[0]?.body?.message).toContain("![screenshot.png](/v0/city/mc-city/session/s-mayor/attachments/att-123/screenshot.png)");
+    expect(posts[0]?.body?.message).toContain("Local file: /tmp/test-city/.gc/dashboard/attachments/s-mayor/att-123/screenshot.png");
     expect(posts[0]?.body?.message).not.toContain("data:image");
     expect(new TextEncoder().encode(JSON.stringify(posts[0]?.body)).length).toBeLessThan(900_000);
     expect(input.value).toBe("");
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("Can you check the queue?");
     expect(document.querySelector(".log-msg-user")?.textContent).toContain("Can you check the queue?");
+    expect(document.querySelector<HTMLImageElement>(".log-msg-image")?.getAttribute("src")).toBe("/v0/city/mc-city/session/s-mayor/attachments/att-123/screenshot.png");
     expect(document.getElementById("log-drawer-status")?.textContent).toBe("Sent");
     expect(document.getElementById("log-drawer-count")?.textContent).toBe("1");
   });

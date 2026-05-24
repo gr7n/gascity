@@ -1,5 +1,5 @@
 import type { SessionRecord } from "../api";
-import { api, cityScope, mutationHeaders } from "../api";
+import { api, cityScope, mutationHeaders, supervisorBaseURL } from "../api";
 import { byId, clear, el } from "../util/dom";
 import { calculateActivity, formatTimestamp, statusBadgeClass, truncate } from "../util/legacy";
 import { connectAgentOutput, type AgentOutputMessage, type SSEHandle } from "../sse";
@@ -13,11 +13,17 @@ let logCount = 0;
 let logSubmitting = false;
 
 interface ChatAttachment {
-  dataURL: string;
   id: string;
   name: string;
+  path: string;
   size: number;
   type: string;
+  url: string;
+}
+
+interface RenderAttachment {
+  name: string;
+  src: string;
 }
 
 interface DisplayTurn {
@@ -291,8 +297,8 @@ export function installCrewInteractions(): void {
   byId("log-drawer-close-btn")?.addEventListener("click", () => closeLogDrawer());
   const attachBtn = byId<HTMLButtonElement>("log-drawer-attach-btn");
   if (attachBtn) {
-    attachBtn.title = "Image upload needs a server attachment endpoint before it can be sent safely";
-    attachBtn.addEventListener("click", () => showImageUploadUnsupported());
+    attachBtn.title = "Attach images";
+    attachBtn.addEventListener("click", () => byId<HTMLInputElement>("log-drawer-file-input")?.click());
   }
   byId<HTMLInputElement>("log-drawer-file-input")?.addEventListener("change", (event) => {
     const input = event.currentTarget;
@@ -313,7 +319,7 @@ export function installCrewInteractions(): void {
     const imageFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
     if (imageFiles.length === 0) return;
     event.preventDefault();
-    showImageUploadUnsupported();
+    void addSelectedAttachments(imageFiles);
   });
   byId("log-drawer-older-btn")?.addEventListener("click", () => {
     logDebug("crew", "Load older transcript clicked", {
@@ -465,11 +471,6 @@ async function submitLogDrawerMessage(): Promise<void> {
     input.focus();
     return;
   }
-  if (attachments.length > 0) {
-    showImageUploadUnsupported();
-    input.focus();
-    return;
-  }
   const submitMessage = buildSubmitMessage(message, attachments);
   const submitBytes = submitRequestBytes(submitMessage);
   if (submitBytes > SESSION_SUBMIT_SAFE_BYTES) {
@@ -530,13 +531,74 @@ function resetLogComposer(): void {
 
 async function addSelectedAttachments(files: FileList | File[] | null): Promise<void> {
   if (!files) return;
-  if (Array.from(files).some((file) => file.type.startsWith("image/"))) {
-    showImageUploadUnsupported();
+  const city = cityScope();
+  const sessionID = logSessionID;
+  if (!city || !sessionID) return;
+  const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
+  if (imageFiles.length === 0) {
+    showToast("error", "Unsupported file", "Only image attachments are supported");
+    return;
+  }
+  const statusEl = byId("log-drawer-status");
+  for (const file of imageFiles) {
+    statusEl?.replaceChildren(document.createTextNode(`Uploading ${file.name}...`));
+    try {
+      const attachment = await uploadSessionAttachment(city, sessionID, file);
+      pendingAttachments.push(attachment);
+      renderPendingAttachments();
+      statusEl?.replaceChildren(document.createTextNode("Image attached"));
+    } catch (error) {
+      statusEl?.replaceChildren(document.createTextNode(""));
+      showToast("error", "Image upload failed", error instanceof Error ? error.message : String(error));
+    }
   }
 }
 
-function showImageUploadUnsupported(): void {
-  showToast("error", "Images not sent", "Session chat needs a real attachment endpoint before images are safe to deliver");
+async function uploadSessionAttachment(city: string, sessionID: string, file: File): Promise<ChatAttachment> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(apiURL(sessionAttachmentsPath(city, sessionID)), {
+    body: form,
+    headers: mutationHeaders,
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await responseErrorDetail(res));
+  }
+  const data = await res.json() as { id?: string; mime_type?: string; name?: string; path?: string; size?: number; url?: string };
+  if (!data.id || !data.name || !data.url || !data.path) {
+    throw new Error("Attachment upload returned an incomplete response");
+  }
+  return {
+    id: data.id,
+    name: data.name,
+    path: data.path,
+    size: data.size ?? file.size,
+    type: data.mime_type ?? file.type,
+    url: data.url,
+  };
+}
+
+async function responseErrorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json() as { detail?: string; title?: string };
+    return body.detail ?? body.title ?? `${res.status} ${res.statusText}`;
+  } catch {
+    return `${res.status} ${res.statusText}`;
+  }
+}
+
+function sessionAttachmentsPath(city: string, sessionID: string): string {
+  return `/v0/city/${encodeURIComponent(city)}/session/${encodeURIComponent(sessionID)}/attachments`;
+}
+
+function apiURL(path: string): string {
+  return `${supervisorBaseURL()}${path}`;
+}
+
+function attachmentImageSrc(path: string): string {
+  if (/^https?:\/\//i.test(path) || path.startsWith("data:")) return path;
+  return apiURL(path.startsWith("/") ? path : `/${path}`);
 }
 
 function submitRequestBytes(message: string): number {
@@ -568,7 +630,7 @@ function renderPendingAttachments(): void {
       renderPendingAttachments();
     });
     container.append(el("div", { class: "chat-attachment-chip" }, [
-      el("img", { alt: "", class: "chat-attachment-thumb", src: attachment.dataURL }),
+      el("img", { alt: "", class: "chat-attachment-thumb", src: attachmentImageSrc(attachment.url) }),
       el("span", { class: "chat-attachment-name" }, [attachment.name]),
       remove,
     ]));
@@ -577,7 +639,17 @@ function renderPendingAttachments(): void {
 
 function buildSubmitMessage(message: string, attachments: ChatAttachment[]): string {
   const parts = message ? [message] : [];
-  void attachments;
+  if (attachments.length > 0) {
+    parts.push([
+      "Attached images:",
+      ...attachments.map((attachment, index) => [
+        `${index + 1}. ${attachment.name}`,
+        `   ![${attachment.name}](${attachment.url})`,
+        `   Local file: ${attachment.path}`,
+      ].join("\n")),
+      "Use the local file path to inspect the image when needed. Do not inline or decode base64.",
+    ].join("\n"));
+  }
   return parts.join("\n\n");
 }
 
@@ -708,7 +780,7 @@ function renderTurn(role: string, text: string, timestamp: string | undefined, l
   const bodyText = parsed.text.trim();
   const attachments = [
     ...parsed.attachments,
-    ...localAttachments.map((attachment) => ({ dataURL: attachment.dataURL, name: attachment.name })),
+    ...localAttachments.map((attachment) => ({ name: attachment.name, src: attachmentImageSrc(attachment.url) })),
   ];
   return el("div", { class: `log-msg log-msg-${className}` }, [
     el("div", { class: "log-msg-header" }, [
@@ -717,19 +789,23 @@ function renderTurn(role: string, text: string, timestamp: string | undefined, l
     ]),
     bodyText ? el("div", { class: "log-msg-body" }, [bodyText]) : null,
     attachments.length > 0 ? el("div", { class: "log-msg-attachments" }, attachments.map((attachment) => (
-      el("img", { alt: attachment.name, class: "log-msg-image", src: attachment.dataURL })
+      el("img", { alt: attachment.name, class: "log-msg-image", src: attachment.src })
     ))) : null,
   ]);
 }
 
-function extractInlineImageAttachments(text: string): { attachments: Array<{ dataURL: string; name: string }>; text: string } {
-  const attachments: Array<{ dataURL: string; name: string }> = [];
+function extractInlineImageAttachments(text: string): { attachments: RenderAttachment[]; text: string } {
+  const attachments: RenderAttachment[] = [];
   let cleaned = text.replace(/!\[([^\]]*)\]\((data:image\/[^;)]+;base64,[A-Za-z0-9+/=\s]+)\)/g, (_match, name: string, dataURL: string) => {
     const normalizedDataURL = dataURL.replace(/\s+/g, "");
     if (normalizedDataURL.length > SESSION_SUBMIT_SAFE_BYTES) {
       return `[inline image data omitted: ${name || "image"}]`;
     }
-    attachments.push({ dataURL: normalizedDataURL, name: name || "image" });
+    attachments.push({ name: name || "image", src: normalizedDataURL });
+    return "";
+  });
+  cleaned = cleaned.replace(/!\[([^\]]*)\]\((\/v0\/city\/[^)\s]+\/session\/[^)\s]+\/attachments\/[^)\s]+)\)/g, (_match, name: string, attachmentURL: string) => {
+    attachments.push({ name: name || "image", src: attachmentImageSrc(attachmentURL) });
     return "";
   });
   cleaned = collapseLooseDataImagePayloads(cleaned);
