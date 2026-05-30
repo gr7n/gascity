@@ -158,12 +158,16 @@ func NewSupervisorMux(resolver CityResolver, initializer cityInitializer, readOn
 	// the header at runtime; the spec describes the contract. Must run
 	// after all routes are registered.
 	registerFrameworkHeaders(sm.humaAPI)
-	// /svc/* workspace-service pass-through. This is the single remaining
-	// non-Huma registration on the supervisor — untyped by design (the
-	// proxy passes bodies through to external service processes, which
-	// own their own HTTP contracts). Go 1.22+ mux: "/v0/city/{cityName}/svc/"
-	// as a prefix pattern only matches that subtree; everything else is
-	// a typed Huma operation registered at its real scoped path.
+	// Session attachment upload/download and /svc/* workspace-service
+	// pass-through are raw routes on the supervisor mux. Attachments need
+	// multipart streaming with a larger body cap than JSON mutations; assets
+	// serve workdir-scoped image bytes; workspace services own their own HTTP
+	// contracts. Go 1.22+ mux specificity routes typed Huma operations to
+	// their exact scoped paths.
+	humaMux.HandleFunc("POST /v0/city/{cityName}/session/{id}/attachments", sm.serveCitySessionAttachmentUpload)
+	humaMux.HandleFunc("DELETE /v0/city/{cityName}/session/{id}/attachments/{attachmentID}", sm.serveCitySessionAttachmentDelete)
+	humaMux.HandleFunc("GET /v0/city/{cityName}/session/{id}/attachments/{attachmentID}/{filename...}", sm.serveCitySessionAttachment)
+	humaMux.HandleFunc("GET /v0/city/{cityName}/session/{id}/asset", sm.serveCitySessionAsset)
 	humaMux.HandleFunc("/v0/city/{cityName}/svc/", sm.serveCitySvcProxy)
 	sm.server = &http.Server{Handler: sm.Handler()}
 	return sm

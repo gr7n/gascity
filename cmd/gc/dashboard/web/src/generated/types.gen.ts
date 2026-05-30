@@ -1946,10 +1946,48 @@ export type OutboundResult = {
     TranscriptEntry: ConversationTranscriptRecord;
 };
 
+export type OutputAsset = {
+    kind: string;
+    name?: string;
+    path?: string;
+    source?: string;
+    url?: string;
+};
+
+export type OutputPart = {
+    action?: string;
+    id?: string;
+    input?: unknown;
+    is_error?: boolean;
+    kind?: string;
+    mime?: string;
+    name?: string;
+    options?: Array<string> | null;
+    output?: unknown;
+    path?: string;
+    prompt?: string;
+    request_id?: string;
+    source?: string;
+    state?: string;
+    text?: string;
+    tool?: string;
+    tool_use_id?: string;
+    type: string;
+    url?: string;
+};
+
+export type OutputTrace = {
+    kind: string;
+    text?: string;
+};
+
 export type OutputTurn = {
+    assets?: Array<OutputAsset> | null;
+    parts?: Array<OutputPart> | null;
     role: string;
     text: string;
     timestamp?: string;
+    trace?: Array<OutputTrace> | null;
 };
 
 export type PackListBody = {

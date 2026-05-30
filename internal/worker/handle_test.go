@@ -103,6 +103,17 @@ func TestSessionHandleStartStopState(t *testing.T) {
 	}
 }
 
+func TestSessionHandleHistoryProviderPrefersProviderKind(t *testing.T) {
+	handle := &SessionHandle{session: SessionSpec{Provider: "gr7n-router"}}
+	got := handle.historyProvider(sessionpkg.Info{
+		Provider:     "gr7n-router",
+		ProviderKind: "codex",
+	})
+	if got != "codex" {
+		t.Fatalf("historyProvider() = %q, want codex", got)
+	}
+}
+
 func TestSessionHandleStateBusyDoesNotPrimeHistoryCache(t *testing.T) {
 	searchBase := t.TempDir()
 	workDir := t.TempDir()

@@ -152,7 +152,7 @@ func (s *Server) streamSessionLog(
 		uuids := make([]string, 0, len(sess.Messages))
 		for _, e := range sess.Messages {
 			turn := entryToTurn(e)
-			if turn.Text == "" {
+			if !outputTurnHasContent(turn) {
 				continue
 			}
 			turns = append(turns, turn)
@@ -345,7 +345,7 @@ func (s *Server) streamSessionLogHuma(
 		uuids := make([]string, 0, len(sess.Messages))
 		for _, entry := range sess.Messages {
 			turn := entryToTurn(entry)
-			if turn.Text == "" {
+			if !outputTurnHasContent(turn) {
 				continue
 			}
 			turns = append(turns, turn)

@@ -4753,9 +4753,134 @@
         ],
         "type": "object"
       },
+      "OutputAsset": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "OutputPart": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input": {},
+          "is_error": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "output": {},
+          "path": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "tool_use_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "OutputTrace": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "OutputTurn": {
         "additionalProperties": false,
         "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/OutputAsset"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/OutputPart"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "role": {
             "type": "string"
           },
@@ -4764,6 +4889,15 @@
           },
           "timestamp": {
             "type": "string"
+          },
+          "trace": {
+            "items": {
+              "$ref": "#/components/schemas/OutputTrace"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [

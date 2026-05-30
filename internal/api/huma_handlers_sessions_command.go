@@ -585,6 +585,9 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 		if submitErr != nil {
 			s.emitSessionSubmitFailed(reqID, "submit_failed", submitErr.Error())
 		} else {
+			if err := s.markSubmittedSessionAttachmentsSent(id, message); err != nil {
+				log.Printf("dashboard attachment lifecycle: mark sent failed for session %q: %v", id, err)
+			}
 			s.emitSessionSubmitSucceeded(reqID, id, outcome.Queued, string(intent))
 		}
 	}()

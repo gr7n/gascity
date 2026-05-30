@@ -5315,6 +5315,63 @@ func TestHandleSessionTranscriptUsesSessionKey(t *testing.T) {
 	}
 }
 
+func TestHandleSessionTranscriptUsesProviderKindForCustomAlias(t *testing.T) {
+	fs := newSessionFakeState(t)
+	searchBase := t.TempDir()
+	base := "builtin:codex"
+	fs.cfg.Providers["gr7n-router"] = config.ProviderSpec{
+		Base:        &base,
+		DisplayName: "GR7N Router",
+		Command:     "echo",
+	}
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+	_ = h
+	srv.sessionLogSearchPaths = []string{searchBase}
+
+	mgr := session.NewManager(fs.cityBeadStore, fs.sp)
+	workDir := t.TempDir()
+	info, err := mgr.Create(context.Background(), "myrig/worker", "Router Chat", "gr7n-router", workDir, "gr7n-router", nil, session.ProviderResume{}, runtime.Config{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := fs.cityBeadStore.SetMetadata(info.ID, "provider_kind", "codex"); err != nil {
+		t.Fatalf("SetMetadata(provider_kind): %v", err)
+	}
+
+	codexDir := filepath.Join(searchBase, "2026", "05", "29")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll codex session dir: %v", err)
+	}
+	codexPayload := strings.Join([]string{
+		fmt.Sprintf(`{"timestamp":"2026-05-29T18:00:00Z","type":"session_meta","payload":{"cwd":%q}}`, workDir),
+		`{"timestamp":"2026-05-29T18:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"hello router"}]}}`,
+		`{"timestamp":"2026-05-29T18:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"hello from codex transcript"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(codexDir, "rollout-2026-05-29T18-00-00-test.jsonl"), []byte(codexPayload), 0o644); err != nil {
+		t.Fatalf("WriteFile codex session: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID+"/transcript?tail=0", nil)
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp SessionStreamMessageEvent
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Provider != "codex" {
+		t.Fatalf("Provider = %q, want codex; body: %s", resp.Provider, w.Body.String())
+	}
+	if len(resp.Turns) != 2 || resp.Turns[0].Text != "hello router" || resp.Turns[1].Text != "hello from codex transcript" {
+		t.Fatalf("Turns = %+v, want Codex turns from custom provider alias", resp.Turns)
+	}
+}
+
 func TestHandleSessionTranscriptClosedSession(t *testing.T) {
 	fs := newSessionFakeState(t)
 	searchBase := t.TempDir()
@@ -6853,7 +6910,7 @@ func TestHandleSessionStreamConversationFiltersNonDisplayEntries(t *testing.T) {
 	}
 }
 
-func TestHandleSessionStreamConversationRedactsThinkingText(t *testing.T) {
+func TestHandleSessionStreamConversationCarriesThinkingTrace(t *testing.T) {
 	fs := newSessionFakeState(t)
 	searchBase := t.TempDir()
 	srv := New(fs)
@@ -6886,8 +6943,8 @@ func TestHandleSessionStreamConversationRedactsThinkingText(t *testing.T) {
 	if !strings.Contains(body, "visible answer") {
 		t.Fatalf("conversation stream body missing visible assistant answer: %s", body)
 	}
-	if strings.Contains(body, "private chain of thought") {
-		t.Fatalf("conversation stream leaked thinking text: %s", body)
+	if !strings.Contains(body, `"trace"`) || !strings.Contains(body, "private chain of thought") {
+		t.Fatalf("conversation stream body missing thinking trace: %s", body)
 	}
 }
 

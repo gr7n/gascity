@@ -1977,11 +1977,52 @@ type OutboundResult struct {
 	TranscriptEntry ConversationTranscriptRecord `json:"TranscriptEntry"`
 }
 
+// OutputAsset defines model for OutputAsset.
+type OutputAsset struct {
+	Kind   string  `json:"kind"`
+	Name   *string `json:"name,omitempty"`
+	Path   *string `json:"path,omitempty"`
+	Source *string `json:"source,omitempty"`
+	Url    *string `json:"url,omitempty"`
+}
+
+// OutputPart defines model for OutputPart.
+type OutputPart struct {
+	Action    *string     `json:"action,omitempty"`
+	Id        *string     `json:"id,omitempty"`
+	Input     interface{} `json:"input,omitempty"`
+	IsError   *bool       `json:"is_error,omitempty"`
+	Kind      *string     `json:"kind,omitempty"`
+	Mime      *string     `json:"mime,omitempty"`
+	Name      *string     `json:"name,omitempty"`
+	Options   *[]string   `json:"options,omitempty"`
+	Output    interface{} `json:"output,omitempty"`
+	Path      *string     `json:"path,omitempty"`
+	Prompt    *string     `json:"prompt,omitempty"`
+	RequestId *string     `json:"request_id,omitempty"`
+	Source    *string     `json:"source,omitempty"`
+	State     *string     `json:"state,omitempty"`
+	Text      *string     `json:"text,omitempty"`
+	Tool      *string     `json:"tool,omitempty"`
+	ToolUseId *string     `json:"tool_use_id,omitempty"`
+	Type      string      `json:"type"`
+	Url       *string     `json:"url,omitempty"`
+}
+
+// OutputTrace defines model for OutputTrace.
+type OutputTrace struct {
+	Kind string  `json:"kind"`
+	Text *string `json:"text,omitempty"`
+}
+
 // OutputTurn defines model for OutputTurn.
 type OutputTurn struct {
-	Role      string  `json:"role"`
-	Text      string  `json:"text"`
-	Timestamp *string `json:"timestamp,omitempty"`
+	Assets    *[]OutputAsset `json:"assets,omitempty"`
+	Parts     *[]OutputPart  `json:"parts,omitempty"`
+	Role      string         `json:"role"`
+	Text      string         `json:"text"`
+	Timestamp *string        `json:"timestamp,omitempty"`
+	Trace     *[]OutputTrace `json:"trace,omitempty"`
 }
 
 // PackListBody defines model for PackListBody.

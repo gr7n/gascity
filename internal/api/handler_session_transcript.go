@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -112,10 +113,24 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		turns := make([]outputTurn, 0, len(sess.Messages))
 		for _, entry := range sess.Messages {
 			turn := entryToTurn(entry)
-			if turn.Text == "" {
+			if !outputTurnHasContent(turn) {
 				continue
 			}
-			turns = append(turns, turn)
+			turns = appendOutputTurnDistinct(turns, turn)
+		}
+		if len(turns) == 0 && before == "" && after == "" {
+			if peekTurns, ok, peekErr := s.peekSessionTranscriptTurns(r.Context(), info, handle); peekErr != nil {
+				writeError(w, http.StatusInternalServerError, "internal", peekErr.Error())
+				return
+			} else if ok {
+				writeJSON(w, http.StatusOK, sessionTranscriptResponse{
+					ID:       info.ID,
+					Template: info.Template,
+					Format:   "text",
+					Turns:    peekTurns,
+				})
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, sessionTranscriptResponse{
 			ID:         info.ID,
@@ -137,16 +152,12 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	output, peekErr := handle.Peek(r.Context(), 100)
-	if peekErr != nil && !errors.Is(peekErr, session.ErrSessionInactive) {
+	turns, ok, peekErr := s.peekSessionTranscriptTurns(r.Context(), info, handle)
+	if peekErr != nil {
 		writeError(w, http.StatusInternalServerError, "internal", peekErr.Error())
 		return
 	}
-	if peekErr == nil {
-		turns := []outputTurn{}
-		if output != "" {
-			turns = append(turns, outputTurn{Role: "output", Text: output})
-		}
+	if ok {
 		writeJSON(w, http.StatusOK, sessionTranscriptResponse{
 			ID:       info.ID,
 			Template: info.Template,
@@ -162,4 +173,29 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		Format:   "conversation",
 		Turns:    []outputTurn{},
 	})
+}
+
+func (s *Server) peekSessionTranscriptTurns(ctx context.Context, info session.Info, handle worker.Handle) ([]outputTurn, bool, error) {
+	output, err := handle.Peek(ctx, 100)
+	if err != nil {
+		if errors.Is(err, session.ErrSessionInactive) {
+			return nil, false, nil
+		}
+		if info.State == session.StateActive && s.sessionProviderIsRunning(info.SessionName) {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	turns := []outputTurn{}
+	if output != "" {
+		turns = append(turns, outputTurn{Role: "output", Text: output})
+	}
+	return turns, true, nil
+}
+
+func (s *Server) sessionProviderIsRunning(sessionName string) bool {
+	if s == nil || s.state == nil || s.state.SessionProvider() == nil {
+		return false
+	}
+	return s.state.SessionProvider().IsRunning(sessionName)
 }

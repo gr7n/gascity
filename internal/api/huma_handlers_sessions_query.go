@@ -136,7 +136,7 @@ func (s *Server) humaHandleSessionGet(_ context.Context, input *SessionGetInput)
 
 // humaHandleSessionCreate is the Huma-typed handler for POST /v0/sessions.
 
-func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTranscriptInput) (*IndexOutput[sessionTranscriptGetResponse], error) {
+func (s *Server) humaHandleSessionTranscript(ctx context.Context, input *SessionTranscriptInput) (*IndexOutput[sessionTranscriptGetResponse], error) {
 	store := s.state.CityBeadStore()
 	if store == nil {
 		return nil, huma.Error503ServiceUnavailable("no bead store configured")
@@ -153,10 +153,15 @@ func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTr
 		return nil, humaSessionManagerError(err)
 	}
 
-	path, err := mgr.TranscriptPath(id, s.sessionLogPaths())
+	handle, err := s.workerHandleForSession(store, id)
 	if err != nil {
 		return nil, humaSessionManagerError(err)
 	}
+	path, err := handle.TranscriptPath(ctx)
+	if err != nil && !errors.Is(err, worker.ErrHistoryUnavailable) {
+		return nil, humaSessionManagerError(err)
+	}
+	responseProvider := sessionTranscriptProvider(info)
 
 	wantRaw := input.Format == "raw"
 
@@ -174,58 +179,70 @@ func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTr
 		}
 
 		if wantRaw {
-			var rawSess *sessionlog.Session
-			switch {
-			case before != "":
-				rawSess, err = sessionlog.ReadProviderFileRawOlder(info.Provider, path, tail, before)
-			case after != "":
-				rawSess, err = sessionlog.ReadProviderFileRawNewer(info.Provider, path, tail, after)
-			default:
-				rawSess, err = sessionlog.ReadProviderFileRaw(info.Provider, path, tail)
-			}
+			transcript, err := handle.Transcript(ctx, worker.TranscriptRequest{
+				TailCompactions: tail,
+				BeforeEntryID:   before,
+				AfterEntryID:    after,
+				Raw:             true,
+			})
 			if err != nil {
 				return nil, huma.Error500InternalServerError("reading session log: " + err.Error())
 			}
+			responseProvider = sessionTranscriptResponseProvider(info, transcript)
 			return &IndexOutput[sessionTranscriptGetResponse]{
 				Index: s.latestIndex(),
 				Body: sessionTranscriptGetResponse{
 					ID:         info.ID,
 					Template:   info.Template,
-					Provider:   info.Provider,
+					Provider:   responseProvider,
 					Format:     "raw",
-					Messages:   wrapRawFrameBytes(rawSess.RawPayloadBytes()),
-					Pagination: rawSess.Pagination,
+					Messages:   wrapRawFrameBytes(transcript.RawMessages),
+					Pagination: transcript.Session.Pagination,
 				},
 			}, nil
 		}
 
-		var sess *sessionlog.Session
-		switch {
-		case before != "":
-			sess, err = sessionlog.ReadProviderFileOlder(info.Provider, path, tail, before)
-		case after != "":
-			sess, err = sessionlog.ReadProviderFileNewer(info.Provider, path, tail, after)
-		default:
-			sess, err = sessionlog.ReadProviderFile(info.Provider, path, tail)
-		}
+		transcript, err := handle.Transcript(ctx, worker.TranscriptRequest{
+			TailCompactions: tail,
+			BeforeEntryID:   before,
+			AfterEntryID:    after,
+		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError("reading session log: " + err.Error())
 		}
+		responseProvider = sessionTranscriptResponseProvider(info, transcript)
+		sess := transcript.Session
 
 		turns := make([]outputTurn, 0, len(sess.Messages))
 		for _, entry := range sess.Messages {
 			turn := entryToTurn(entry)
-			if turn.Text == "" {
+			if !outputTurnHasContent(turn) {
 				continue
 			}
-			turns = append(turns, turn)
+			turns = appendOutputTurnDistinct(turns, turn)
+		}
+		if len(turns) == 0 && before == "" && after == "" {
+			if peekTurns, ok, peekErr := s.peekSessionTranscriptTurns(ctx, info, handle); peekErr != nil {
+				return nil, huma.Error500InternalServerError(peekErr.Error())
+			} else if ok {
+				return &IndexOutput[sessionTranscriptGetResponse]{
+					Index: s.latestIndex(),
+					Body: sessionTranscriptGetResponse{
+						ID:       info.ID,
+						Template: info.Template,
+						Provider: responseProvider,
+						Format:   "text",
+						Turns:    peekTurns,
+					},
+				}, nil
+			}
 		}
 		return &IndexOutput[sessionTranscriptGetResponse]{
 			Index: s.latestIndex(),
 			Body: sessionTranscriptGetResponse{
 				ID:         info.ID,
 				Template:   info.Template,
-				Provider:   info.Provider,
+				Provider:   responseProvider,
 				Format:     "conversation",
 				Turns:      turns,
 				Pagination: sess.Pagination,
@@ -239,28 +256,24 @@ func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTr
 			Body: sessionTranscriptGetResponse{
 				ID:       info.ID,
 				Template: info.Template,
-				Provider: info.Provider,
+				Provider: responseProvider,
 				Format:   "raw",
 				Messages: []SessionRawMessageFrame{},
 			},
 		}, nil
 	}
 
-	if info.State == session.StateActive && s.state.SessionProvider().IsRunning(info.SessionName) {
-		output, peekErr := s.state.SessionProvider().Peek(info.SessionName, 100)
-		if peekErr != nil {
-			return nil, huma.Error500InternalServerError(peekErr.Error())
-		}
-		turns := []outputTurn{}
-		if output != "" {
-			turns = append(turns, outputTurn{Role: "output", Text: output})
-		}
+	turns, ok, peekErr := s.peekSessionTranscriptTurns(ctx, info, handle)
+	if peekErr != nil {
+		return nil, huma.Error500InternalServerError(peekErr.Error())
+	}
+	if ok {
 		return &IndexOutput[sessionTranscriptGetResponse]{
 			Index: s.latestIndex(),
 			Body: sessionTranscriptGetResponse{
 				ID:       info.ID,
 				Template: info.Template,
-				Provider: info.Provider,
+				Provider: responseProvider,
 				Format:   "text",
 				Turns:    turns,
 			},
@@ -272,7 +285,7 @@ func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTr
 		Body: sessionTranscriptGetResponse{
 			ID:       info.ID,
 			Template: info.Template,
-			Provider: info.Provider,
+			Provider: responseProvider,
 			Format:   "conversation",
 			Turns:    []outputTurn{},
 		},

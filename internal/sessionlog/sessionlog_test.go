@@ -1602,6 +1602,28 @@ func TestReadCodexFileCustomToolPayloadsPreserved(t *testing.T) {
 	assertRawMetadata(t, toolResultBlocks[0].Content, map[string]any{"output": "Success. Updated files."})
 }
 
+func TestReadCodexFileFunctionCallArgumentsPreserved(t *testing.T) {
+	path := writeJSONL(t,
+		`{"timestamp":"2026-05-03T00:08:00.000Z","type":"response_item","payload":{"type":"function_call","call_id":"call-exec","name":"exec_command","arguments":"{\"cmd\":\"gc prime\",\"yield_time_ms\":1000}"}}`,
+	)
+
+	sess, err := ReadCodexFile(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sess.Messages); got != 1 {
+		t.Fatalf("Messages = %d, want 1", got)
+	}
+	blocks := sess.Messages[0].ContentBlocks()
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(blocks))
+	}
+	if blocks[0].Type != "tool_use" || blocks[0].Name != "exec_command" {
+		t.Fatalf("tool use block = %#v, want exec_command tool_use", blocks[0])
+	}
+	assertRawMetadata(t, blocks[0].Input, map[string]any{"cmd": "gc prime", "yield_time_ms": float64(1000)})
+}
+
 func TestReadCodexFileFunctionCallFallsBackToID(t *testing.T) {
 	path := writeJSONL(t,
 		`{"timestamp":"2026-05-03T00:08:00.000Z","type":"response_item","payload":{"type":"function_call","id":"call-from-id","name":"Read"}}`,
@@ -1620,6 +1642,28 @@ func TestReadCodexFileFunctionCallFallsBackToID(t *testing.T) {
 	}
 	if blocks[0].ID != "call-from-id" {
 		t.Fatalf("tool_use id = %q, want id fallback", blocks[0].ID)
+	}
+}
+
+func TestReadCodexFilePrefersResponseItemReasoningOverEventReasoning(t *testing.T) {
+	path := writeJSONL(t,
+		`{"timestamp":"2026-05-03T00:08:00.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"checking mail timeout"}}`,
+		`{"timestamp":"2026-05-03T00:08:01.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"checking mail timeout"}]}}`,
+	)
+
+	sess, err := ReadCodexFile(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sess.Messages); got != 1 {
+		t.Fatalf("Messages = %d, want response_item reasoning only", got)
+	}
+	blocks := sess.Messages[0].ContentBlocks()
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(blocks))
+	}
+	if blocks[0].Type != "thinking" || strings.TrimSpace(blocks[0].Text) != "checking mail timeout" {
+		t.Fatalf("thinking block = %#v, want response_item reasoning text", blocks[0])
 	}
 }
 

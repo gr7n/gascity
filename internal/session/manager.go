@@ -79,6 +79,7 @@ type Info struct {
 	Alias         string
 	AgentName     string // persisted concrete identity for MCP materialization
 	Provider      string
+	ProviderKind  string // transcript/provider family for wrapped custom aliases
 	Transport     string
 	Command       string // resolved command stored at creation
 	WorkDir       string
@@ -1570,6 +1571,7 @@ func (m *Manager) infoFromBead(b beads.Bead) Info {
 		Alias:         b.Metadata["alias"],
 		AgentName:     b.Metadata["agent_name"],
 		Provider:      b.Metadata["provider"],
+		ProviderKind:  b.Metadata["provider_kind"],
 		Transport:     transport,
 		Command:       b.Metadata["command"],
 		WorkDir:       b.Metadata["work_dir"],

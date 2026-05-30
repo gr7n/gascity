@@ -489,6 +489,9 @@ func (h *SessionHandle) historyProvider(info sessionpkg.Info) string {
 	if h.session.Profile != "" {
 		return string(h.session.Profile)
 	}
+	if strings.TrimSpace(info.ProviderKind) != "" {
+		return info.ProviderKind
+	}
 	if strings.TrimSpace(info.Provider) != "" {
 		return info.Provider
 	}

@@ -302,6 +302,10 @@ func normalizeBlocks(entry *sessionlog.Entry) []HistoryBlock {
 		result := make([]HistoryBlock, 0, len(blocks))
 		for _, block := range blocks {
 			kind := normalizeBlockKind(block.Type)
+			blockText := block.Text
+			if kind == BlockKindThinking {
+				blockText = firstNonEmpty(block.Text, block.Thinking)
+			}
 			var interaction *HistoryInteraction
 			if kind == BlockKindInteraction {
 				interaction = normalizeInteractionBlock(block)
@@ -312,7 +316,7 @@ func normalizeBlocks(entry *sessionlog.Entry) []HistoryBlock {
 			}
 			result = append(result, HistoryBlock{
 				Kind:        kind,
-				Text:        block.Text,
+				Text:        blockText,
 				ToolUseID:   toolUseID,
 				Name:        block.Name,
 				Input:       cloneRaw(block.Input),

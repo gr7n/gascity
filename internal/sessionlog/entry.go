@@ -65,6 +65,7 @@ type ContentBlock struct {
 	Kind      string          `json:"kind,omitempty"`
 	State     string          `json:"state,omitempty"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
 	Prompt    string          `json:"prompt,omitempty"`
 	Options   []string        `json:"options,omitempty"`
 	Action    string          `json:"action,omitempty"`
@@ -93,8 +94,8 @@ func (e *Entry) ContentBlocks() []ContentBlock {
 	if len(e.Message) == 0 {
 		return nil
 	}
-	var mc MessageContent
-	if err := json.Unmarshal(e.Message, &mc); err != nil {
+	mc, ok := e.messageContent()
+	if !ok {
 		return nil
 	}
 	if len(mc.Content) == 0 {
@@ -114,8 +115,8 @@ func (e *Entry) TextContent() string {
 	if len(e.Message) == 0 {
 		return ""
 	}
-	var mc MessageContent
-	if err := json.Unmarshal(e.Message, &mc); err != nil {
+	mc, ok := e.messageContent()
+	if !ok {
 		return ""
 	}
 	var s string
@@ -123,4 +124,17 @@ func (e *Entry) TextContent() string {
 		return ""
 	}
 	return s
+}
+
+func (e *Entry) messageContent() (MessageContent, bool) {
+	raw := e.Message
+	var inner string
+	if err := json.Unmarshal(raw, &inner); err == nil {
+		raw = []byte(inner)
+	}
+	var mc MessageContent
+	if err := json.Unmarshal(raw, &mc); err != nil {
+		return MessageContent{}, false
+	}
+	return mc, true
 }
