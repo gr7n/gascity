@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -87,6 +88,67 @@ func TestStaticHandlerServesIndex(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `<meta name="supervisor-url"`) {
 		t.Errorf("fallback did not serve SPA index")
+	}
+}
+
+func TestProxiedHandlerServesRelativeIndexAndForwardsAPI(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		switch r.URL.Path {
+		case "/v0/cities":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"name":"mc-city"}]}`))
+		case "/health":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+
+	target, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatalf("parse API URL: %v", err)
+	}
+	h, err := NewProxiedHandler(target)
+	if err != nil {
+		t.Fatalf("NewProxiedHandler: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `<meta name="supervisor-url" content="">`) {
+		t.Fatalf("proxied index should keep supervisor URL relative; body:\n%s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v0/cities?limit=10", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v0/cities: %d %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v0/cities" || gotQuery != "limit=10" {
+		t.Fatalf("proxied request = %q?%q, want /v0/cities?limit=10", gotPath, gotQuery)
+	}
+	if !strings.Contains(rec.Body.String(), `"mc-city"`) {
+		t.Fatalf("proxied body missing API response: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "ok" {
+		t.Fatalf("GET /health: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardListenAddrUsesLoopback(t *testing.T) {
+	if got := dashboardListenAddr(8080); got != "127.0.0.1:8080" {
+		t.Fatalf("dashboardListenAddr() = %q, want 127.0.0.1:8080", got)
 	}
 }
 

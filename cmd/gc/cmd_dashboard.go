@@ -12,12 +12,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var dashboardServeHook = dashboard.Serve
+var (
+	dashboardServeHook        = dashboard.Serve
+	dashboardServeProxiedHook = dashboard.ServeProxied
+)
+
+type dashboardServeOptions struct {
+	proxyAPI bool
+}
 
 // newDashboardCmd creates the "gc dashboard" command group.
 func newDashboardCmd(stdout, stderr io.Writer) *cobra.Command {
 	var port int
 	var apiURL string
+	var proxyAPI bool
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Web dashboard for monitoring the supervisor and managed cities",
@@ -28,13 +36,13 @@ city tabs. From a city directory or with --city, city-specific panels and action
 forms are enabled for that city.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if runDashboardServe("gc dashboard", port, apiURL, stderr) != nil {
+			if runDashboardServeWithOptions("gc dashboard", port, apiURL, stderr, dashboardServeOptions{proxyAPI: proxyAPI}) != nil {
 				return errExit
 			}
 			return nil
 		},
 	}
-	bindDashboardServeFlags(cmd, &port, &apiURL)
+	bindDashboardServeFlags(cmd, &port, &apiURL, &proxyAPI)
 	cmd.AddCommand(newDashboardServeCmd(stdout, stderr))
 	return cmd
 }
@@ -43,6 +51,7 @@ forms are enabled for that city.`,
 func newDashboardServeCmd(_, stderr io.Writer) *cobra.Command {
 	var port int
 	var apiURL string
+	var proxyAPI bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the web dashboard",
@@ -53,22 +62,27 @@ city tabs. From a city directory or with --city, city-specific panels and action
 forms are enabled for that city.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if runDashboardServe("gc dashboard serve", port, apiURL, stderr) != nil {
+			if runDashboardServeWithOptions("gc dashboard serve", port, apiURL, stderr, dashboardServeOptions{proxyAPI: proxyAPI}) != nil {
 				return errExit
 			}
 			return nil
 		},
 	}
-	bindDashboardServeFlags(cmd, &port, &apiURL)
+	bindDashboardServeFlags(cmd, &port, &apiURL, &proxyAPI)
 	return cmd
 }
 
-func bindDashboardServeFlags(cmd *cobra.Command, port *int, apiURL *string) {
+func bindDashboardServeFlags(cmd *cobra.Command, port *int, apiURL *string, proxyAPI *bool) {
 	cmd.Flags().IntVar(port, "port", 8080, "HTTP port")
 	cmd.Flags().StringVar(apiURL, "api", "", "GC API server URL override (auto-discovered by default)")
+	cmd.Flags().BoolVar(proxyAPI, "proxy-api", false, "proxy supervisor API through the dashboard origin")
 }
 
 func runDashboardServe(commandName string, port int, apiURLOverride string, stderr io.Writer) error {
+	return runDashboardServeWithOptions(commandName, port, apiURLOverride, stderr, dashboardServeOptions{})
+}
+
+func runDashboardServeWithOptions(commandName string, port int, apiURLOverride string, stderr io.Writer, opts dashboardServeOptions) error {
 	cityPath, cfg, err := resolveDashboardContext(stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
@@ -81,7 +95,11 @@ func runDashboardServe(commandName string, port int, apiURLOverride string, stde
 		return err
 	}
 
-	if err := dashboardServeHook(port, apiURL); err != nil {
+	serve := dashboardServeHook
+	if opts.proxyAPI {
+		serve = dashboardServeProxiedHook
+	}
+	if err := serve(port, apiURL); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
 		return err
 	}

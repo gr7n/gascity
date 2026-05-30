@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -46,12 +48,24 @@ type clientLogEntry struct {
 	URL     string          `json:"url"`
 }
 
-// NewStaticHandler returns a handler that serves the SPA bundle.
-// `supervisorURL` is injected into index.html so the SPA knows where
-// to reach the supervisor (cross-origin: the dashboard server binds
-// its own port, the supervisor binds another, the browser talks to
-// both).
+// NewStaticHandler returns a handler that serves the SPA bundle. `supervisorURL`
+// is injected into index.html so the SPA knows where to reach the supervisor
+// directly. Serve uses NewProxiedHandler instead; this direct mode remains for
+// tests and standalone embedders that intentionally serve a cross-origin API.
 func NewStaticHandler(supervisorURL string) (http.Handler, error) {
+	return newHandler(supervisorURL, nil)
+}
+
+// NewProxiedHandler returns a same-origin dashboard handler. The browser uses
+// relative API URLs, while this handler forwards API requests to supervisorURL.
+func NewProxiedHandler(supervisorURL *url.URL) (http.Handler, error) {
+	if supervisorURL == nil || supervisorURL.Scheme == "" || supervisorURL.Host == "" {
+		return nil, fmt.Errorf("dashboard: supervisor URL is required")
+	}
+	return newHandler("", newSupervisorProxy(supervisorURL))
+}
+
+func newHandler(supervisorURL string, apiProxy http.Handler) (http.Handler, error) {
 	sub, err := fs.Sub(spaBundle, "web/dist")
 	if err != nil {
 		return nil, fmt.Errorf("dashboard: embed sub fs: %w", err)
@@ -60,19 +74,23 @@ func NewStaticHandler(supervisorURL string) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dashboard: read embedded index.html: %w", err)
 	}
-	indexWithURL := injectSupervisorURL(indexBytes, supervisorURL)
+	indexWithAssets := injectAssetVersion(indexBytes, time.Now().UTC().Format("20060102T150405Z"))
+	indexWithURL := injectSupervisorURL(indexWithAssets, supervisorURL)
 
 	fileServer := http.FileServer(http.FS(sub))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__client-log", handleClientLog)
+	if apiProxy != nil {
+		mux.Handle("/v0/", apiProxy)
+		mux.Handle("/health", apiProxy)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		// Reserved non-SPA prefixes: return 404 instead of handing out
-		// index.html. The dashboard server proxies nothing — these
-		// prefixes would only be hit by stale scripts or probes from
-		// the pre-migration era. Silently serving index.html to them
-		// makes old callers look healthy while they're actually broken.
+		// index.html. If a prefix is intentionally mounted (for example,
+		// the same-origin /v0 proxy), the mux routes it before this SPA
+		// fallback. Otherwise stale scripts or probes should break visibly.
 		for _, p := range reservedNonSPAPrefixes {
 			if strings.HasPrefix(r.URL.Path, p) {
 				http.NotFound(w, r)
@@ -97,6 +115,21 @@ func NewStaticHandler(supervisorURL string) (http.Handler, error) {
 	})
 
 	return mux, nil
+}
+
+func newSupervisorProxy(target *url.URL) http.Handler {
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.FlushInterval = -1
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		log.Printf("dashboard: supervisor proxy failed: %v", err)
+		http.Error(w, "supervisor proxy failed", http.StatusBadGateway)
+	}
+	return proxy
 }
 
 func handleClientLog(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +213,25 @@ func injectSupervisorURL(index []byte, supervisorURL string) []byte {
 		}
 	}
 	return index
+}
+
+func injectAssetVersion(index []byte, version string) []byte {
+	if strings.TrimSpace(version) == "" {
+		return index
+	}
+	version = htmlEscape(version)
+	replacements := []struct {
+		from string
+		to   string
+	}{
+		{`href="/dashboard.css"`, `href="/dashboard.css?v=` + version + `"`},
+		{`src="/dashboard.js"`, `src="/dashboard.js?v=` + version + `"`},
+	}
+	out := index
+	for _, replacement := range replacements {
+		out = bytes.ReplaceAll(out, []byte(replacement.from), []byte(replacement.to))
+	}
+	return out
 }
 
 // htmlEscape performs the minimal escape the supervisor URL
