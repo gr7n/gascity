@@ -20,6 +20,19 @@ func (s *rowsErrorStore) List(_ beads.ListQuery) ([]beads.Bead, error) {
 	return s.rows, s.err
 }
 
+type tierRowsStore struct {
+	*beads.MemStore
+	rows map[beads.TierMode][]beads.Bead
+}
+
+func (s *tierRowsStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	rows := append([]beads.Bead(nil), s.rows[query.TierMode]...)
+	if query.Limit > 0 && len(rows) > query.Limit {
+		rows = rows[:query.Limit]
+	}
+	return rows, nil
+}
+
 func TestLastRunFuncForStoreReturnsLatestRun(t *testing.T) {
 	store := beads.NewMemStore()
 
@@ -89,6 +102,40 @@ func TestLastRunFuncForStoreUsesRowsFromPartialTierError(t *testing.T) {
 	}
 }
 
+func TestLastRunFuncForStoreReadsNewestAcrossLimitedTiers(t *testing.T) {
+	oldRun := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	newRun := time.Date(2026, 6, 4, 14, 0, 0, 0, time.UTC)
+	store := &tierRowsStore{
+		MemStore: beads.NewMemStore(),
+		rows: map[beads.TierMode][]beads.Bead{
+			beads.TierBoth: {{
+				ID:        "durable-old",
+				CreatedAt: oldRun,
+				Labels:    []string{"order-run:digest"},
+			}},
+			beads.TierIssues: {{
+				ID:        "durable-old",
+				CreatedAt: oldRun,
+				Labels:    []string{"order-run:digest"},
+			}},
+			beads.TierWisps: {{
+				ID:        "wisp-new",
+				CreatedAt: newRun,
+				Labels:    []string{"order-run:digest"},
+				Ephemeral: true,
+			}},
+		},
+	}
+
+	got, err := LastRunFuncForStore(store)("digest")
+	if err != nil {
+		t.Fatalf("LastRunFuncForStore(): %v", err)
+	}
+	if !got.Equal(newRun) {
+		t.Fatalf("LastRunFuncForStore() = %s, want fresh wisp-tier run %s", got, newRun)
+	}
+}
+
 func TestCursorFuncForStoreUsesRowsAndLogsPartialTierError(t *testing.T) {
 	oldLogf := runtimeHelpersLogf
 	var logs []string
@@ -113,5 +160,30 @@ func TestCursorFuncForStoreUsesRowsAndLogsPartialTierError(t *testing.T) {
 	}
 	if len(logs) == 0 || !strings.Contains(logs[0], "partially failed") {
 		t.Fatalf("logs = %#v, want partial failure log", logs)
+	}
+}
+
+func TestCursorFuncForStoreReadsNewestAcrossLimitedTiers(t *testing.T) {
+	store := &tierRowsStore{
+		MemStore: beads.NewMemStore(),
+		rows: map[beads.TierMode][]beads.Bead{
+			beads.TierBoth: {{
+				ID:     "durable-old",
+				Labels: []string{"order-run:digest", "seq:7"},
+			}},
+			beads.TierIssues: {{
+				ID:     "durable-old",
+				Labels: []string{"order-run:digest", "seq:7"},
+			}},
+			beads.TierWisps: {{
+				ID:        "wisp-new",
+				Labels:    []string{"order-run:digest", "seq:42"},
+				Ephemeral: true,
+			}},
+		},
+	}
+
+	if got := CursorFuncForStore(store)("digest"); got != 42 {
+		t.Fatalf("CursorFuncForStore() = %d, want fresh wisp-tier seq 42", got)
 	}
 }
