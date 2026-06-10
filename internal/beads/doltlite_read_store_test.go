@@ -561,6 +561,45 @@ func TestDoltliteReadStoreReadsOrderRunHotPaths(t *testing.T) {
 	}
 }
 
+func TestDoltliteReadStoreListLabelPrefix(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+
+	all, err := store.List(ListQuery{LabelPrefix: "order-run:", IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("List(LabelPrefix include closed): %v", err)
+	}
+	if len(all) != 2 || !hasTestBead(all, "gc-order-closed") || !hasTestBead(all, "gc-order-open") {
+		t.Fatalf("List(LabelPrefix include closed) = %#v, want gc-order-closed and gc-order-open", all)
+	}
+
+	open2, err := store.List(ListQuery{LabelPrefix: "order-run:"})
+	if err != nil {
+		t.Fatalf("List(LabelPrefix): %v", err)
+	}
+	if len(open2) != 1 || open2[0].ID != "gc-order-open" {
+		t.Fatalf("List(LabelPrefix) = %#v, want only gc-order-open", open2)
+	}
+}
+
+func TestLabelPrefixUpperBound(t *testing.T) {
+	cases := []struct {
+		prefix string
+		want   string
+	}{
+		{prefix: "order-run:", want: "order-run;"},
+		{prefix: "a", want: "b"},
+		{prefix: "a\xff", want: "b"},
+		{prefix: "\xff\xff", want: ""},
+		{prefix: "", want: ""},
+	}
+	for _, tc := range cases {
+		if got := labelPrefixUpperBound(tc.prefix); got != tc.want {
+			t.Errorf("labelPrefixUpperBound(%q) = %q, want %q", tc.prefix, got, tc.want)
+		}
+	}
+}
+
 func TestDoltliteReadStoreListsQueuedNudgeBeads(t *testing.T) {
 	store, closeStore := newTestDoltliteReadStore(t)
 	defer closeStore()
