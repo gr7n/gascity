@@ -543,6 +543,36 @@ func TestDoltliteReadStoreReadsOrderRunHotPaths(t *testing.T) {
 	if last.IsZero() {
 		t.Fatal("LastOrderRun returned zero time")
 	}
+	rows, err := store.List(ListQuery{
+		Label:         "order-run:rig/sweep",
+		IncludeClosed: true,
+		TierMode:      TierBoth,
+		Sort:          SortCreatedDesc,
+	})
+	if err != nil {
+		t.Fatalf("List order-run:rig/sweep: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("List order-run:rig/sweep returned no rows")
+	}
+	if !last.Equal(rows[0].CreatedAt.Truncate(time.Second)) {
+		t.Fatalf("LastOrderRun = %s, want newest order-run row %s", last, rows[0].CreatedAt)
+	}
+	allRuns, err := store.LastOrderRuns()
+	if err != nil {
+		t.Fatalf("LastOrderRuns: %v", err)
+	}
+	if !allRuns["rig/sweep"].Equal(last) {
+		t.Fatalf("LastOrderRuns[rig/sweep] = %s, want %s", allRuns["rig/sweep"], last)
+	}
+	allRuns["rig/sweep"] = time.Time{}
+	allRunsAgain, err := store.LastOrderRuns()
+	if err != nil {
+		t.Fatalf("LastOrderRuns again: %v", err)
+	}
+	if allRunsAgain["rig/sweep"].IsZero() {
+		t.Fatal("LastOrderRuns returned mutable cache map")
+	}
 
 	open, err := store.HasOpenOrderRun("rig/sweep")
 	if err != nil {
@@ -1050,6 +1080,15 @@ func newTestDoltliteReadStore(t *testing.T) (*DoltliteReadStore, func()) {
 		CreatedAt: now.Add(4 * time.Second),
 		Assignee:  "rig/wisp-worker",
 		Labels:    []string{"tier-test"},
+		Metadata:  map[string]string{"kind": "wisp"},
+	})
+	insertTestDoltliteIssue(t, db, "wisps", "wisp_labels", "wisp_dependencies", testDoltliteIssue{
+		ID:        "gc-order-wisp-closed",
+		Title:     "order:rig/sweep wisp",
+		Status:    "closed",
+		IssueType: "task",
+		CreatedAt: now.Add(5 * time.Second),
+		Labels:    []string{"order-run:rig/sweep"},
 		Metadata:  map[string]string{"kind": "wisp"},
 	})
 

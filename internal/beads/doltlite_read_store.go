@@ -348,33 +348,73 @@ func (s *DoltliteReadStore) LastOrderRun(name string) (time.Time, error) {
 	return s.orderRunLastRun[name], nil
 }
 
-func (s *DoltliteReadStore) loadOrderRuns() (map[string]time.Time, map[string]bool, error) {
-	rows, err := s.db.Query(`SELECT l.label, MAX(i.created_at), MAX(CASE WHEN i.status != 'closed' THEN 1 ELSE 0 END)
-		FROM labels l
-		JOIN issues i ON i.id = l.issue_id
-		WHERE l.label >= 'order-run:' AND l.label < 'order-run;'
-		GROUP BY l.label`)
+// LastOrderRuns returns the latest created_at timestamp for every order-run
+// label in the DoltLite read snapshot.
+func (s *DoltliteReadStore) LastOrderRuns() (map[string]time.Time, error) {
+	hash, err := s.currentDoltHash()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	defer rows.Close()
+	s.orderRunMu.Lock()
+	defer s.orderRunMu.Unlock()
+	if s.orderRunLastRun == nil || hash == "" || hash != s.orderRunHash {
+		lastRun, openRuns, err := s.loadOrderRuns()
+		if err != nil {
+			return nil, err
+		}
+		s.orderRunLastRun = lastRun
+		s.orderRunOpen = openRuns
+		s.orderRunHash = hash
+	}
+	out := make(map[string]time.Time, len(s.orderRunLastRun))
+	for name, last := range s.orderRunLastRun {
+		out[name] = last
+	}
+	return out, nil
+}
+
+func (s *DoltliteReadStore) loadOrderRuns() (map[string]time.Time, map[string]bool, error) {
 	lastRun := make(map[string]time.Time)
 	openRuns := make(map[string]bool)
-	for rows.Next() {
-		var label string
-		var createdRaw any
-		var open int
-		if err := rows.Scan(&label, &createdRaw, &open); err != nil {
+	for _, tables := range doltliteTableSetsForMode(TierBoth) {
+		if tables.ephemeral && !s.tableExists(tables.issues) {
+			continue
+		}
+		rows, err := s.db.Query(`SELECT l.label, MAX(i.created_at), MAX(CASE WHEN i.status != 'closed' THEN 1 ELSE 0 END)
+			FROM ` + tables.labels + ` l
+			JOIN ` + tables.issues + ` i ON i.id = l.issue_id
+			WHERE l.label >= 'order-run:' AND l.label < 'order-run;'
+			GROUP BY l.label`)
+		if err != nil {
 			return nil, nil, err
 		}
-		name := strings.TrimPrefix(label, "order-run:")
-		if name != "" {
-			lastRun[name] = parseDBTime(createdRaw).Truncate(time.Second)
-			openRuns[name] = open > 0
+		for rows.Next() {
+			var label string
+			var createdRaw any
+			var open int
+			if err := rows.Scan(&label, &createdRaw, &open); err != nil {
+				rows.Close() //nolint:errcheck // returning scan error
+				return nil, nil, err
+			}
+			name := strings.TrimPrefix(label, "order-run:")
+			if name == "" {
+				continue
+			}
+			created := parseDBTime(createdRaw).Truncate(time.Second)
+			if created.After(lastRun[name]) {
+				lastRun[name] = created
+			}
+			if open > 0 {
+				openRuns[name] = true
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		if err := rows.Err(); err != nil {
+			rows.Close() //nolint:errcheck // returning row error
+			return nil, nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, nil, err
+		}
 	}
 	return lastRun, openRuns, nil
 }
