@@ -1620,19 +1620,31 @@ var staleResumeKeyProbe = func(provider, workDir, sessionKey string) (present, p
 
 // sessionTranscriptProvider resolves the provider-family identifier consumed by
 // the transcript discovery layer, preferring the resolved provider's builtin
-// ancestor and falling back to its start command and then the session's
-// recorded provider metadata.
+// ancestor, then the session's recorded family metadata (builtin_ancestor /
+// provider_kind, the same preference order as ProviderFamilyFromMetadata),
+// then the start command's base name, and finally the session's raw provider
+// metadata.
+//
+// The recorded family metadata must be consulted before the command base-name
+// guess: for a wrapper provider the first command token is the wrapper binary
+// (e.g. "aimux"), which the transcript layer cannot map to a family. Letting
+// it mask a recorded family would make the stale-resume probe report the
+// session as un-probeable, so stale resume keys would never be cleared
+// pre-flight and every wake would re-fire the same broken resume command.
 func sessionTranscriptProvider(rp *config.ResolvedProvider, metadata map[string]string) string {
 	if rp != nil {
 		if v := strings.TrimSpace(rp.BuiltinAncestor); v != "" {
 			return v
 		}
-		if base := providerCommandBaseName(rp); base != "" {
-			return base
-		}
+	}
+	if v := strings.TrimSpace(metadata["builtin_ancestor"]); v != "" {
+		return v
 	}
 	if v := strings.TrimSpace(metadata["provider_kind"]); v != "" {
 		return v
+	}
+	if base := providerCommandBaseName(rp); base != "" {
+		return base
 	}
 	return strings.TrimSpace(metadata["provider"])
 }
