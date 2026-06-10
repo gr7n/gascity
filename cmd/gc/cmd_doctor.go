@@ -175,12 +175,18 @@ func doctorOrderFiringCurrentLastRunFunc(cityPath string, cfg *config.City, stde
 		stderr = io.Discard
 	}
 	resolveStores := cachedOrderHistoryStoresResolver(cityPath, cfg, stderr)
+	// One bounded tracking-history window per store serves every order's
+	// last-run lookup for this doctor run. The previous per-order
+	// LastRunAcrossStores issued one bd list plus one bd query per
+	// cooldown/cron order, serially — the doctor-side sibling of the
+	// dispatcher reload storm (gascity#3201).
+	lastRuns := orders.NewLastRunBatch(orderTrackingHistoryIndexLimit)
 	return func(order orders.Order) (time.Time, error) {
 		stores, err := resolveStores(order)
 		if err != nil {
 			return time.Time{}, err
 		}
-		return orders.LastRunAcrossStores(unwrapOrdersStores(stores)...)(order.ScopedName())
+		return lastRuns.AcrossStores(unwrapOrdersStores(stores)...)(order.ScopedName())
 	}
 }
 
