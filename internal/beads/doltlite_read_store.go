@@ -906,6 +906,11 @@ func (s *DoltliteReadStore) queryIssueTable(query ListQuery, tables doltliteTabl
 		where = append(where, "EXISTS (SELECT 1 FROM "+tables.labels+" l WHERE l.issue_id = i.id AND l.label = ?)")
 		args = append(args, query.Label)
 	}
+	if query.LabelPrefix != "" {
+		prefixWhere, prefixArgs := doltliteLabelPrefixPredicate(tables, query.LabelPrefix)
+		where = append(where, prefixWhere)
+		args = append(args, prefixArgs...)
+	}
 	if len(query.Metadata) > 0 {
 		metadataWhere, metadataArgs := doltliteMetadataFilterPredicates(query.Metadata)
 		where = append(where, metadataWhere...)
@@ -971,6 +976,31 @@ func (s *DoltliteReadStore) queryIssueTable(query ListQuery, tables doltliteTabl
 		}
 	}
 	return beads, nil
+}
+
+// doltliteLabelPrefixPredicate matches rows carrying at least one label in
+// the half-open range [prefix, upperBound) — the index-friendly form of a
+// label prefix match, same trick as loadOrderRuns' order-run scan.
+func doltliteLabelPrefixPredicate(tables doltliteTableSet, prefix string) (string, []any) {
+	upper := labelPrefixUpperBound(prefix)
+	if upper == "" {
+		return "EXISTS (SELECT 1 FROM " + tables.labels + " l WHERE l.issue_id = i.id AND l.label >= ?)", []any{prefix}
+	}
+	return "EXISTS (SELECT 1 FROM " + tables.labels + " l WHERE l.issue_id = i.id AND l.label >= ? AND l.label < ?)", []any{prefix, upper}
+}
+
+// labelPrefixUpperBound returns the smallest string that sorts after every
+// string with the given prefix, or "" when no finite bound exists (a prefix
+// of all 0xFF bytes).
+func labelPrefixUpperBound(prefix string) string {
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < 0xFF {
+			b[i]++
+			return string(b[:i+1])
+		}
+	}
+	return ""
 }
 
 func doltliteSQLiteTime(t time.Time) string {
