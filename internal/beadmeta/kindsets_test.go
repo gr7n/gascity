@@ -11,7 +11,8 @@ import (
 // updated together.
 func TestControlKindsExact(t *testing.T) {
 	want := []string{
-		KindRetry, KindRalph, KindCheck, KindRetryEval, KindFanout,
+		KindRetry, KindRalph, KindCheck, KindRetryEval,
+		KindReviewQuorumPlan, KindReviewQuorumFinalize, KindFanout,
 		KindDrain, KindScopeCheck, KindWorkflowFinalize,
 	}
 	if !slices.Equal(ControlKinds, want) {

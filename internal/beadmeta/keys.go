@@ -132,6 +132,7 @@ const (
 	OutcomeMetadataKey                   = "gc.outcome"
 	OutputJSONMetadataKey                = "gc.output_json"
 	OutputJSONRequiredMetadataKey        = "gc.output_json_required"
+	OutputJSONSchemaMetadataKey          = "gc.output_json_schema"
 	ParentBeadIDMetadataKey              = "gc.parent_bead_id"
 	ParentConvoyIDMetadataKey            = "gc.parent_convoy_id"
 	PartialFragmentMetadataKey           = "gc.partial_fragment"
@@ -140,10 +141,20 @@ const (
 	PackRootMetadataKey                  = "gc.pack_root"
 	PackWorkspaceMetadataKey             = "gc.pack_workspace"
 	PerDispatchModelMetadataKey          = "gc.per_dispatch_model"
+	PhaseHistoryMetadataKey              = "gc.phase_history"
+	PhaseMetadataKey                     = "gc.phase"
+	PRURLMetadataKey                     = "gc.pr_url"
+	ProviderMetadataKey                  = "gc.provider"
 	RalphStepIDMetadataKey               = "gc.ralph_step_id"
 	ReasoningMetadataKey                 = "gc.reasoning"
 	RequiredArtifactMetadataKey          = "gc.required_artifact"
 	RequiredArtifactsMetadataKey         = "gc.required_artifacts"
+	ReviewQuorumBaseRefMetadataKey       = "gc.review_quorum_base_ref"
+	ReviewQuorumLaneMetadataKey          = "gc.review_quorum_lane"
+	ReviewQuorumLanesJSONMetadataKey     = "gc.review_quorum_lanes_json"
+	ReviewQuorumLanesSourceMetadataKey   = "gc.review_quorum_lanes_source"
+	ReviewQuorumSubjectMetadataKey       = "gc.review_quorum_subject"
+	ReviewQuorumVerdictMetadataKey       = "gc.review_quorum_verdict"
 	RetryCountMetadataKey                = "gc.retry_count"
 	RetryFromMetadataKey                 = "gc.retry_from"
 	RetrySessionRecycledMetadataKey      = "gc.retry_session_recycled"
@@ -342,6 +353,7 @@ var KnownMetadataKeys = []string{
 	OutcomeMetadataKey,
 	OutputJSONMetadataKey,
 	OutputJSONRequiredMetadataKey,
+	OutputJSONSchemaMetadataKey,
 	ParentBeadIDMetadataKey,
 	ParentConvoyIDMetadataKey,
 	PartialFragmentMetadataKey,
@@ -350,10 +362,20 @@ var KnownMetadataKeys = []string{
 	PackRootMetadataKey,
 	PackWorkspaceMetadataKey,
 	PerDispatchModelMetadataKey,
+	PhaseHistoryMetadataKey,
+	PhaseMetadataKey,
+	PRURLMetadataKey,
+	ProviderMetadataKey,
 	RalphStepIDMetadataKey,
 	ReasoningMetadataKey,
 	RequiredArtifactMetadataKey,
 	RequiredArtifactsMetadataKey,
+	ReviewQuorumBaseRefMetadataKey,
+	ReviewQuorumLaneMetadataKey,
+	ReviewQuorumLanesJSONMetadataKey,
+	ReviewQuorumLanesSourceMetadataKey,
+	ReviewQuorumSubjectMetadataKey,
+	ReviewQuorumVerdictMetadataKey,
 	RetryCountMetadataKey,
 	RetryFromMetadataKey,
 	RetrySessionRecycledMetadataKey,

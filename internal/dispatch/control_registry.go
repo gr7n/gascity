@@ -11,14 +11,16 @@ import (
 type controlHandler func(beads.Store, beads.Bead, ProcessOptions) (ControlResult, error)
 
 var controlHandlers = map[string]controlHandler{
-	controlkind.Retry:            processRetryControl,
-	controlkind.Ralph:            processRalphControl,
-	controlkind.Check:            processRalphCheck,
-	controlkind.RetryEval:        processRetryEval,
-	controlkind.Fanout:           processFanout,
-	controlkind.Drain:            processDrain,
-	controlkind.ScopeCheck:       processScopeCheck,
-	controlkind.WorkflowFinalize: processWorkflowFinalize,
+	controlkind.Retry:                processRetryControl,
+	controlkind.Ralph:                processRalphControl,
+	controlkind.Check:                processRalphCheck,
+	controlkind.RetryEval:            processRetryEval,
+	controlkind.ReviewQuorumFinalize: processReviewQuorumFinalize,
+	controlkind.ReviewQuorumPlan:     processReviewQuorumPlan,
+	controlkind.Fanout:               processFanout,
+	controlkind.Drain:                processDrain,
+	controlkind.ScopeCheck:           processScopeCheck,
+	controlkind.WorkflowFinalize:     processWorkflowFinalize,
 }
 
 func controlHandlerFor(kind string) (controlHandler, bool) {

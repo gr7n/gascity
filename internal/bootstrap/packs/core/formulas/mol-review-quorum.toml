@@ -3,12 +3,10 @@ Gas City-owned review quorum formula scaffold.
 
 This graph-first workflow fans out two read-only reviewer lanes whose lane IDs,
 providers, models, and dispatch targets are supplied by formula variables, then
-routes a configured synthesis agent to synthesize their durable structured
-outputs. Lifecycle owners decide when to invoke it, and future dx-review
-compatibility can consume the durable output without owning the workflow. The
-internal reviewquorum Go package defines the generic durable contract and
-finalizer, but this formula's synthesis step is currently agent-executed rather
-than directly wired to that Go finalizer.
+finalizes their durable structured outputs with the code-owned
+internal/reviewquorum finalizer. Lifecycle owners decide when to invoke it, and
+future dx-review compatibility can consume the durable output without owning the
+workflow.
 """
 formula = "mol-review-quorum"
 
@@ -53,8 +51,8 @@ description = "Configured Gas City agent target for reviewer lane two"
 required = true
 
 [vars.synthesis_target]
-description = "Configured Gas City agent target for the quorum synthesis step"
-required = true
+description = "Deprecated; synthesis is code-owned by gc.kind=review-quorum-finalize"
+default = ""
 
 [[steps]]
 id = "review-lane-one"
@@ -153,37 +151,10 @@ id = "synthesize-review-quorum"
 title = "Synthesize review quorum"
 needs = ["review-lane-one", "review-lane-two"]
 description = """
-Read the durable outputs from reviewer lanes `{{lane_one_id}}` and
-`{{lane_two_id}}` for convoy `{{convoy_id}}`, including any soft-failed retry controls,
-then write the quorum summary as durable structured output.
-
-The synthesis output must preserve lane provenance and include:
-
-- `subject`: `{{convoy_id}}`
-- `base_ref`: `{{base_ref}}`
-- `lanes`: reviewer lane summaries, verdicts, findings counts, failure classes,
-  failure reasons, read-only enforcement, and mutation deltas
-- `verdict`: combined quorum verdict
-- `summary`: combined summary
-- `findings_count`: total deduplicated actionable findings
-- `findings`: deduplicated findings with lane evidence
-- `evidence`: lane outputs and any synthesis-only checks
-- `usage`: aggregate usage if available
-- `read_only_enforcement`: synthesis baseline/after delta and lane deltas
-- `mutations_delta`: synthesis-created delta only; empty if none
-- `failure_class`: `none`, `transient`, or `hard`
-- `failure_reason`: stable reason string or empty. Go finalizer failures use
-  `lane=<lane_id> reason=<stable_reason>` entries joined by `; ` when a lane
-  is responsible. Unknown lane verdict values are hard contract failures.
-
-Propagate this JSON through `gc.output_json` when available, or store it in the
-bead notes/metadata exactly enough for future `dx-review summarize` ingestion.
-Do not treat `dx-review` as the lifecycle owner; it is only a future
-compatibility consumer for this formula scaffold's durable state. The
-`internal/reviewquorum.Finalize` Go finalizer is not invoked by this step yet.
+Wait for reviewer lanes `{{lane_one_id}}` and `{{lane_two_id}}` for
+`{{subject}}`, read their durable `review-quorum.lane.v1` outputs, convert any
+soft-failed transient retry lane without JSON into a blocked lane, and write the
+canonical `review-quorum.summary.v1` output for baseline `{{base_ref}}` with
+`internal/reviewquorum.Finalize`.
 """
-metadata = { "gc.run_target" = "{{synthesis_target}}", "gc.review_quorum_role" = "synthesis", "gc.output_json_schema" = "review-quorum.summary.v1", "gc.output_json_required" = "true" }
-
-[steps.retry]
-max_attempts = 3
-on_exhausted = "hard_fail"
+metadata = { "gc.kind" = "review-quorum-finalize", "gc.review_quorum_role" = "synthesis", "gc.review_quorum_subject" = "{{subject}}", "gc.review_quorum_base_ref" = "{{base_ref}}", "gc.output_json_schema" = "review-quorum.summary.v1", "gc.output_json_required" = "true" }
