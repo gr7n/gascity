@@ -61,7 +61,7 @@ type graphStepTarget struct {
 // dispatcher kind (routed to the control dispatcher agent).
 func IsControlDispatcherKind(kind string) bool {
 	switch kind {
-	case "check", "drain", "fanout", "retry-eval", "scope-check", "workflow-finalize", "retry", "ralph":
+	case "check", "drain", "fanout", "retry-eval", "review-quorum-plan", "review-quorum-finalize", "scope-check", "workflow-finalize", "retry", "ralph":
 		return true
 	default:
 		return false

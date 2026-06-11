@@ -23,6 +23,20 @@ func TestControlKindClassificationsPreserveExistingDistinctions(t *testing.T) {
 			t.Fatalf("%s should not be latest-attempt candidate exempt", kind)
 		}
 	}
+	for _, kind := range []string{ReviewQuorumPlan, ReviewQuorumFinalize} {
+		if !IsControlDispatcher(kind) {
+			t.Fatalf("%s should route to control dispatcher", kind)
+		}
+		if !IsAttemptControlKind(kind) {
+			t.Fatalf("%s should use attempt-control routing", kind)
+		}
+		if !IsScopeCheckExempt(kind) {
+			t.Fatalf("%s should be scope-check exempt", kind)
+		}
+		if !IsLatestAttemptCandidateExempt(kind) {
+			t.Fatalf("%s should not be treated as a latest-attempt candidate", kind)
+		}
+	}
 	if !IsWorkflowTopology(Workflow) || !IsWorkflowTopology(Scope) || !IsWorkflowTopology(Spec) {
 		t.Fatal("workflow, scope, and spec should be workflow topology kinds")
 	}
