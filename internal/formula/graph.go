@@ -39,8 +39,15 @@ func applyGraphControls(f *Formula, includeWorkflowFinalize bool) {
 			beadmeta.KindMetadataKey:       "fanout",
 			beadmeta.ControlForMetadataKey: step.ID,
 			beadmeta.ForEachMetadataKey:    step.OnComplete.ForEach,
-			beadmeta.BondMetadataKey:       step.OnComplete.Bond,
 			beadmeta.FanoutModeMetadataKey: "parallel",
+		}
+		if step.OnComplete.Bond != "" {
+			controlMetadata[beadmeta.BondMetadataKey] = step.OnComplete.Bond
+		}
+		if len(step.OnComplete.Template) > 0 {
+			if data, err := json.Marshal(step.OnComplete.Template); err == nil {
+				controlMetadata[beadmeta.FanoutTemplateMetadataKey] = string(data)
+			}
 		}
 		if step.OnComplete.Sequential {
 			controlMetadata[beadmeta.FanoutModeMetadataKey] = "sequential"
