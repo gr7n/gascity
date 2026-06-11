@@ -159,6 +159,81 @@ func CompileExpansionFragment(_ context.Context, name string, searchPaths []stri
 	return fragment, nil
 }
 
+// CompileInlineExpansionFragment compiles an inline expansion template into a
+// rootless graph fragment. It mirrors CompileExpansionFragment without loading a
+// named formula from the formula search path.
+func CompileInlineExpansionFragment(_ context.Context, name string, searchPaths []string, template []*Step, target *Step, vars map[string]string) (*FragmentRecipe, error) {
+	if len(template) == 0 {
+		return nil, fmt.Errorf("inline expansion %q has no template steps", name)
+	}
+	parser := NewParser(searchPaths...).SetSource(SourceFromEnv())
+	resolved := &Formula{
+		Formula:  name,
+		Contract: "graph.v2",
+		Type:     TypeExpansion,
+		Template: cloneStepsRecursive(template),
+	}
+
+	if err := MaterializeExpansionForTarget(resolved, target, vars); err != nil {
+		return nil, err
+	}
+	filteredSteps, err := FilterStepsByCondition(resolved.Steps, vars)
+	if err != nil {
+		return nil, fmt.Errorf("filtering conditioned steps in inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = filteredSteps
+	if err := resolved.Validate(); err != nil {
+		return nil, fmt.Errorf("validating inline expansion %q: %w", name, err)
+	}
+
+	controlFlowSteps, err := ApplyControlFlowWithVars(resolved.Steps, resolved.Compose, vars)
+	if err != nil {
+		return nil, fmt.Errorf("applying control flow to inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = controlFlowSteps
+
+	inlineExpandedSteps, err := ApplyInlineExpansionsWithVars(resolved.Steps, parser, vars)
+	if err != nil {
+		return nil, fmt.Errorf("applying inline expansions to inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = inlineExpandedSteps
+
+	filteredSteps, err = FilterStepsByCondition(resolved.Steps, vars)
+	if err != nil {
+		return nil, fmt.Errorf("filtering conditioned steps in inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = filteredSteps
+
+	retrySteps, err := ApplyRetries(resolved.Steps)
+	if err != nil {
+		return nil, fmt.Errorf("applying retry transforms to inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = retrySteps
+
+	ralphSteps, err := ApplyRalph(resolved.Steps)
+	if err != nil {
+		return nil, fmt.Errorf("applying ralph transforms to inline expansion %q: %w", name, err)
+	}
+	resolved.Steps = ralphSteps
+
+	graphWorkflow, err := isGraphWorkflow(resolved, IsFormulaV2Enabled())
+	if err != nil {
+		return nil, err
+	}
+	if graphWorkflow {
+		ApplyFragmentGraphControls(resolved)
+	}
+
+	recipe, err := toRecipeWithGraph(resolved, graphWorkflow)
+	if err != nil {
+		return nil, fmt.Errorf("flattening inline expansion %q: %w", name, err)
+	}
+	fragment := stripFragmentRecipe(recipe)
+	fragment.Entries = fragmentEntryStepIDs(fragment)
+	fragment.Sinks = fragmentSinkStepIDs(fragment)
+	return fragment, nil
+}
+
 func stripFragmentRecipe(recipe *Recipe) *FragmentRecipe {
 	if recipe == nil {
 		return &FragmentRecipe{}
