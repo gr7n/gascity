@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -176,6 +177,125 @@ path = "/srv/frontend"
 		t.Fatalf("city.toml = %q, want restored original %q", restored, original)
 	}
 	if _, statErr := os.Stat(SiteBindingPath(dir)); !os.IsNotExist(statErr) {
+		t.Fatalf("site.toml stat err = %v, want not exist", statErr)
+	}
+}
+
+func TestAppendRigAndWriteSiteBindingsForEditPreservesCityTomlSymlink(t *testing.T) {
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	cityDir := filepath.Join(dir, "city")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cityDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repoCityPath := filepath.Join(repoDir, "city.toml")
+	liveCityPath := filepath.Join(cityDir, "city.toml")
+	original := []byte(`[workspace]
+name = "test-city"
+`)
+	if err := os.WriteFile(repoCityPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "repo", "city.toml"), liveCityPath); err != nil {
+		t.Fatal(err)
+	}
+
+	newRig := Rig{Name: "frontend", Path: "/srv/frontend"}
+	cfg := &City{
+		Workspace: Workspace{Name: "test-city"},
+		Rigs:      []Rig{newRig},
+	}
+	if err := AppendRigAndWriteSiteBindingsForEdit(fsys.OSFS{}, liveCityPath, cfg, newRig); err != nil {
+		t.Fatalf("AppendRigAndWriteSiteBindingsForEdit: %v", err)
+	}
+
+	info, err := os.Lstat(liveCityPath)
+	if err != nil {
+		t.Fatalf("Lstat(live city.toml): %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("live city.toml was replaced with a regular file")
+	}
+
+	rewritten, err := os.ReadFile(repoCityPath)
+	if err != nil {
+		t.Fatalf("ReadFile(repo city.toml): %v", err)
+	}
+	if !strings.Contains(string(rewritten), `name = "frontend"`) {
+		t.Fatalf("repo city.toml did not receive appended rig:\n%s", rewritten)
+	}
+	if strings.Contains(string(rewritten), `path = "/srv/frontend"`) {
+		t.Fatalf("repo city.toml should not contain machine-local rig path:\n%s", rewritten)
+	}
+
+	binding, err := LoadSiteBinding(fsys.OSFS{}, cityDir)
+	if err != nil {
+		t.Fatalf("LoadSiteBinding: %v", err)
+	}
+	if len(binding.Rigs) != 1 || binding.Rigs[0].Name != "frontend" || binding.Rigs[0].Path != "/srv/frontend" {
+		t.Fatalf("site binding rigs = %+v, want frontend=/srv/frontend", binding.Rigs)
+	}
+}
+
+// Regression for PR #3428 review: when city.toml is a symlink and the site
+// binding write fails after the append, the rollback must restore the resolved
+// target's original bytes and leave the live symlink intact (it must not
+// replace the link with a regular file).
+func TestAppendRigAndWriteSiteBindingsForEditRestoresSymlinkedCityWhenSiteBindingFails(t *testing.T) {
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	cityDir := filepath.Join(dir, "city")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cityDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repoCityPath := filepath.Join(repoDir, "city.toml")
+	liveCityPath := filepath.Join(cityDir, "city.toml")
+	original := []byte("[workspace]\nname = \"test-city\"\n")
+	if err := os.WriteFile(repoCityPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "repo", "city.toml"), liveCityPath); err != nil {
+		t.Fatal(err)
+	}
+
+	newRig := Rig{Name: "frontend", Path: "/srv/frontend"}
+	cfg := &City{
+		Workspace: Workspace{Name: "test-city"},
+		Rigs:      []Rig{newRig},
+	}
+	fs := &failSiteRenameFS{target: SiteBindingPath(cityDir)}
+
+	err := AppendRigAndWriteSiteBindingsForEdit(fs, liveCityPath, cfg, newRig)
+	if err == nil {
+		t.Fatal("AppendRigAndWriteSiteBindingsForEdit succeeded, want injected site binding failure")
+	}
+	if !strings.Contains(err.Error(), "restored city.toml") {
+		t.Fatalf("error = %v, want rollback guidance", err)
+	}
+
+	info, err := os.Lstat(liveCityPath)
+	if err != nil {
+		t.Fatalf("Lstat(live city.toml): %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("live city.toml was replaced with a regular file during rollback")
+	}
+	restored, readErr := os.ReadFile(repoCityPath)
+	if readErr != nil {
+		t.Fatalf("read repo city.toml: %v", readErr)
+	}
+	if !bytes.Equal(restored, original) {
+		t.Fatalf("repo city.toml = %q, want restored original %q", restored, original)
+	}
+	if _, statErr := os.Stat(SiteBindingPath(cityDir)); !os.IsNotExist(statErr) {
 		t.Fatalf("site.toml stat err = %v, want not exist", statErr)
 	}
 }
