@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
@@ -43,6 +44,26 @@ type partialListStore struct {
 
 func (s *partialListStore) List(_ beads.ListQuery) ([]beads.Bead, error) {
 	return s.rows, s.err
+}
+
+type trackingProvenanceUpdateFailStore struct {
+	beads.Store
+	rootID             string
+	provenanceFailures int
+}
+
+func (s *trackingProvenanceUpdateFailStore) Update(id string, opts beads.UpdateOpts) error {
+	if s.rootID == id && opts.Metadata[beadmeta.OrderTrackingBeadIDMetadataKey] != "" {
+		s.provenanceFailures++
+		return fmt.Errorf("forced tracking provenance update failure")
+	}
+	if err := s.Store.Update(id, opts); err != nil {
+		return err
+	}
+	if s.rootID == "" && opts.Metadata[beadmeta.OrderNameMetadataKey] != "" {
+		s.rootID = id
+	}
+	return nil
 }
 
 // --- gc order list ---
@@ -935,6 +956,65 @@ func TestOrderRun(t *testing.T) {
 	}
 	if got := results[0].Metadata["gc.routed_to"]; got != "dog" {
 		t.Fatalf("gc.routed_to = %q, want dog", got)
+	}
+	if got := results[0].Metadata[beadmeta.OrderNameMetadataKey]; got != "digest" {
+		t.Fatalf("gc.order_name = %q, want digest", got)
+	}
+	if got := results[0].Metadata[beadmeta.OrderScopedNameMetadataKey]; got != "digest" {
+		t.Fatalf("gc.order_scoped_name = %q, want digest", got)
+	}
+	tracking, err := store.ListByLabel(labelOrderTracking, 0, beads.IncludeClosed, beads.WithBothTiers)
+	if err != nil {
+		t.Fatalf("store.ListByLabel(%s): %v", labelOrderTracking, err)
+	}
+	if len(tracking) != 1 {
+		t.Fatalf("order-tracking beads = %d, want 1 (%#v)", len(tracking), tracking)
+	}
+	if got := results[0].Metadata[beadmeta.OrderTrackingBeadIDMetadataKey]; got != tracking[0].ID {
+		t.Fatalf("gc.order_tracking_bead_id = %q, want manual tracking bead %q", got, tracking[0].ID)
+	}
+}
+
+func TestOrderRunTrackingProvenanceUpdateFailureIsBestEffort(t *testing.T) {
+	aa := []orders.Order{
+		{Name: "digest", Formula: "mol-digest", Trigger: "cooldown", Interval: "24h", Pool: "dog", FormulaLayer: sharedTestFormulaDir},
+	}
+	backing := beads.NewMemStore()
+	failing := &trackingProvenanceUpdateFailStore{Store: backing}
+	store := beads.OrdersStore{Store: failing}
+
+	var stdout, stderr bytes.Buffer
+	code := doOrderRun(aa, "digest", "", "/city", store, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doOrderRun = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if failing.provenanceFailures != 1 {
+		t.Fatalf("tracking provenance update failures = %d, want 1", failing.provenanceFailures)
+	}
+	if !strings.Contains(stderr.String(), "recording tracking bead provenance") {
+		t.Fatalf("stderr = %q, want tracking provenance warning", stderr.String())
+	}
+
+	root, err := backing.Get(failing.rootID)
+	if err != nil {
+		t.Fatalf("get root %s: %v", failing.rootID, err)
+	}
+	if got := root.Metadata[beadmeta.OrderNameMetadataKey]; got != "digest" {
+		t.Fatalf("root gc.order_name = %q, want digest", got)
+	}
+	if got := root.Metadata[beadmeta.OrderTrackingBeadIDMetadataKey]; got != "" {
+		t.Fatalf("root gc.order_tracking_bead_id = %q, want empty after failed best-effort update", got)
+	}
+
+	tracking, err := backing.ListByLabel(labelOrderTracking, 0, beads.IncludeClosed, beads.WithBothTiers)
+	if err != nil {
+		t.Fatalf("store.ListByLabel(%s): %v", labelOrderTracking, err)
+	}
+	if len(tracking) != 1 {
+		t.Fatalf("order-tracking beads = %d, want 1 (%#v)", len(tracking), tracking)
+	}
+	if tracking[0].Status != "closed" {
+		t.Fatalf("tracking bead status = %q, want closed", tracking[0].Status)
 	}
 }
 
