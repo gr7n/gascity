@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/gastownhall/gascity/internal/runtime"
 )
@@ -51,6 +52,89 @@ func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	}
 	if port != "3308" {
 		t.Fatalf("port = %q, want 3308", port)
+	}
+}
+
+func TestParsePodProjectionEnv(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `[
+		{"name":"agent-tools","configMap":{"name":"agent-tools","defaultMode":365}}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", `[
+		{"name":"agent-tools","mountPath":"/opt/agent-tools","readOnly":true}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_ENV_JSON", `[
+		{"name":"PROVIDER_API_KEY","valueFrom":{"secretKeyRef":{"name":"provider-api-key","key":"PROVIDER_API_KEY"}}}
+	]`)
+
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		t.Fatalf("parsePodProjectionEnv() error = %v", err)
+	}
+
+	if got := projection.volumes[0].Name; got != "agent-tools" {
+		t.Fatalf("volume name = %q, want agent-tools", got)
+	}
+	if got := projection.volumes[0].ConfigMap.Name; got != "agent-tools" {
+		t.Fatalf("configmap name = %q, want agent-tools", got)
+	}
+	if got := *projection.volumes[0].ConfigMap.DefaultMode; got != 365 {
+		t.Fatalf("defaultMode = %d, want 365", got)
+	}
+	if got := projection.volumeMounts[0].MountPath; got != "/opt/agent-tools" {
+		t.Fatalf("mount path = %q, want /opt/agent-tools", got)
+	}
+	if got := projection.env[0].ValueFrom.SecretKeyRef.Name; got != "provider-api-key" {
+		t.Fatalf("secret name = %q, want provider-api-key", got)
+	}
+}
+
+func TestParsePodProjectionEnvRejectsInvalidJSON(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `not-json`)
+
+	if _, err := parsePodProjectionEnv(); err == nil || !strings.Contains(err.Error(), "GC_K8S_EXTRA_VOLUMES_JSON") {
+		t.Fatalf("parsePodProjectionEnv() error = %v, want GC_K8S_EXTRA_VOLUMES_JSON context", err)
+	}
+}
+
+func clearPodProjectionEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_EXTRA_VOLUMES_JSON",
+		"GC_K8S_EXTRA_VOLUME_MOUNTS_JSON",
+		"GC_K8S_EXTRA_ENV_JSON",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestTuneRESTClientRateLimits(t *testing.T) {
+	t.Setenv("GC_K8S_CLIENT_QPS", "")
+	t.Setenv("GC_K8S_CLIENT_BURST", "")
+
+	cfg, err := tuneRESTClientRateLimits(&rest.Config{})
+	if err != nil {
+		t.Fatalf("tuneRESTClientRateLimits() error = %v", err)
+	}
+	if cfg.QPS != 50 {
+		t.Fatalf("QPS = %v, want 50", cfg.QPS)
+	}
+	if cfg.Burst != 100 {
+		t.Fatalf("Burst = %d, want 100", cfg.Burst)
+	}
+
+	t.Setenv("GC_K8S_CLIENT_QPS", "75.5")
+	t.Setenv("GC_K8S_CLIENT_BURST", "150")
+	cfg, err = tuneRESTClientRateLimits(&rest.Config{})
+	if err != nil {
+		t.Fatalf("tuneRESTClientRateLimits() with env error = %v", err)
+	}
+	if cfg.QPS != 75.5 {
+		t.Fatalf("QPS = %v, want 75.5", cfg.QPS)
+	}
+	if cfg.Burst != 150 {
+		t.Fatalf("Burst = %d, want 150", cfg.Burst)
 	}
 }
 

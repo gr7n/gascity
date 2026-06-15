@@ -42,6 +42,23 @@ func freeLoopbackPort(t *testing.T) string {
 	return strconv.Itoa(addr.Port)
 }
 
+func TestIsReadOnlyFilesystemError(t *testing.T) {
+	wrapped := fmt.Errorf("writing hook on_create: writing temp file: %w", &os.PathError{
+		Op:   "open",
+		Path: "/repo/.beads/hooks/on_create.tmp",
+		Err:  syscall.EROFS,
+	})
+	if !isReadOnlyFilesystemError(wrapped) {
+		t.Fatalf("isReadOnlyFilesystemError(%v) = false, want true", wrapped)
+	}
+	if !isReadOnlyFilesystemError(errors.New("open /repo/.beads/hooks/on_create.tmp: read-only file system")) {
+		t.Fatal("isReadOnlyFilesystemError(read-only string) = false, want true")
+	}
+	if isReadOnlyFilesystemError(errors.New("permission denied")) {
+		t.Fatal("isReadOnlyFilesystemError(permission denied) = true, want false")
+	}
+}
+
 func setScopedBeadsProviderForTest(t *testing.T, scopeRoot, provider string) {
 	t.Helper()
 	t.Setenv("GC_BEADS", provider)
