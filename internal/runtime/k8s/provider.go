@@ -37,14 +37,17 @@ type Provider struct {
 	memRequest         string
 	cpuLimit           string
 	memLimit           string
-	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
-	prebaked           bool                // skip staging + init container for prebaked images
-	nodeSelector       map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
-	tolerations        []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
-	affinity           *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
-	priorityClassName  string              // GC_K8S_PRIORITY_CLASS_NAME
-	postStartSettle    time.Duration       // settle time before post-start liveness check
-	stderr             io.Writer           // warning output (default os.Stderr)
+	serviceAccount     string               // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	prebaked           bool                 // skip staging + init container for prebaked images
+	nodeSelector       map[string]string    // GC_K8S_NODE_SELECTOR (JSON)
+	tolerations        []corev1.Toleration  // GC_K8S_TOLERATIONS (JSON)
+	affinity           *corev1.Affinity     // GC_K8S_AFFINITY (JSON)
+	priorityClassName  string               // GC_K8S_PRIORITY_CLASS_NAME
+	extraVolumes       []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
+	extraVolumeMounts  []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
+	extraEnv           []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
+	postStartSettle    time.Duration        // settle time before post-start liveness check
+	stderr             io.Writer            // warning output (default os.Stderr)
 }
 
 type schedulingFields struct {
@@ -52,6 +55,12 @@ type schedulingFields struct {
 	tolerations       []corev1.Toleration
 	affinity          *corev1.Affinity
 	priorityClassName string
+}
+
+type podProjectionFields struct {
+	volumes      []corev1.Volume
+	volumeMounts []corev1.VolumeMount
+	env          []corev1.EnvVar
 }
 
 // NewProvider creates a K8s session provider.
@@ -62,6 +71,9 @@ type schedulingFields struct {
 //   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
+//   - GC_K8S_EXTRA_VOLUMES_JSON — extra corev1.Volume JSON array
+//   - GC_K8S_EXTRA_VOLUME_MOUNTS_JSON — extra corev1.VolumeMount JSON array
+//   - GC_K8S_EXTRA_ENV_JSON — extra corev1.EnvVar JSON array
 //
 // The in-cluster Dolt service alias defaults to the provider defaults
 // (dolt.gc.svc.cluster.local:3307). Pods receive projected GC_DOLT_* env;
@@ -95,6 +107,11 @@ func NewProvider() (*Provider, error) {
 		return nil, err
 	}
 
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Provider{
 		ops: &realK8sOps{
 			clientset:  clientset,
@@ -118,6 +135,9 @@ func NewProvider() (*Provider, error) {
 		tolerations:        scheduling.tolerations,
 		affinity:           scheduling.affinity,
 		priorityClassName:  scheduling.priorityClassName,
+		extraVolumes:       projection.volumes,
+		extraVolumeMounts:  projection.volumeMounts,
+		extraEnv:           projection.env,
 	}, nil
 }
 
@@ -140,6 +160,31 @@ func parseSchedulingEnv() (schedulingFields, error) {
 	}
 	scheduling.priorityClassName = os.Getenv("GC_K8S_PRIORITY_CLASS_NAME")
 	return scheduling, nil
+}
+
+func parsePodProjectionEnv() (podProjectionFields, error) {
+	var projection podProjectionFields
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUMES_JSON", &projection.volumes); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", &projection.volumeMounts); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_ENV_JSON", &projection.env); err != nil {
+		return podProjectionFields{}, err
+	}
+	return projection, nil
+}
+
+func parseJSONEnv(name string, target any) error {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), target); err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	return nil
 }
 
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).
@@ -841,7 +886,7 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	// Try in-cluster first.
 	cfg, err := rest.InClusterConfig()
 	if err == nil {
-		return cfg, nil
+		return tuneRESTClientRateLimits(cfg)
 	}
 	// Fall back to kubeconfig.
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -849,7 +894,49 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	if k8sContext != "" {
 		overrides.CurrentContext = k8sContext
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	return tuneRESTClientRateLimits(cfg)
+}
+
+func tuneRESTClientRateLimits(cfg *rest.Config) (*rest.Config, error) {
+	qps, err := positiveFloat32Env("GC_K8S_CLIENT_QPS", 50)
+	if err != nil {
+		return nil, err
+	}
+	burst, err := positiveIntEnv("GC_K8S_CLIENT_BURST", 100)
+	if err != nil {
+		return nil, err
+	}
+	cfg.QPS = qps
+	cfg.Burst = burst
+	return cfg, nil
+}
+
+func positiveFloat32Env(key string, def float32) (float32, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.ParseFloat(raw, 32)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive number", key)
+	}
+	return float32(value), nil
+}
+
+func positiveIntEnv(key string, def int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return value, nil
 }
 
 func managedServiceAlias() (string, string, error) {

@@ -282,6 +282,8 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 	}
+	mainVolMounts = append(mainVolMounts, p.extraVolumeMounts...)
+	volumes = append(volumes, p.extraVolumes...)
 
 	// Resources.
 	resources, err := buildResources(p)
@@ -312,7 +314,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 				WorkingDir:      podWorkDir,
 				Command:         []string{"/bin/sh", "-c"},
 				Args:            []string{tmuxCmd},
-				Env:             env,
+				Env:             appendOverrideEnvVars(env, p.extraEnv),
 				Stdin:           true,
 				TTY:             true,
 				Resources:       resources,
@@ -351,6 +353,27 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	}
 
 	return pod, nil
+}
+
+func appendOverrideEnvVars(base []corev1.EnvVar, overrides []corev1.EnvVar) []corev1.EnvVar {
+	if len(overrides) == 0 {
+		return base
+	}
+	overrideNames := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		if entry.Name != "" {
+			overrideNames[entry.Name] = struct{}{}
+		}
+	}
+	out := make([]corev1.EnvVar, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		if _, ok := overrideNames[entry.Name]; ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, overrides...)
+	return out
 }
 
 func cloneTolerations(in []corev1.Toleration) []corev1.Toleration {

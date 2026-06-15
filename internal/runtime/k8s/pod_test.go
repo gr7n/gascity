@@ -78,6 +78,80 @@ func TestBuildPod_PriorityClassName(t *testing.T) {
 	}
 }
 
+func TestBuildPod_ExtraProjectionFields(t *testing.T) {
+	mode := int32(365)
+	p := newProviderWithOps(newFakeK8sOps())
+	p.extraVolumes = []corev1.Volume{{
+		Name: "agent-tools",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-tools"},
+				DefaultMode:          &mode,
+			},
+		},
+	}}
+	p.extraVolumeMounts = []corev1.VolumeMount{{
+		Name:      "agent-tools",
+		MountPath: "/opt/agent-tools",
+		ReadOnly:  true,
+	}}
+	p.extraEnv = []corev1.EnvVar{{
+		Name: "PROVIDER_API_KEY",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "provider-api-key"},
+				Key:                  "PROVIDER_API_KEY",
+			},
+		},
+	}}
+
+	pod, err := buildPod("test-session", runtime.Config{
+		Command: "/bin/bash",
+		Env: map[string]string{
+			"PROVIDER_API_KEY": "literal-controller-copy",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	if pod.Spec.Volumes[len(pod.Spec.Volumes)-1].Name != "agent-tools" {
+		t.Fatalf("last volume = %q, want agent-tools", pod.Spec.Volumes[len(pod.Spec.Volumes)-1].Name)
+	}
+	container := pod.Spec.Containers[0]
+	foundMount := false
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == "agent-tools" {
+			foundMount = true
+			if mount.MountPath != "/opt/agent-tools" || !mount.ReadOnly {
+				t.Fatalf("tool mount = %#v, want read-only /opt/agent-tools", mount)
+			}
+		}
+	}
+	if !foundMount {
+		t.Fatal("missing agent-tools volume mount")
+	}
+
+	var providerEnv []corev1.EnvVar
+	for _, entry := range container.Env {
+		if entry.Name == "PROVIDER_API_KEY" {
+			providerEnv = append(providerEnv, entry)
+		}
+	}
+	if len(providerEnv) != 1 {
+		t.Fatalf("PROVIDER_API_KEY env count = %d, want 1", len(providerEnv))
+	}
+	if providerEnv[0].Value != "" {
+		t.Fatalf("PROVIDER_API_KEY literal value = %q, want empty", providerEnv[0].Value)
+	}
+	if providerEnv[0].ValueFrom == nil || providerEnv[0].ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("PROVIDER_API_KEY = %#v, want SecretKeyRef", providerEnv[0])
+	}
+	if providerEnv[0].ValueFrom.SecretKeyRef.Name != "provider-api-key" {
+		t.Fatalf("SecretKeyRef name = %q, want provider-api-key", providerEnv[0].ValueFrom.SecretKeyRef.Name)
+	}
+}
+
 func TestBuildPod_NoSchedulingFields_NoBehaviorChange(t *testing.T) {
 	// Zero-value scheduling fields must not alter default pod behavior.
 	p := newProviderWithOps(newFakeK8sOps())
