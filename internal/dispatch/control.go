@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/controlkind"
 	"github.com/gastownhall/gascity/internal/convergence"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -911,12 +912,10 @@ func attemptRecipeStepNeedsScopeCheck(step formula.RecipeStep) bool {
 	if step.Metadata[beadmeta.ScopeRoleMetadataKey] == "teardown" {
 		return false
 	}
-	switch step.Metadata[beadmeta.KindMetadataKey] {
-	case "scope", "scope-check", "workflow-finalize", "fanout", "check", "spec":
+	if controlkind.IsScopeCheckExempt(step.Metadata[beadmeta.KindMetadataKey]) {
 		return false
-	default:
-		return true
 	}
+	return true
 }
 
 func loadAttemptRouteConfig(cityPath string) *config.City {
@@ -1038,12 +1037,7 @@ func resolveAttemptControlAssignee(target string, cfg *config.City, store beads.
 }
 
 func isAttemptControlKind(kind string) bool {
-	switch kind {
-	case beadmeta.KindCheck, beadmeta.KindFanout, beadmeta.KindRetryEval, beadmeta.KindScopeCheck, beadmeta.KindWorkflowFinalize, beadmeta.KindRetry, beadmeta.KindRalph:
-		return true
-	default:
-		return false
-	}
+	return controlkind.IsAttemptControlKind(kind)
 }
 
 type attemptRouteBinding struct {
@@ -1374,13 +1368,11 @@ func latestAttemptFromCandidates(control beads.Bead, candidates []beads.Bead) be
 		// Skip beads that are control infrastructure, not actual work.
 		// For ralph controls, scope beads ARE the iterations — don't skip them.
 		kind := b.Metadata[beadmeta.KindMetadataKey]
-		switch kind {
-		case "scope-check", "workflow-finalize", "fanout", "check", "retry-eval", "retry", "ralph", "workflow":
+		if controlkind.IsLatestAttemptCandidateExempt(kind) {
 			continue
-		case "scope":
-			if controlKind != "ralph" {
-				continue
-			}
+		}
+		if kind == beadmeta.KindScope && controlKind != beadmeta.KindRalph {
+			continue
 		}
 
 		ref := b.Metadata[beadmeta.StepRefMetadataKey]
