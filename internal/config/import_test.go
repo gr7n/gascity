@@ -346,6 +346,63 @@ scope = "rig"
 	t.Fatalf("imported rig agent fixture/superpowers.code-reviewer not found: %+v", explicitAgents(cfg.Agents))
 }
 
+func TestImport_CityImportUnscopedControlDispatcherExpandsPerRig(t *testing.T) {
+	dir := t.TempDir()
+	cityDir := filepath.Join(dir, "city")
+	importDir := filepath.Join(dir, "core")
+	mustMkdirAll(t, cityDir, 0o755)
+	mustMkdirAll(t, importDir, 0o755)
+
+	writeTestFile(t, cityDir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.core]
+source = "../core"
+
+[[rigs]]
+name = "fixture"
+path = "/tmp/fixture"
+`)
+	writeTestFile(t, importDir, "pack.toml", `
+[pack]
+name = "core"
+schema = 2
+`)
+	writeTestFile(t, filepath.Join(importDir, "agents", "control-dispatcher"), "agent.toml", `
+start_command = "gc convoy control --serve --follow {{.Agent}}"
+prompt_mode = "none"
+process_names = ["gc"]
+max_active_sessions = 1
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityDir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+
+	found := map[string]Agent{}
+	for _, a := range explicitAgents(cfg.Agents) {
+		found[a.QualifiedName()] = a
+	}
+	if _, ok := found["core.control-dispatcher"]; !ok {
+		t.Fatalf("missing city control dispatcher; agents=%v", found)
+	}
+	rigAgent, ok := found["fixture/core.control-dispatcher"]
+	if !ok {
+		t.Fatalf("missing rig control dispatcher; agents=%v", found)
+	}
+	if rigAgent.BindingName != "core" {
+		t.Errorf("BindingName = %q, want core", rigAgent.BindingName)
+	}
+	if rigAgent.Dir != "fixture" {
+		t.Errorf("Dir = %q, want fixture", rigAgent.Dir)
+	}
+	if rigAgent.MaxActiveSessions == nil || *rigAgent.MaxActiveSessions != 1 {
+		t.Errorf("MaxActiveSessions = %v, want 1", rigAgent.MaxActiveSessions)
+	}
+}
+
 func TestImport_BindingNameStamped(t *testing.T) {
 	dir := t.TempDir()
 	cityDir := filepath.Join(dir, "city")

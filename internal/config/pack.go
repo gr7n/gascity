@@ -604,9 +604,9 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 
 		// Keep only city-scoped and unscoped agents for city expansion.
 		allRigAgentsFromCityImports = append(allRigAgentsFromCityImports,
-			expandCityImportedRigScopedAgents(agents, cfg.Rigs, "")...)
+			expandCityImportedAgentsForRigs(agents, cfg.Rigs, "")...)
 		allRigNamedSessionsFromCityImports = append(allRigNamedSessionsFromCityImports,
-			expandCityImportedRigScopedNamedSessions(namedSessions, cfg.Rigs, "")...)
+			expandCityImportedNamedSessionsForRigs(namedSessions, cfg.Rigs, "")...)
 		agents = filterAgentsByScope(agents, true)
 		namedSessions = filterNamedSessionsByScope(namedSessions, true)
 
@@ -774,9 +774,9 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 			}
 
 			allRigAgentsFromCityImports = append(allRigAgentsFromCityImports,
-				expandCityImportedRigScopedAgents(agents, cfg.Rigs, bindingName)...)
+				expandCityImportedAgentsForRigs(agents, cfg.Rigs, bindingName)...)
 			allRigNamedSessionsFromCityImports = append(allRigNamedSessionsFromCityImports,
-				expandCityImportedRigScopedNamedSessions(namedSessions, cfg.Rigs, bindingName)...)
+				expandCityImportedNamedSessionsForRigs(namedSessions, cfg.Rigs, bindingName)...)
 
 			allRequires = append(allRequires, reqs...)
 			allGlobals = append(allGlobals, globals...)
@@ -2422,7 +2422,7 @@ func filterNamedSessionsByScope(sessions []NamedSession, cityExpansion bool) []N
 	return result
 }
 
-func expandCityImportedRigScopedAgents(agents []Agent, rigs []Rig, bindingName string) []Agent {
+func expandCityImportedAgentsForRigs(agents []Agent, rigs []Rig, bindingName string) []Agent {
 	if len(agents) == 0 || len(rigs) == 0 {
 		return nil
 	}
@@ -2433,7 +2433,7 @@ func expandCityImportedRigScopedAgents(agents []Agent, rigs []Rig, bindingName s
 			continue
 		}
 		for _, a := range agents {
-			if a.Scope != "rig" {
+			if a.Scope == "city" {
 				continue
 			}
 			a.Dir = rigName
@@ -2443,7 +2443,7 @@ func expandCityImportedRigScopedAgents(agents []Agent, rigs []Rig, bindingName s
 	return expanded
 }
 
-func expandCityImportedRigScopedNamedSessions(sessions []NamedSession, rigs []Rig, bindingName string) []NamedSession {
+func expandCityImportedNamedSessionsForRigs(sessions []NamedSession, rigs []Rig, bindingName string) []NamedSession {
 	if len(sessions) == 0 || len(rigs) == 0 {
 		return nil
 	}
@@ -2454,7 +2454,7 @@ func expandCityImportedRigScopedNamedSessions(sessions []NamedSession, rigs []Ri
 			continue
 		}
 		for _, s := range sessions {
-			if s.Scope != "rig" {
+			if s.Scope == "city" {
 				continue
 			}
 			s.Dir = rigName

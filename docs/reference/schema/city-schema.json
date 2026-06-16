@@ -72,7 +72,7 @@
             "city",
             "rig"
           ],
-          "description": "Scope defines where this agent is instantiated: \"city\" (one per city)\nor \"rig\" (one per rig, the default). Only meaningful for pack-defined\nagents; inline agents in city.toml use Dir directly."
+          "description": "Scope defines where this agent is instantiated: \"city\" (one per city),\n\"rig\" (one per rig), or empty (unscoped: instantiate in both city and\nrig expansion contexts). Only meaningful for pack-defined agents; inline\nagents in city.toml use Dir directly."
         },
         "suspended": {
           "type": "boolean",
@@ -1782,7 +1782,7 @@
             "city",
             "rig"
           ],
-          "description": "Scope defines where this named session is instantiated in pack\nexpansion: \"city\" (one per city) or \"rig\" (one per rig)."
+          "description": "Scope defines where this named session is instantiated in pack\nexpansion: \"city\" (one per city), \"rig\" (one per rig), or empty\n(unscoped: instantiate in both city and rig expansion contexts)."
         },
         "dir": {
           "type": "string",
