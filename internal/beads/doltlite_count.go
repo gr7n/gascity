@@ -121,5 +121,10 @@ func doltliteCountWhere(query ListQuery, tables doltliteTableSet, excludeTypes [
 		where = append(where, "EXISTS (SELECT 1 FROM "+tables.labels+" l WHERE l.issue_id = i.id AND l.label = ?)")
 		args = append(args, query.Label)
 	}
+	if query.LabelPrefix != "" {
+		prefixWhere, prefixArgs := doltliteLabelPrefixPredicate(tables, query.LabelPrefix)
+		where = append(where, prefixWhere)
+		args = append(args, prefixArgs...)
+	}
 	return where, args
 }
