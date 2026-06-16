@@ -1,5 +1,5 @@
 ---
-title: "Using JSON from the Gas City CLI (`gc`)"
+title: "Use JSON from the gc CLI"
 description: Use `gc --json` and `gc --json-schema` from scripts, agents, tests, and other software.
 ---
 

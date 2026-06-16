@@ -1,5 +1,5 @@
 ---
-title: Gastown on Gas City — Config Recipes
+title: Configure the Gastown Pack
 description: Task-oriented config overrides for running the Gastown pack on Gas City — register rigs, scale pools, swap providers, patch agents, and tweak prompts.
 ---
 

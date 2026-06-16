@@ -10,10 +10,10 @@ alive.
 
 ## Diagnose
 
-- [gc start failure walkthrough](/troubleshooting/gc-start-walkthrough) — match a `gc start` failure symptom to its cause and resolution.
-- [Dolt bloat recovery](/troubleshooting/dolt-bloat-recovery) — recover a beads store whose Dolt noms directory has grown out of proportion.
-- [bd auto-backup cleanup](/troubleshooting/bd-backup-cleanup) — reclaim space when bd's `.beads/backup/` directory grows large enough to threaten disk pressure.
+- [Diagnose a Failed gc start](/troubleshooting/gc-start-walkthrough) — match a `gc start` failure symptom to its cause and resolution.
+- [Recover from Dolt Bloat](/troubleshooting/dolt-bloat-recovery) — recover a beads store whose Dolt noms directory has grown out of proportion.
+- [Clean Up bd Auto-Backups](/troubleshooting/bd-backup-cleanup) — reclaim space when bd's `.beads/backup/` directory grows large enough to threaten disk pressure.
 
 ## Operate
 
-- [Managed-city Dolt endpoints](/runbooks/managed-city-endpoints) — mental model, forbidden edits, sanctioned escape hatches, and recovery recipe for the city-level Dolt endpoint architecture.
+- [Operate Managed-City Dolt Endpoints](/runbooks/managed-city-endpoints) — mental model, forbidden edits, sanctioned escape hatches, and recovery recipe for the city-level Dolt endpoint architecture.

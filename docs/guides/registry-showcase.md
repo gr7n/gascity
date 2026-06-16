@@ -1,5 +1,5 @@
 ---
-title: "Public Registry Packs"
+title: "Find and Import Public Packs"
 description: Find and import first-party packs from the public Gas City registry.
 ---
 

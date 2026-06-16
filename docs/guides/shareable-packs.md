@@ -1,5 +1,5 @@
 ---
-title: "Shareable Packs"
+title: "Create and Share Packs"
 description: Create, import, and customize Gas City packs.
 ---
 

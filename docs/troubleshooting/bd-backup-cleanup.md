@@ -1,5 +1,5 @@
 ---
-title: bd Auto-Backup Cleanup
+title: Clean Up bd Auto-Backups
 description: Reclaim space when bd's `.beads/backup/` directory grows large enough to threaten disk pressure.
 ---
 

@@ -1,5 +1,5 @@
 ---
-title: Gas City Formula Specification — v1 (formula_compiler 1.0)
+title: Gas City Formula Specification — v1
 description: Authoritative specification for the formulas v1 contract.
 ---
 

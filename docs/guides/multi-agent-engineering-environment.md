@@ -1,5 +1,5 @@
 ---
-title: "Using Gas City as a Multi-Agent Engineering Environment"
+title: "Set Up a Multi-Agent Engineering Environment"
 description: How to take a multi-human, multi-agent workflow you are already running by hand and give it a better home in Gas City.
 ---
 
