@@ -161,7 +161,7 @@ func needsScopeCheck(step *Step) bool {
 		return false
 	}
 	switch step.Metadata[beadmeta.KindMetadataKey] {
-	case "scope", "scope-check", "workflow-finalize", "fanout", "tally", "check", "drain", "spec":
+	case "scope", "scope-check", "workflow-finalize", "fanout", "tally", "check", "drain", "review-quorum-plan", "review-quorum-finalize", "spec":
 		return false
 	default:
 		return true

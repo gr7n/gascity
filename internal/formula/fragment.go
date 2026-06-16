@@ -335,7 +335,7 @@ func recipeStepNeedsScopeCheck(step RecipeStep) bool {
 		return false
 	}
 	switch step.Metadata[beadmeta.KindMetadataKey] {
-	case "scope", "scope-check", "workflow-finalize", "fanout", "check", "spec":
+	case "scope", "scope-check", "workflow-finalize", "fanout", "check", "review-quorum-plan", "review-quorum-finalize", "spec":
 		return false
 	default:
 		return true
