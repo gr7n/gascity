@@ -712,7 +712,8 @@ func doOrderRunWithJSON(aa []orders.Order, name, rig, cityPath string, store bea
 	// Track the spawned root in the same store that created it so manual runs
 	// stay provider-aware and do not fall back to ambient bd CLI state.
 	update := beads.UpdateOpts{
-		Labels: []string{"order-run:" + scoped},
+		Labels:   []string{"order-run:" + scoped},
+		Metadata: orderRootProvenanceMetadata(a, ""),
 	}
 	if a.Trigger == "event" && ep != nil {
 		update.Labels = append(update.Labels,
@@ -721,7 +722,7 @@ func doOrderRunWithJSON(aa []orders.Order, name, rig, cityPath string, store bea
 		)
 	}
 	if a.Pool != "" {
-		update.Metadata = map[string]string{beadmeta.RoutedToMetadataKey: pool}
+		update.Metadata[beadmeta.RoutedToMetadataKey] = pool
 	}
 	if err := store.Update(rootID, update); err != nil {
 		fmt.Fprintf(stderr, "gc order run: labeling wisp: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -745,8 +746,13 @@ func doOrderRunWithJSON(aa []orders.Order, name, rig, cityPath string, store bea
 		NoHistory: true,
 	}); err != nil {
 		fmt.Fprintf(stderr, "gc order run: recording tracking bead: %v\n", err) //nolint:errcheck
-	} else if err := store.Close(tracking.ID); err != nil {
-		fmt.Fprintf(stderr, "gc order run: closing tracking bead: %v\n", err) //nolint:errcheck
+	} else {
+		if err := store.Update(rootID, beads.UpdateOpts{Metadata: map[string]string{beadmeta.OrderTrackingBeadIDMetadataKey: tracking.ID}}); err != nil {
+			fmt.Fprintf(stderr, "gc order run: recording tracking bead provenance: %v\n", err) //nolint:errcheck
+		}
+		if err := store.Close(tracking.ID); err != nil {
+			fmt.Fprintf(stderr, "gc order run: closing tracking bead: %v\n", err) //nolint:errcheck
+		}
 	}
 
 	if jsonOutput {

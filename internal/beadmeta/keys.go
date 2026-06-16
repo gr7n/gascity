@@ -114,6 +114,9 @@ const (
 	NextAttemptMetadataKey               = "gc.next_attempt"
 	OnExhaustedMetadataKey               = "gc.on_exhausted"
 	OnFailMetadataKey                    = "gc.on_fail"
+	OrderNameMetadataKey                 = "gc.order_name"
+	OrderScopedNameMetadataKey           = "gc.order_scoped_name"
+	OrderTrackingBeadIDMetadataKey       = "gc.order_tracking_bead_id"
 	OriginalKindMetadataKey              = "gc.original_kind"
 	OutcomeBeadIDMetadataKey             = "gc.outcome_bead_id"
 	OutcomeMetadataKey                   = "gc.outcome"
@@ -282,6 +285,9 @@ var KnownMetadataKeys = []string{
 	NextAttemptMetadataKey,
 	OnExhaustedMetadataKey,
 	OnFailMetadataKey,
+	OrderNameMetadataKey,
+	OrderScopedNameMetadataKey,
+	OrderTrackingBeadIDMetadataKey,
 	OriginalKindMetadataKey,
 	OutcomeBeadIDMetadataKey,
 	OutcomeMetadataKey,
