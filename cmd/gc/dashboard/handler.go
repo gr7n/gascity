@@ -26,7 +26,10 @@ import (
 //go:embed web/dist
 var spaBundle embed.FS
 
-const maxClientLogBody = 64 << 10
+const (
+	maxClientLogBody           = 64 << 10
+	staleDashboardGraphMessage = "stale dashboard graph request: reload the dashboard"
+)
 
 // reservedNonSPAPrefixes are URL prefixes the dashboard server never serves.
 // Requests matching one of these get a 404 instead of the SPA index.html
@@ -138,8 +141,22 @@ func newSupervisorProxy(target *url.URL, options ProxyOptions) http.Handler {
 			http.Error(w, "dashboard API proxy is read-only; restart with --proxy-api-mutate to forward state-changing requests", http.StatusForbidden)
 			return
 		}
+		if isStaleDashboardGraphRequest(r) {
+			http.Error(w, staleDashboardGraphMessage, http.StatusGone)
+			return
+		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+func isStaleDashboardGraphRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if !strings.HasPrefix(r.URL.Path, "/v0/city/") || !strings.Contains(r.URL.Path, "/beads/graph/") {
+		return false
+	}
+	return strings.TrimSpace(r.Header.Get("Referer")) != ""
 }
 
 func isMutationMethod(method string) bool {
