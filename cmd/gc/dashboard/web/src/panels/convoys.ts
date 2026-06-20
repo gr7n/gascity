@@ -1,4 +1,4 @@
-import { api, cityScope, mutationHeaders } from "../api";
+import { api, cityScope, mutationHeaders, type BeadRecord } from "../api";
 import { byId, clear, el } from "../util/dom";
 import { calculateActivity, statusBadgeClass } from "../util/legacy";
 import { popPause, pushPause, showToast } from "../ui";
@@ -36,9 +36,7 @@ export async function renderConvoys(): Promise<void> {
     return;
   }
 
-  const rows = await Promise.all(
-    listR.data.items.map(async (convoy) => buildConvoyRow(city, convoy.id ?? "")),
-  );
+  const rows = listR.data.items.map(buildConvoyListRow);
   const filtered = rows.filter((row): row is ConvoyRow => row !== null);
   byId("convoy-count")!.textContent = String(filtered.length);
 
@@ -62,10 +60,12 @@ export async function renderConvoys(): Promise<void> {
           : null,
       ]),
       el("td", { class: "convoy-progress-cell" }, [
-        el("div", { class: "convoy-progress-header" }, [
-          el("span", { class: "convoy-progress-fraction" }, [`${row.closed}/${row.total}`]),
-          row.total > 0 ? el("span", { class: "convoy-progress-pct" }, [`${row.progressPct}%`]) : null,
-        ]),
+        row.total > 0
+          ? el("div", { class: "convoy-progress-header" }, [
+              el("span", { class: "convoy-progress-fraction" }, [`${row.closed}/${row.total}`]),
+              el("span", { class: "convoy-progress-pct" }, [`${row.progressPct}%`]),
+            ])
+          : el("span", { class: "convoy-progress-fraction" }, ["-"]),
         row.total > 0
           ? el("div", { class: "progress-bar" }, [el("div", { class: "progress-fill", style: `width: ${row.progressPct}%;` })])
           : null,
@@ -75,6 +75,7 @@ export async function renderConvoys(): Promise<void> {
           row.ready > 0 ? el("span", { class: "work-chip work-ready" }, [`${row.ready} ready`]) : null,
           row.inProgress > 0 ? el("span", { class: "work-chip work-inprogress" }, [`${row.inProgress} active`]) : null,
           row.closed === row.total && row.total > 0 ? el("span", { class: "work-chip work-done" }, ["all done"]) : null,
+          row.total === 0 ? el("span", { class: "convoy-progress-age" }, ["-"]) : null,
         ]),
       ]),
       el("td", { class: `activity-${row.lastActivity.colorClass}` }, [
@@ -118,41 +119,19 @@ export function resetConvoysNoCity(): void {
   if (hadSubview) popPause();
 }
 
-async function buildConvoyRow(city: string, convoyID: string): Promise<ConvoyRow | null> {
-  if (!convoyID) return null;
-  const detail = await api.GET("/v0/city/{cityName}/convoy/{id}", {
-    params: { path: { cityName: city, id: convoyID } },
-  });
-  if (detail.error || !detail.data) return null;
-
-  const children = detail.data.children ?? [];
-  const assignees = new Set<string>();
-  let ready = 0;
-  let inProgress = 0;
-  let latest = "";
-  children.forEach((child) => {
-    if ((child.status ?? "").toLowerCase() !== "closed") {
-      if (child.assignee) {
-        inProgress += 1;
-        assignees.add(child.assignee);
-      } else {
-        ready += 1;
-      }
-    }
-    latest = [latest, child.created_at ?? ""].sort().slice(-1)[0] ?? latest;
-  });
-  const total = detail.data.progress?.total ?? children.length;
-  const closed = detail.data.progress?.closed ?? children.filter((child) => child.status === "closed").length;
+function buildConvoyListRow(convoy: BeadRecord): ConvoyRow | null {
+  if (!convoy.id) return null;
+  const latest = convoy.updated_at ?? convoy.created_at;
   return {
-    id: convoyID,
-    title: detail.data.convoy?.title ?? convoyID,
-    status: detail.data.convoy?.status,
-    progressPct: total > 0 ? Math.round((closed / total) * 100) : 0,
-    total,
-    closed,
-    ready,
-    inProgress,
-    assignees: [...assignees].sort(),
+    id: convoy.id,
+    title: convoy.title ?? convoy.id,
+    status: convoy.status,
+    progressPct: 0,
+    total: 0,
+    closed: 0,
+    ready: 0,
+    inProgress: 0,
+    assignees: convoy.assignee ? [convoy.assignee] : [],
     lastActivity: calculateActivity(latest),
   };
 }
