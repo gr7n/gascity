@@ -33,7 +33,8 @@ double-claim conflicts, rollback behavior, boundary conditions.
 run the fast unit loop only, with `GC_FAST_UNIT=1` gating slow `cmd/gc`
 process scenarios. Slow process-backed cases
 such as managed Dolt recovery, real `bd` lifecycle, tutorial regression
-scripts, and the large `gc-beads-bd` provider suite are routed out of the
+scripts, the `examples/bd/dolt` maintenance-script suite, and the large
+`gc-beads-bd` provider suite are routed out of the
 default path so local `make check` and CI `Check` stay focused on quick
 feedback. If you need that full `cmd/gc` scenario coverage locally, run
 `make test-cmd-gc-process`. In CI, the required non-short path is the
@@ -101,6 +102,10 @@ GC_FAST_UNIT=0 ./scripts/test-integration-shard packages-cmd-gc-3-of-6
 Raw `go test` is still appropriate for a focused package or a single failing
 test. Do not use it as the default for full local sweeps when a sharded target
 exists.
+
+The bd/Dolt example pack has its own heavier maintenance-script coverage. Run
+`go test ./examples/bd/dolt -count=1 -timeout 20m` when changing the pack's
+shell scripts, fixtures, or Dolt maintenance behavior.
 
 #### Resource isolation via gascity-test.slice
 
@@ -403,6 +408,17 @@ test coverage. This table is the checklist for new provider implementations.
 2. If the provider has lifecycle dependencies (startup ordering, shutdown
    sequencing), add a coordination test using the `exec:<spy>` pattern
 3. Update this table
+
+## Test deadline rule
+
+Any test timer that races a goroutine, exec, or socket start must be ≥ 10s.
+Use `testutil.GoroutineRaceTimeout` or `testutil.ExecRaceTimeout` from
+`internal/testutil/timeout.go`.
+
+A sub-second constant for such a timer is a CI reliability defect: the
+operation completes in < 1s on an idle machine but fails under CI CPU
+saturation. The only exception is a timer that is itself the subject under
+test (e.g., testing that a function honours a 100ms deadline).
 
 ## Decision guide
 
