@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -19,6 +20,41 @@ type beadGraphResponse struct {
 		To   string `json:"to"`
 		Kind string `json:"kind"`
 	} `json:"deps"`
+}
+
+type graphCountingListStore struct {
+	beads.Store
+	parentListCalls   int
+	depListCalls      int
+	depListBatchCalls int
+}
+
+func (s *graphCountingListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if query.ParentID != "" {
+		s.parentListCalls++
+	}
+	return s.Store.List(query)
+}
+
+func (s *graphCountingListStore) DepList(id, direction string) ([]beads.Dep, error) {
+	s.depListCalls++
+	return s.Store.DepList(id, direction)
+}
+
+func (s *graphCountingListStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	s.depListBatchCalls++
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	result := make(map[string][]beads.Dep, len(ids))
+	for _, id := range ids {
+		deps, err := s.Store.DepList(id, "down")
+		if err != nil {
+			return nil, err
+		}
+		result[id] = deps
+	}
+	return result, nil
 }
 
 func createBeadWithMeta(t *testing.T, store beads.Store, title string, meta map[string]string) beads.Bead {
@@ -47,6 +83,82 @@ func getGraph(t *testing.T, h http.Handler, fs *fakeState, rootID string) (*http
 		}
 	}
 	return rec, resp
+}
+
+func TestBeadGraphGraphV2MetadataGraphSkipsParentWalk(t *testing.T) {
+	state := newFakeState(t)
+	base := state.stores["myrig"]
+
+	root := createBeadWithMeta(t, base, "Workflow Root", map[string]string{
+		beadmeta.KindMetadataKey:            "workflow",
+		beadmeta.FormulaContractMetadataKey: "graph.v2",
+	})
+	child, err := base.Create(beads.Bead{
+		Title:    "Step 1",
+		Type:     "task",
+		ParentID: root.ID,
+		Metadata: map[string]string{
+			beadmeta.RootBeadIDMetadataKey: root.ID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(child): %v", err)
+	}
+	grandchild, err := base.Create(beads.Bead{
+		Title:    "Step 1.1",
+		Type:     "task",
+		ParentID: child.ID,
+		Metadata: map[string]string{
+			beadmeta.RootBeadIDMetadataKey: root.ID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(grandchild): %v", err)
+	}
+	if err := base.DepAdd(grandchild.ID, child.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd(grandchild -> child): %v", err)
+	}
+
+	counting := &graphCountingListStore{Store: base}
+	state.stores["myrig"] = counting
+	h := newTestCityHandler(t, state)
+
+	rec, resp := getGraph(t, h, state, root.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if counting.parentListCalls != 0 {
+		t.Fatalf("ParentID List calls = %d, want 0 for graph.v2 metadata graph", counting.parentListCalls)
+	}
+	if counting.depListBatchCalls != 1 {
+		t.Fatalf("DepListBatch calls = %d, want 1", counting.depListBatchCalls)
+	}
+	if counting.depListCalls != 0 {
+		t.Fatalf("DepList calls = %d, want 0 when batch dep list is available", counting.depListCalls)
+	}
+	beadIDs := map[string]bool{}
+	for _, b := range resp.Beads {
+		beadIDs[b.ID] = true
+	}
+	for _, id := range []string{root.ID, child.ID, grandchild.ID} {
+		if !beadIDs[id] {
+			t.Fatalf("graph beads missing %s; got %#v", id, resp.Beads)
+		}
+	}
+	edges := map[string]bool{}
+	for _, dep := range resp.Deps {
+		edges[dep.From+"|"+dep.To+"|"+dep.Kind] = true
+	}
+	for _, edge := range []string{
+		root.ID + "|" + child.ID + "|parent-child",
+		child.ID + "|" + grandchild.ID + "|parent-child",
+		child.ID + "|" + grandchild.ID + "|blocks",
+	} {
+		if !edges[edge] {
+			t.Fatalf("graph deps missing %s; got %#v", edge, resp.Deps)
+		}
+	}
 }
 
 func TestBeadGraphReturnsRootAndChildren(t *testing.T) {

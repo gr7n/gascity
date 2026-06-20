@@ -116,6 +116,21 @@ func (s *beadPolicyStore) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error)
 	return s.Store.Ready(expandPolicyReadyQuery(query...))
 }
 
+func (s *beadPolicyStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	result := make(map[string][]beads.Dep, len(ids))
+	for _, id := range ids {
+		deps, err := s.DepList(id, "down")
+		if err != nil {
+			return nil, err
+		}
+		result[id] = deps
+	}
+	return result, nil
+}
+
 // Count implements beads.Counter with the same read-tier expansion as List.
 // The embedded Store interface does not promote optional capabilities, so
 // the delegation must be explicit. Inner stores without a Counter report

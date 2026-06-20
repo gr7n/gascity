@@ -1237,15 +1237,11 @@ func canSkipScopeMemberWithDeps(deps []beads.Dep, pending map[string]beads.Bead)
 	return true
 }
 
-type scopeSkipDepBatchLister interface {
-	DepListBatch(ids []string) (map[string][]beads.Dep, error)
-}
-
 func loadDownDepsForScopeSkip(store beads.Store, ids []string) (map[string][]beads.Dep, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if batch, ok := store.(scopeSkipDepBatchLister); ok {
+	if batch, ok := store.(beads.DepBatchLister); ok {
 		deps, err := batch.DepListBatch(ids)
 		if err != nil {
 			return nil, fmt.Errorf("batch listing scope skip deps: %w", err)

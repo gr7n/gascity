@@ -356,6 +356,15 @@ func collectBeadGraph(store beads.Store, root beads.Bead) ([]beads.Bead, []workf
 		parentEdges = append(parentEdges, edge)
 	}
 
+	for _, child := range graphBeads {
+		if _, ok := beadIndex[child.ParentID]; ok {
+			addParentEdge(child.ParentID, child.ID)
+		}
+	}
+	if isGraphV2MetadataGraph(root, metadataChildren) {
+		return graphBeads, parentEdges, nil
+	}
+
 	for i := 0; i < len(graphBeads); i++ {
 		parent := graphBeads[i]
 		children, err := store.List(beads.ListQuery{
@@ -376,6 +385,16 @@ func collectBeadGraph(store beads.Store, root beads.Bead) ([]beads.Bead, []workf
 	}
 
 	return graphBeads, parentEdges, nil
+}
+
+func isGraphV2MetadataGraph(root beads.Bead, metadataChildren []beads.Bead) bool {
+	if len(metadataChildren) == 0 {
+		return false
+	}
+	if !sling.IsWorkflowAttachment(root) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(root.Metadata[beadmeta.FormulaContractMetadataKey]), "graph.v2")
 }
 
 func mergeWorkflowDeps(primary, extra []workflowDepResponse) []workflowDepResponse {
