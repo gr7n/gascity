@@ -24,7 +24,9 @@ type beadGraphResponse struct {
 
 type graphCountingListStore struct {
 	beads.Store
-	parentListCalls int
+	parentListCalls   int
+	depListCalls      int
+	depListBatchCalls int
 }
 
 func (s *graphCountingListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -32,6 +34,27 @@ func (s *graphCountingListStore) List(query beads.ListQuery) ([]beads.Bead, erro
 		s.parentListCalls++
 	}
 	return s.Store.List(query)
+}
+
+func (s *graphCountingListStore) DepList(id, direction string) ([]beads.Dep, error) {
+	s.depListCalls++
+	return s.Store.DepList(id, direction)
+}
+
+func (s *graphCountingListStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	s.depListBatchCalls++
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	result := make(map[string][]beads.Dep, len(ids))
+	for _, id := range ids {
+		deps, err := s.Store.DepList(id, "down")
+		if err != nil {
+			return nil, err
+		}
+		result[id] = deps
+	}
+	return result, nil
 }
 
 func createBeadWithMeta(t *testing.T, store beads.Store, title string, meta map[string]string) beads.Bead {
@@ -92,6 +115,9 @@ func TestBeadGraphGraphV2MetadataGraphSkipsParentWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(grandchild): %v", err)
 	}
+	if err := base.DepAdd(grandchild.ID, child.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd(grandchild -> child): %v", err)
+	}
 
 	counting := &graphCountingListStore{Store: base}
 	state.stores["myrig"] = counting
@@ -104,6 +130,12 @@ func TestBeadGraphGraphV2MetadataGraphSkipsParentWalk(t *testing.T) {
 	}
 	if counting.parentListCalls != 0 {
 		t.Fatalf("ParentID List calls = %d, want 0 for graph.v2 metadata graph", counting.parentListCalls)
+	}
+	if counting.depListBatchCalls != 1 {
+		t.Fatalf("DepListBatch calls = %d, want 1", counting.depListBatchCalls)
+	}
+	if counting.depListCalls != 0 {
+		t.Fatalf("DepList calls = %d, want 0 when batch dep list is available", counting.depListCalls)
 	}
 	beadIDs := map[string]bool{}
 	for _, b := range resp.Beads {
@@ -121,6 +153,7 @@ func TestBeadGraphGraphV2MetadataGraphSkipsParentWalk(t *testing.T) {
 	for _, edge := range []string{
 		root.ID + "|" + child.ID + "|parent-child",
 		child.ID + "|" + grandchild.ID + "|parent-child",
+		child.ID + "|" + grandchild.ID + "|blocks",
 	} {
 		if !edges[edge] {
 			t.Fatalf("graph deps missing %s; got %#v", edge, resp.Deps)
