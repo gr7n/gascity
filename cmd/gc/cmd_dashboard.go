@@ -12,12 +12,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var dashboardServeHook = dashboard.Serve
+var (
+	dashboardServeHook          = dashboard.Serve
+	dashboardServeProxiedHook   = dashboard.ServeProxied
+	dashboardServeProxiedOnHook = dashboard.ServeProxiedOn
+)
+
+type dashboardServeOptions struct {
+	bind           string
+	proxyAPIRead   bool
+	proxyAPIMutate bool
+}
 
 // newDashboardCmd creates the "gc dashboard" command group.
 func newDashboardCmd(stdout, stderr io.Writer) *cobra.Command {
 	var port int
 	var apiURL string
+	var bind string
+	var proxyAPIRead bool
+	var proxyAPIMutate bool
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Web dashboard for monitoring the supervisor and managed cities",
@@ -28,13 +41,18 @@ city tabs. From a city directory or with --city, city-specific panels and action
 forms are enabled for that city.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if runDashboardServe("gc dashboard", port, apiURL, stderr) != nil {
+			opts := dashboardServeOptions{
+				bind:           bind,
+				proxyAPIRead:   proxyAPIRead,
+				proxyAPIMutate: proxyAPIMutate,
+			}
+			if runDashboardServeWithOptions("gc dashboard", port, apiURL, stderr, opts) != nil {
 				return errExit
 			}
 			return nil
 		},
 	}
-	bindDashboardServeFlags(cmd, &port, &apiURL)
+	bindDashboardServeFlags(cmd, &port, &apiURL, &bind, &proxyAPIRead, &proxyAPIMutate)
 	cmd.AddCommand(newDashboardServeCmd(stdout, stderr))
 	return cmd
 }
@@ -43,6 +61,9 @@ forms are enabled for that city.`,
 func newDashboardServeCmd(_, stderr io.Writer) *cobra.Command {
 	var port int
 	var apiURL string
+	var bind string
+	var proxyAPIRead bool
+	var proxyAPIMutate bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the web dashboard",
@@ -53,22 +74,34 @@ city tabs. From a city directory or with --city, city-specific panels and action
 forms are enabled for that city.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if runDashboardServe("gc dashboard serve", port, apiURL, stderr) != nil {
+			opts := dashboardServeOptions{
+				bind:           bind,
+				proxyAPIRead:   proxyAPIRead,
+				proxyAPIMutate: proxyAPIMutate,
+			}
+			if runDashboardServeWithOptions("gc dashboard serve", port, apiURL, stderr, opts) != nil {
 				return errExit
 			}
 			return nil
 		},
 	}
-	bindDashboardServeFlags(cmd, &port, &apiURL)
+	bindDashboardServeFlags(cmd, &port, &apiURL, &bind, &proxyAPIRead, &proxyAPIMutate)
 	return cmd
 }
 
-func bindDashboardServeFlags(cmd *cobra.Command, port *int, apiURL *string) {
+func bindDashboardServeFlags(cmd *cobra.Command, port *int, apiURL *string, bind *string, proxyAPIRead *bool, proxyAPIMutate *bool) {
 	cmd.Flags().IntVar(port, "port", 8080, "HTTP port")
 	cmd.Flags().StringVar(apiURL, "api", "", "GC API server URL override (auto-discovered by default)")
+	cmd.Flags().StringVar(bind, "bind", "", "HTTP bind address override for the dashboard listener")
+	cmd.Flags().BoolVar(proxyAPIRead, "proxy-api-read", false, "proxy read-only supervisor API requests through the dashboard origin")
+	cmd.Flags().BoolVar(proxyAPIMutate, "proxy-api-mutate", false, "proxy mutating supervisor API requests through the dashboard origin; require an external access-control layer")
 }
 
 func runDashboardServe(commandName string, port int, apiURLOverride string, stderr io.Writer) error {
+	return runDashboardServeWithOptions(commandName, port, apiURLOverride, stderr, dashboardServeOptions{})
+}
+
+func runDashboardServeWithOptions(commandName string, port int, apiURLOverride string, stderr io.Writer, opts dashboardServeOptions) error {
 	cityPath, cfg, err := resolveDashboardContext(stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
@@ -81,6 +114,24 @@ func runDashboardServe(commandName string, port int, apiURLOverride string, stde
 		return err
 	}
 
+	if opts.proxyAPIRead || opts.proxyAPIMutate {
+		proxyOptions := dashboard.ProxyOptions{AllowMutations: opts.proxyAPIMutate}
+		if proxyOptions.AllowMutations {
+			fmt.Fprintln(stderr, "warning: mutating dashboard API proxy enabled; only use behind a trusted access-control layer such as Cloudflare Access, Tailscale, VPN, or SSH") //nolint:errcheck // best-effort stderr
+		}
+		if bind := strings.TrimSpace(opts.bind); bind != "" {
+			if err := dashboardServeProxiedOnHook(bind, port, apiURL, proxyOptions); err != nil {
+				fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
+				return err
+			}
+			return nil
+		}
+		if err := dashboardServeProxiedHook(port, apiURL, proxyOptions); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
+			return err
+		}
+		return nil
+	}
 	if err := dashboardServeHook(port, apiURL); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", commandName, err) //nolint:errcheck // best-effort stderr
 		return err

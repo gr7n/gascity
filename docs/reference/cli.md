@@ -1111,7 +1111,10 @@ gc dashboard [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--api` | string |  | GC API server URL override (auto-discovered by default) |
+| `--bind` | string |  | HTTP bind address override for the dashboard listener |
 | `--port` | int | `8080` | HTTP port |
+| `--proxy-api-mutate` | bool |  | proxy mutating supervisor API requests through the dashboard origin; require an external access-control layer |
+| `--proxy-api-read` | bool |  | proxy read-only supervisor API requests through the dashboard origin |
 
 | Subcommand | Description |
 |------------|-------------|
@@ -1132,7 +1135,10 @@ gc dashboard serve [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--api` | string |  | GC API server URL override (auto-discovered by default) |
+| `--bind` | string |  | HTTP bind address override for the dashboard listener |
 | `--port` | int | `8080` | HTTP port |
+| `--proxy-api-mutate` | bool |  | proxy mutating supervisor API requests through the dashboard origin; require an external access-control layer |
+| `--proxy-api-read` | bool |  | proxy read-only supervisor API requests through the dashboard origin |
 
 ## gc doctor
 
