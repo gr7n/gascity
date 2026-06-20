@@ -208,6 +208,73 @@ func TestProxiedHandlerForwardsMutationsWhenAllowed(t *testing.T) {
 	}
 }
 
+func TestProxiedHandlerRejectsStaleDashboardGraphRequests(t *testing.T) {
+	var hits int
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+
+	target, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatalf("parse API URL: %v", err)
+	}
+	h, err := NewProxiedHandler(target, ProxyOptions{})
+	if err != nil {
+		t.Fatalf("NewProxiedHandler: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/city/mc-city/beads/graph/gc-1", nil)
+	req.Header.Set("Referer", "https://city.example/?city=mc-city")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("GET /v0/.../beads/graph from dashboard: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), staleDashboardGraphMessage) {
+		t.Fatalf("response should explain reload requirement: %s", rec.Body.String())
+	}
+	if hits != 0 {
+		t.Fatalf("stale dashboard graph request was forwarded %d time(s)", hits)
+	}
+}
+
+func TestProxiedHandlerForwardsDirectGraphAPIRequests(t *testing.T) {
+	var gotPath string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"beads":[],"deps":[]}`))
+	}))
+	t.Cleanup(api.Close)
+
+	target, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatalf("parse API URL: %v", err)
+	}
+	h, err := NewProxiedHandler(target, ProxyOptions{})
+	if err != nil {
+		t.Fatalf("NewProxiedHandler: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/city/mc-city/beads/graph/gc-1", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v0/.../beads/graph direct: %d %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v0/city/mc-city/beads/graph/gc-1" {
+		t.Fatalf("proxied path = %q, want graph endpoint", gotPath)
+	}
+	if !strings.Contains(rec.Body.String(), `"beads"`) {
+		t.Fatalf("proxied body missing API response: %s", rec.Body.String())
+	}
+}
+
 func TestDashboardListenAddrUsesLoopback(t *testing.T) {
 	if got := dashboardListenAddr(8080); got != "127.0.0.1:8080" {
 		t.Fatalf("dashboardListenAddr() = %q, want 127.0.0.1:8080", got)
