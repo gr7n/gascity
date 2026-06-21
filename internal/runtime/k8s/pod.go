@@ -45,6 +45,41 @@ func remapControllerPathToPod(val, ctrlCity string) string {
 	return val
 }
 
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func literalEnvValue(name string, cfgEnv map[string]string, extraEnv []corev1.EnvVar) string {
+	value := cfgEnv[name]
+	for _, entry := range extraEnv {
+		if entry.Name == name && entry.Value != "" {
+			value = entry.Value
+		}
+	}
+	return value
+}
+
+func dynamicUserStartupExports(linuxUsername string, cfgEnv map[string]string, extraEnv []corev1.EnvVar) string {
+	if linuxUsername == "" {
+		return ""
+	}
+	home := "/home/" + linuxUsername
+	claudeConfigDir := literalEnvValue("CLAUDE_CONFIG_DIR", cfgEnv, extraEnv)
+	if claudeConfigDir == "" || strings.Contains(claudeConfigDir, "/home/gcagent/") {
+		claudeConfigDir = home + "/.claude"
+	}
+	pathValue := literalEnvValue("PATH", cfgEnv, extraEnv)
+	if pathValue == "" {
+		pathValue = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	return fmt.Sprintf(
+		"export HOME=%s; export CLAUDE_CONFIG_DIR=%s; export PATH=%s; ",
+		shellSingleQuote(home),
+		shellSingleQuote(claudeConfigDir),
+		shellSingleQuote(pathValue),
+	)
+}
+
 func projectedPodWorkDir(cfg runtime.Config) string {
 	podWorkDir := "/workspace"
 	ctrlCity := controllerCityPath(cfg.Env)
@@ -252,12 +287,21 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 
 	var tmuxCmd string
 	if linuxUsername != "" {
-		// Run tmux session as the dynamic user via su.
+		startupExports := dynamicUserStartupExports(linuxUsername, cfg.Env, p.extraEnv)
+		innerCmd := fmt.Sprintf(
+			`%scd %s && %s%s%sCMD=$(echo '%s' | base64 -d) && tmux new-session -d -s %s "$CMD" && sleep infinity`,
+			startupExports, podWorkDir, credCopy, wsWait, preStartCmds, cmdB64, tmuxSession,
+		)
+		innerCmdB64 := base64.StdEncoding.EncodeToString([]byte(innerCmd))
+		// Run the full startup path as the dynamic user while preserving the
+		// projected pod environment. The temporary script avoids shell quoting
+		// problems when the decoded command contains spaces or quotes.
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
-				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
-			userSetup, credCopy, wsWait, preStartCmds, cmdB64,
-			linuxUsername, podWorkDir, tmuxSession,
+			`%sSTART_SCRIPT=$(mktemp /tmp/gc-agent-start.XXXXXX) && `+
+				`echo '%s' | base64 -d > "$START_SCRIPT" && `+
+				`chown %s "$START_SCRIPT" && chmod 0700 "$START_SCRIPT" && `+
+				`su -m %s -c "sh \"$START_SCRIPT\""`,
+			userSetup, innerCmdB64, linuxUsername, linuxUsername,
 		)
 	} else {
 		tmuxCmd = fmt.Sprintf(

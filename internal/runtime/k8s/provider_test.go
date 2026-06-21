@@ -1504,6 +1504,43 @@ func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
 	}
 }
 
+func TestInitBeadsInPodAllowsExistingMetadataWithoutProjectedPrefix(t *testing.T) {
+	fake := newFakeK8sOps()
+	cfg := runtime.Config{
+		WorkDir: "/host/city",
+		Env: map[string]string{
+			"GC_CITY":      "/host/city",
+			"GC_DOLT_HOST": "canonical-dolt.example.com",
+			"GC_DOLT_PORT": "3308",
+		},
+	}
+
+	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace", podManagedDoltHost, podManagedDoltPort); err != nil {
+		t.Fatalf("initBeadsInPod: %v", err)
+	}
+
+	found := false
+	for _, c := range fake.calls {
+		if c.method != "execInPod" || len(c.cmd) < 3 {
+			continue
+		}
+		if c.cmd[0] != "sh" || c.cmd[1] != "-c" {
+			continue
+		}
+		script := c.cmd[2]
+		if !strings.Contains(script, "if [ -f .beads/metadata.json ]") {
+			continue
+		}
+		if !strings.Contains(script, "missing projected GC_BEADS_PREFIX for .beads initialization") {
+			t.Fatalf("repair script should only require prefix for missing .beads initialization: %s", script)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("initBeadsInPod did not emit repair script")
+	}
+}
+
 func TestVerifyBeadsInPodChecksCanonicalFiles(t *testing.T) {
 	fake := newFakeK8sOps()
 	cfg := runtime.Config{

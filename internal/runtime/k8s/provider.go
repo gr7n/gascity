@@ -899,9 +899,6 @@ func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime
 	doltPort := projected["GC_DOLT_PORT"]
 	storeRoot := projectedPodStoreRoot(cfg, workDir)
 	prefix := strings.TrimSpace(cfg.Env["GC_BEADS_PREFIX"])
-	if prefix == "" {
-		return fmt.Errorf("missing projected GC_BEADS_PREFIX")
-	}
 
 	portNum, err := strconv.Atoi(doltPort)
 	if err != nil {
@@ -930,6 +927,7 @@ func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime
 			`p=json.loads(sys.stdin.read()); m.update(p); m.pop('project_id', None); `+
 			`json.dump(m,open('.beads/metadata.json','w'),indent=2)"; `+
 			`else PREFIX=$(echo '%s' | base64 -d) && `+
+			`if [ -z "$PREFIX" ]; then echo "missing projected GC_BEADS_PREFIX for .beads initialization" >&2; exit 1; fi && `+
 			`DOLT_HOST=$(echo '%s' | base64 -d) && `+
 			`DOLT_PORT=$(echo '%s' | base64 -d) && `+
 			`yes | BEADS_DIR="$WD/.beads" bd init --server --server-host "$DOLT_HOST" --server-port "$DOLT_PORT" -p "$PREFIX" --skip-hooks --skip-agents; fi`,
