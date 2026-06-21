@@ -1497,6 +1497,9 @@ func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
 		if !strings.Contains(script, "m.pop('project_id'") {
 			t.Fatalf("repair script did not strip project_id: %s", script)
 		}
+		if strings.Contains(script, "<<<") {
+			t.Fatalf("repair script must be POSIX sh compatible, found here-string: %s", script)
+		}
 		found = true
 	}
 	if !found {
