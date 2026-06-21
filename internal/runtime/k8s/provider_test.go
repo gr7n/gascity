@@ -312,6 +312,36 @@ func TestIsRunning(t *testing.T) {
 	}
 }
 
+func TestIsRunningUsesDynamicUserTmuxSocket(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.pods["gc-test-agent"].Annotations = map[string]string{}
+	fake.pods["gc-test-agent"].Annotations[podLinuxUsernameAnnotation] = "ubuntu"
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-0/default"))
+	fake.setExecResult("gc-test-agent",
+		tmuxCommand("ubuntu", []string{"tmux", "has-session", "-t", "main"}), "", nil)
+
+	if !p.IsRunning("gc-test-agent") {
+		t.Fatal("IsRunning returned false for dynamic-user tmux session")
+	}
+
+	foundUserTmux := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "sh" && c.cmd[1] == "-lc" &&
+			strings.Contains(c.cmd[2], "su -m 'ubuntu'") &&
+			strings.Contains(c.cmd[2], "tmux has-session -t main") {
+			foundUserTmux = true
+		}
+	}
+	if !foundUserTmux {
+		t.Fatalf("dynamic-user tmux check was not run; calls=%#v", fake.calls)
+	}
+}
+
 func TestStop(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -660,6 +690,53 @@ func TestStartCreatesPodsAndWaits(t *testing.T) {
 	}
 	if pod.Annotations["gc-session-name"] != "gc-test-agent" {
 		t.Errorf("annotation gc-session-name = %q, want gc-test-agent", pod.Annotations["gc-session-name"])
+	}
+}
+
+func TestStartWaitsForDynamicUserTmuxSocket(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-0/default"))
+	fake.setExecResult("gc-test-agent",
+		tmuxCommand("ubuntu", []string{"tmux", "has-session", "-t", "main"}), "", nil)
+
+	cfg := runtime.Config{
+		Command:   "gr7n k8s canary",
+		Lifecycle: runtime.LifecycleOneShot,
+		Env: map[string]string{
+			"GC_AGENT":       "k8s-canary",
+			"GC_CITY":        "/workspace",
+			"LINUX_USERNAME": "ubuntu",
+		},
+	}
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	pod := fake.pods["gc-test-agent"]
+	if pod == nil {
+		t.Fatal("pod not created")
+	}
+	if got := pod.Annotations[podLinuxUsernameAnnotation]; got != "ubuntu" {
+		t.Fatalf("%s annotation = %q, want ubuntu", podLinuxUsernameAnnotation, got)
+	}
+
+	foundUserTmux := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "sh" && c.cmd[1] == "-lc" &&
+			strings.Contains(c.cmd[2], "su -m 'ubuntu'") &&
+			strings.Contains(c.cmd[2], "tmux has-session -t main") {
+			foundUserTmux = true
+		}
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "tmux" && c.cmd[1] == "has-session" {
+			t.Fatalf("Start checked root tmux socket for dynamic user: %#v", c.cmd)
+		}
+	}
+	if !foundUserTmux {
+		t.Fatalf("Start did not check tmux through dynamic user; calls=%#v", fake.calls)
 	}
 }
 

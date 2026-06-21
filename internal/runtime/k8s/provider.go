@@ -21,6 +21,7 @@ import (
 	execerr "k8s.io/client-go/util/exec"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 // Compile-time interface checks.
@@ -223,8 +224,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		pod := &existing[0]
 		if pod.Status.Phase == corev1.PodRunning {
 			// Check if tmux is alive — stale pod detection.
-			_, tmuxErr := p.ops.execInPod(ctx, pod.Name, "agent",
-				[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+			_, tmuxErr := execTmuxInPod(ctx, p.ops, pod.Name, podLinuxUsername(pod),
+				[]string{"tmux", "has-session", "-t", tmuxSession})
 			if tmuxErr == nil {
 				return fmt.Errorf("%w: session %q (pod: %s)", runtime.ErrSessionExists, name, pod.Name)
 			}
@@ -301,7 +302,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}
 
 	// Wait for tmux session.
-	if err := waitForTmux(ctx, p.ops, podName, 60*time.Second); err != nil {
+	if err := waitForTmux(ctx, p.ops, podName, cfg.Env["LINUX_USERNAME"], 60*time.Second); err != nil {
 		cleanup("tmux not ready")
 		return fmt.Errorf("waiting for tmux in pod %q: %w", podName, err)
 	}
@@ -332,8 +333,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		}
 	}
 	if requiresPostStartLiveness {
-		_, tmuxErr := p.ops.execInPod(ctx, podName, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+		_, tmuxErr := execTmuxInPod(ctx, p.ops, podName, cfg.Env["LINUX_USERNAME"],
+			[]string{"tmux", "has-session", "-t", tmuxSession})
 		if tmuxErr != nil {
 			cleanup("session died immediately after startup")
 			return fmt.Errorf("%w: session %q died immediately after startup: %w",
@@ -355,8 +356,12 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 // run SessionLive (RunLive is a no-op), matching the pre-un-weld behavior.
 func (p *Provider) runPodPostLaunchSetup(ctx context.Context, podName string, cfg runtime.Config) {
 	// Enable pane logging for diagnostics.
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"}, nil)
+	linuxUsername := strings.TrimSpace(cfg.Env["LINUX_USERNAME"])
+	if linuxUsername == "" {
+		linuxUsername = p.podLinuxUsername(ctx, podName)
+	}
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"})
 
 	// Run session_setup commands inside the pod.
 	for _, cmd := range cfg.SessionSetup {
@@ -407,8 +412,9 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 	}
 	// The tmux server + "main" session must be alive to respawn into; a dead
 	// session means the box is not warm enough — reprovision, don't respawn.
-	if _, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	if _, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "has-session", "-t", tmuxSession}); err != nil {
 		return fmt.Errorf("%w: session %q (pod %s has no live tmux session)", runtime.ErrSessionNotFound, name, podName)
 	}
 
@@ -432,8 +438,8 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 			case <-timer.C:
 			}
 		}
-		if _, err := p.ops.execInPod(ctx, podName, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
+		if _, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+			[]string{"tmux", "has-session", "-t", tmuxSession}); err != nil {
 			return fmt.Errorf("%w: session %q died immediately after relaunch: %w",
 				runtime.ErrSessionDiedDuringStartup, name, err)
 		}
@@ -497,8 +503,9 @@ func (p *Provider) IsRunning(name string) bool {
 		return false
 	}
 	// Pod Running + tmux session alive.
-	_, err = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, err = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "has-session", "-t", tmuxSession})
 	return err == nil
 }
 
@@ -510,8 +517,9 @@ func (p *Provider) IsAttached(name string) bool {
 	if err != nil {
 		return false
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_attached}"}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_attached}"})
 	if err != nil {
 		return false
 	}
@@ -530,8 +538,14 @@ func (p *Provider) Attach(name string) error {
 	if p.k8sContext != "" {
 		args = append(args, "--context", p.k8sContext)
 	}
-	args = append(args, "-n", p.namespace, "exec", "-it", podName, "--",
-		"tmux", "attach", "-t", tmuxSession)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	if strings.TrimSpace(linuxUsername) != "" {
+		args = append(args, "-n", p.namespace, "exec", "-it", podName, "--")
+		args = append(args, tmuxCommand(linuxUsername, []string{"tmux", "attach", "-t", tmuxSession})...)
+	} else {
+		args = append(args, "-n", p.namespace, "exec", "-it", podName, "--",
+			"tmux", "attach", "-t", tmuxSession)
+	}
 
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
 	cmd.Stdin = os.Stdin
@@ -598,8 +612,9 @@ func (p *Provider) SetMeta(name, key, value string) error {
 	if err != nil {
 		return nil // best-effort
 	}
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value})
 	return nil
 }
 
@@ -610,8 +625,9 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "show-environment", "-t", tmuxSession, key}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "show-environment", "-t", tmuxSession, key})
 	if err != nil {
 		return "", nil
 	}
@@ -633,8 +649,9 @@ func (p *Provider) RemoveMeta(name, key string) error {
 	if err != nil {
 		return nil // best-effort
 	}
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key})
 	return nil
 }
 
@@ -676,8 +693,9 @@ func (p *Provider) GetLastActivity(name string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, nil
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_activity}"}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_activity}"})
 	if err != nil {
 		return time.Time{}, nil
 	}
@@ -729,7 +747,42 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 
 // --- Internal helpers ---
 
-// findRunningPod finds a running pod by session label.
+func podLinuxUsername(pod *corev1.Pod) string {
+	if pod == nil || pod.Annotations == nil {
+		return ""
+	}
+	return strings.TrimSpace(pod.Annotations[podLinuxUsernameAnnotation])
+}
+
+func (p *Provider) podLinuxUsername(ctx context.Context, podName string) string {
+	pod, err := p.ops.getPod(ctx, podName)
+	if err != nil {
+		return ""
+	}
+	return podLinuxUsername(pod)
+}
+
+func tmuxCommand(linuxUsername string, args []string) []string {
+	linuxUsername = strings.TrimSpace(linuxUsername)
+	if linuxUsername == "" {
+		return args
+	}
+	tmuxCmd := shellquote.Join(args)
+	quotedUser := shellquote.Quote(linuxUsername)
+	script := fmt.Sprintf(
+		`if id %s >/dev/null 2>&1; then exec su -m %s -c %s; fi; exec %s`,
+		quotedUser,
+		quotedUser,
+		shellquote.Quote(tmuxCmd),
+		tmuxCmd,
+	)
+	return []string{"sh", "-lc", script}
+}
+
+func execTmuxInPod(ctx context.Context, ops k8sOps, podName, linuxUsername string, args []string) (string, error) {
+	return ops.execInPod(ctx, podName, "agent", tmuxCommand(linuxUsername, args), nil)
+}
+
 // carrier returns the tmux carrier that drives this provider's sessions over
 // the pod exec connection ([Provider.Exec]). The in-box tmux session is always
 // tmuxSession ("main").
@@ -748,6 +801,7 @@ func (p *Provider) Exec(ctx context.Context, name string, argv []string) ([]byte
 	if err != nil {
 		return nil, -1, fmt.Errorf("k8s exec %q: %w", name, err)
 	}
+	argv = tmuxCommand(p.podLinuxUsername(ctx, podName), argv)
 	out, err := p.ops.execInPod(ctx, podName, "agent", argv, nil)
 	if err != nil {
 		var exitErr execerr.ExitError
@@ -761,6 +815,7 @@ func (p *Provider) Exec(ctx context.Context, name string, argv []string) ([]byte
 	return []byte(out), 0, nil
 }
 
+// findRunningPod finds a running pod by session label.
 func (p *Provider) findRunningPod(ctx context.Context, name string) (string, error) {
 	label := SanitizeLabel(name)
 	pods, err := p.ops.listPods(ctx, "gc-session="+label, "status.phase=Running")
@@ -842,7 +897,7 @@ func waitForPodRunning(ctx context.Context, ops k8sOps, name string, timeout tim
 }
 
 // waitForTmux waits for the tmux session to be available inside the pod.
-func waitForTmux(ctx context.Context, ops k8sOps, name string, timeout time.Duration) error {
+func waitForTmux(ctx context.Context, ops k8sOps, name, linuxUsername string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
@@ -850,8 +905,8 @@ func waitForTmux(ctx context.Context, ops k8sOps, name string, timeout time.Dura
 			return ctx.Err()
 		default:
 		}
-		_, err := ops.execInPod(ctx, name, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+		_, err := execTmuxInPod(ctx, ops, name, linuxUsername,
+			[]string{"tmux", "has-session", "-t", tmuxSession})
 		if err == nil {
 			return nil
 		}

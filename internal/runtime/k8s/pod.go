@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	podManagedDoltHost = "dolt.gc.svc.cluster.local"
-	podManagedDoltPort = "3307"
+	podManagedDoltHost         = "dolt.gc.svc.cluster.local"
+	podManagedDoltPort         = "3307"
+	podLinuxUsernameAnnotation = "gc-linux-username"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -265,7 +266,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	// Dynamic user creation: when LINUX_USERNAME is set, the container starts
 	// as root (see securityContext below), creates the user, sets up workspace
 	// ownership, then drops privileges via su for the tmux session.
-	linuxUsername := cfg.Env["LINUX_USERNAME"]
+	linuxUsername := strings.TrimSpace(cfg.Env["LINUX_USERNAME"])
 	var userSetup string
 	if linuxUsername != "" {
 		userSetup = fmt.Sprintf(
@@ -393,6 +394,10 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			}},
 			Volumes: volumes,
 		},
+	}
+
+	if linuxUsername != "" {
+		pod.Annotations[podLinuxUsernameAnnotation] = linuxUsername
 	}
 
 	// Apply optional scheduling fields.

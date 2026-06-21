@@ -180,6 +180,9 @@ func TestBuildPod_DynamicUserPreservesEnvForStartupScript(t *testing.T) {
 	if container.SecurityContext == nil || container.SecurityContext.RunAsUser == nil || *container.SecurityContext.RunAsUser != 0 {
 		t.Fatalf("RunAsUser = %#v, want root for dynamic user setup", container.SecurityContext)
 	}
+	if got := pod.Annotations[podLinuxUsernameAnnotation]; got != "ubuntu" {
+		t.Fatalf("%s annotation = %q, want ubuntu", podLinuxUsernameAnnotation, got)
+	}
 	args := container.Args[0]
 	if !strings.Contains(args, "su -m ubuntu -c") {
 		t.Fatalf("entrypoint does not preserve env through su -m:\n%s", args)
