@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -436,6 +437,16 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 		return nil, humaResolveError(err)
 	}
 
+	index := s.latestIndex()
+	bucket := responseCacheTimeBucket(time.Now())
+	cacheKey := "session-agents?city=" + input.CityName + "&path:id=" + id
+	if body, ok := cachedResponseAs[sessionAgentListResponse](s, cacheKey, bucket); ok {
+		return &IndexOutput[sessionAgentListResponse]{
+			Index: index,
+			Body:  body,
+		}, nil
+	}
+
 	mgr := s.sessionManager(store)
 	logPath, err := mgr.TranscriptPath(id, s.sessionLogPaths())
 	if err != nil {
@@ -443,7 +454,7 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 	}
 	if logPath == "" {
 		return &IndexOutput[sessionAgentListResponse]{
-			Index: s.latestIndex(),
+			Index: index,
 			Body:  sessionAgentListResponse{Agents: []sessionlog.AgentMapping{}},
 		}, nil
 	}
@@ -456,9 +467,11 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 	if mappings == nil {
 		mappings = []sessionlog.AgentMapping{}
 	}
+	body := sessionAgentListResponse{Agents: mappings}
+	s.storeResponse(cacheKey, bucket, body)
 	return &IndexOutput[sessionAgentListResponse]{
-		Index: s.latestIndex(),
-		Body:  sessionAgentListResponse{Agents: mappings},
+		Index: index,
+		Body:  body,
 	}, nil
 }
 
