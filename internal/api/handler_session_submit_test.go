@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
@@ -49,6 +50,12 @@ func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	}
 	if success.Intent != string(session.SubmitIntentDefault) {
 		t.Fatalf("intent = %q, want %q", success.Intent, session.SubmitIntentDefault)
+	}
+}
+
+func TestSessionCreateCommandableTimeoutAllowsSlowInteractiveStartup(t *testing.T) {
+	if sessionCreateCommandableTimeout < 5*time.Minute {
+		t.Fatalf("sessionCreateCommandableTimeout = %s, want at least 5m for slow provider startup", sessionCreateCommandableTimeout)
 	}
 }
 

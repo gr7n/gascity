@@ -27,7 +27,7 @@ import (
 
 var (
 	sessionMessageAsyncTimeout      = sessionMessageTimeout
-	sessionCreateCommandableTimeout = 120 * time.Second
+	sessionCreateCommandableTimeout = 5 * time.Minute
 )
 
 type sessionCommandableWaiter interface {
