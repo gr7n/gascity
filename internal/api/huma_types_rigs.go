@@ -10,7 +10,8 @@ package api
 type RigListInput struct {
 	CityScope
 	BlockingParam
-	Git bool `query:"git" required:"false" doc:"Include git status."`
+	Git  bool `query:"git" required:"false" doc:"Include git status."`
+	Lite bool `query:"lite" required:"false" doc:"Use cached session read-model state instead of live provider probes for low-cost dashboard polls."`
 }
 
 // RigGetInput is the Huma input for GET /v0/city/{cityName}/rig/{name}.

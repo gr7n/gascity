@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/sse"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 // humaHandleAgentList is the Huma-typed handler for GET /v0/agents.
@@ -25,6 +26,13 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 	cityName := s.state.CityName()
 	sessTmpl := cfg.Workspace.SessionTemplate
 	wantPeek := input.Peek
+	lite := input.Lite
+	var sessionSnapshot statusSessionSnapshot
+	var partialErrors []string
+	if lite {
+		sessionSnapshot = s.statusSessionSnapshot()
+		partialErrors = append(partialErrors, sessionSnapshot.partialErrors...)
+	}
 
 	index := s.latestIndex()
 	cacheKey := ""
@@ -42,7 +50,12 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 
 	var agents []agentResponse
 	for _, a := range cfg.Agents {
-		expanded := expandAgent(a, cityName, sessTmpl, sp)
+		var expanded []expandedAgent
+		if lite {
+			expanded = expandAgentFromSessionSnapshot(a, cityName, sessTmpl, sessionSnapshot)
+		} else {
+			expanded = expandAgent(a, cityName, sessTmpl, sp)
+		}
 		for _, ea := range expanded {
 			if input.Rig != "" && ea.rig != input.Rig {
 				continue
@@ -52,7 +65,13 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 			}
 
 			sessionName := agentSessionName(cityName, ea.qualifiedName, sessTmpl)
-			running := sp.IsRunning(sessionName)
+			info, hasInfo := sessionSnapshot.bySessionName[sessionName]
+			running := false
+			if lite {
+				running = hasInfo && info.state == session.StateActive
+			} else {
+				running = sp.IsRunning(sessionName)
+			}
 
 			if input.Running == "true" && !running {
 				continue
@@ -62,8 +81,14 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 			}
 
 			suspended := ea.suspended
-			if v, err := sp.GetMeta(sessionName, "suspended"); err == nil && v == "true" {
-				suspended = true
+			if lite {
+				if hasInfo && info.state == session.StateSuspended {
+					suspended = true
+				}
+			} else {
+				if v, err := sp.GetMeta(sessionName, "suspended"); err == nil && v == "true" {
+					suspended = true
+				}
 			}
 
 			provider, displayName := resolveProviderInfo(ea.provider, cfg)
@@ -97,18 +122,22 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 			sessionID := ""
 			if running {
 				si := &sessionInfo{Name: sessionName}
-				if t, err := sp.GetLastActivity(sessionName); err == nil && !t.IsZero() {
-					si.LastActivity = &t
-					lastActivity = &t
+				if !lite {
+					if t, err := sp.GetLastActivity(sessionName); err == nil && !t.IsZero() {
+						si.LastActivity = &t
+						lastActivity = &t
+					}
+					si.Attached = sp.IsAttached(sessionName)
+					if id, err := sp.GetMeta(sessionName, "GC_SESSION_ID"); err == nil {
+						sessionID = strings.TrimSpace(id)
+					}
 				}
-				si.Attached = sp.IsAttached(sessionName)
 				resp.Session = si
-				if id, err := sp.GetMeta(sessionName, "GC_SESSION_ID"); err == nil {
-					sessionID = strings.TrimSpace(id)
-				}
 			}
 
-			resp.ActiveBead = s.findActiveBeadForAssignees(ea.rig, sessionID, sessionName, ea.qualifiedName)
+			if !lite {
+				resp.ActiveBead = s.findActiveBeadForAssignees(ea.rig, sessionID, sessionName, ea.qualifiedName)
+			}
 			quarantined := s.state.IsQuarantined(sessionName)
 			resp.State = computeAgentState(suspended, quarantined, running, resp.ActiveBead, lastActivity)
 
@@ -130,7 +159,12 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 		agents = []agentResponse{}
 	}
 
-	body := ListBody[agentResponse]{Items: agents, Total: len(agents)}
+	body := ListBody[agentResponse]{
+		Items:         agents,
+		Total:         len(agents),
+		Partial:       len(partialErrors) > 0,
+		PartialErrors: partialErrors,
+	}
 	if cacheKey != "" {
 		s.storeResponse(cacheKey, index, body)
 	}

@@ -6671,6 +6671,10 @@ export type GetV0CityByCityNameAgentsData = {
          * Include last output preview.
          */
         peek?: boolean;
+        /**
+         * Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+         */
+        lite?: boolean;
     };
     url: '/v0/city/{cityName}/agents';
 };
@@ -10547,6 +10551,10 @@ export type GetV0CityByCityNameRigsData = {
          * Include git status.
          */
         git?: boolean;
+        /**
+         * Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+         */
+        lite?: boolean;
     };
     url: '/v0/city/{cityName}/rigs';
 };

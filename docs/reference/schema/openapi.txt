@@ -16771,6 +16771,16 @@
               "description": "Include last output preview.",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+            "explode": false,
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -24697,6 +24707,16 @@
             "name": "git",
             "schema": {
               "description": "Include git status.",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+            "explode": false,
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
               "type": "boolean"
             }
           }

@@ -5310,6 +5310,9 @@ type GetV0CityByCityNameAgentsParams struct {
 
 	// Peek Include last output preview.
 	Peek *bool `form:"peek,omitempty" json:"peek,omitempty"`
+
+	// Lite Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+	Lite *bool `form:"lite,omitempty" json:"lite,omitempty"`
 }
 
 // GetV0CityByCityNameAgentsParamsRunning defines parameters for GetV0CityByCityNameAgents.
@@ -5949,6 +5952,9 @@ type GetV0CityByCityNameRigsParams struct {
 
 	// Git Include git status.
 	Git *bool `form:"git,omitempty" json:"git,omitempty"`
+
+	// Lite Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+	Lite *bool `form:"lite,omitempty" json:"lite,omitempty"`
 }
 
 // CreateRigParams defines parameters for CreateRig.
@@ -15554,6 +15560,22 @@ func NewGetV0CityByCityNameAgentsRequest(server string, cityName string, params 
 
 		}
 
+		if params.Lite != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "lite", *params.Lite, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
 		queryURL.RawQuery = queryValues.Encode()
 	}
 
@@ -21840,6 +21862,22 @@ func NewGetV0CityByCityNameRigsRequest(server string, cityName string, params *G
 		if params.Git != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "git", *params.Git, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Lite != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "lite", *params.Lite, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err

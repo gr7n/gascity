@@ -7979,6 +7979,8 @@ export interface operations {
                 running?: "true" | "false";
                 /** @description Include last output preview. */
                 peek?: boolean;
+                /** @description Use cached session read-model state instead of live provider probes for low-cost dashboard polls. */
+                lite?: boolean;
             };
             header?: never;
             path: {
@@ -12008,6 +12010,8 @@ export interface operations {
                 wait?: string;
                 /** @description Include git status. */
                 git?: boolean;
+                /** @description Use cached session read-model state instead of live provider probes for low-cost dashboard polls. */
+                lite?: boolean;
             };
             header?: never;
             path: {
