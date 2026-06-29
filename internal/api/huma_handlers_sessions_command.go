@@ -66,6 +66,9 @@ func (s *Server) humaHandleSessionCreate(ctx context.Context, input *SessionCrea
 		}
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
+	if msg, conflict := alwaysNamedSessionCreateConflict(s.state.Config(), name); conflict {
+		return nil, huma.Error409Conflict("named_session_target: " + msg)
+	}
 	transport, err = validateSessionTransport(resolved, transport, s.state.SessionProvider())
 	if err != nil {
 		return nil, huma.Error503ServiceUnavailable(err.Error())

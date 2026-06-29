@@ -2616,6 +2616,75 @@ func TestHandleSessionCreateAsyncAcceptsInlineMessage(t *testing.T) {
 	}
 }
 
+func TestHandleSessionCreateRejectsAlwaysNamedSessionTarget(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = []config.Agent{{
+		Name:              "director",
+		Provider:          "test-agent",
+		MaxActiveSessions: intPtr(1),
+	}}
+	fs.cfg.NamedSessions = []config.NamedSession{{
+		Template: "director",
+		Mode:     "always",
+	}}
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	req := newPostRequest(cityURL(fs, "/sessions"), strings.NewReader(`{"kind":"agent","name":"director","async":true,"message":"hi"}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "named_session_target") || !strings.Contains(w.Body.String(), "/v0/session/director/messages") {
+		t.Fatalf("body = %q, want named-session guidance", w.Body.String())
+	}
+	items, err := fs.cityBeadStore.ListByLabel(session.LabelSession, 0)
+	if err != nil {
+		t.Fatalf("ListByLabel: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("session bead count = %d, want 0", len(items))
+	}
+}
+
+func TestHumaHandleSessionCreateRejectsAlwaysNamedSessionTarget(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = []config.Agent{{
+		Name:              "director",
+		Provider:          "test-agent",
+		MaxActiveSessions: intPtr(1),
+	}}
+	fs.cfg.NamedSessions = []config.NamedSession{{
+		Template: "director",
+		Mode:     "always",
+	}}
+	srv := New(fs)
+
+	_, err := srv.humaHandleSessionCreate(context.Background(), &SessionCreateInput{
+		Body: sessionCreateBody{
+			Kind:    "agent",
+			Name:    "director",
+			Async:   true,
+			Message: "hi",
+		},
+	})
+	if err == nil {
+		t.Fatal("humaHandleSessionCreate() error = nil, want named-session conflict")
+	}
+	if !strings.Contains(err.Error(), "named_session_target") || !strings.Contains(err.Error(), "/v0/session/director/messages") {
+		t.Fatalf("humaHandleSessionCreate() error = %v, want named-session guidance", err)
+	}
+	items, listErr := fs.cityBeadStore.ListByLabel(session.LabelSession, 0)
+	if listErr != nil {
+		t.Fatalf("ListByLabel: %v", listErr)
+	}
+	if len(items) != 0 {
+		t.Fatalf("session bead count = %d, want 0", len(items))
+	}
+}
+
 func TestHandleSessionCreateAsync_PoolTemplateWithoutAliasUsesGeneratedWorkDirIdentity(t *testing.T) {
 	fs := newSessionFakeState(t)
 	fs.cfg.Agents = []config.Agent{{
