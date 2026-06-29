@@ -26,6 +26,7 @@ import (
 // to isolate mutation logic from reads and streaming.
 
 var (
+	sessionSubmitAsyncTimeout       = sessionMessageTimeout
 	sessionMessageAsyncTimeout      = sessionMessageTimeout
 	sessionCreateCommandableTimeout = 5 * time.Minute
 )
@@ -579,16 +580,78 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 	sessionTarget := input.ID
 	go func() {
 		defer s.recoverAsRequestFailed(reqID, RequestOperationSessionSubmit)
-		id, err := s.resolveSessionIDMaterializingNamedWithContext(context.Background(), store, sessionTarget)
-		if err != nil {
-			s.emitSessionSubmitFailed(reqID, "resolve_failed", err.Error())
-			return
+
+		type submitResult struct {
+			sessionID string
+			queued    bool
+			intent    string
+			errorCode string
+			err       error
 		}
-		outcome, submitErr := s.submitMessageToSession(context.Background(), store, id, message, intent)
-		if submitErr != nil {
-			s.emitSessionSubmitFailed(reqID, "submit_failed", submitErr.Error())
-		} else {
-			s.emitSessionSubmitSucceeded(reqID, id, outcome.Queued, string(intent))
+
+		resultCh := make(chan submitResult, 1)
+		var terminalEmitted atomic.Bool
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sendResult := func(result submitResult) {
+			if terminalEmitted.Load() {
+				if result.err != nil {
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s error_code=%s err=%v", reqID, sessionTarget, result.errorCode, result.err)
+				} else {
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s session_id=%s", reqID, sessionTarget, result.sessionID)
+				}
+				return
+			}
+			resultCh <- result
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					sendResult(submitResult{errorCode: "internal_error", err: fmt.Errorf("panic: %v", r)})
+				}
+			}()
+			id, err := s.resolveSessionIDMaterializingNamedWithContext(ctx, store, sessionTarget)
+			if err != nil {
+				sendResult(submitResult{errorCode: "resolve_failed", err: err})
+				return
+			}
+			outcome, submitErr := s.submitMessageToSession(ctx, store, id, message, intent)
+			if submitErr != nil {
+				code := "submit_failed"
+				if errors.Is(submitErr, context.DeadlineExceeded) || errors.Is(submitErr, context.Canceled) {
+					code = "timeout"
+				}
+				sendResult(submitResult{sessionID: id, errorCode: code, err: submitErr})
+				return
+			}
+			sendResult(submitResult{sessionID: id, queued: outcome.Queued, intent: string(intent)})
+		}()
+
+		timer := time.NewTimer(sessionSubmitAsyncTimeout)
+		defer timer.Stop()
+		select {
+		case result := <-resultCh:
+			terminalEmitted.Store(true)
+			if result.err != nil {
+				s.emitSessionSubmitFailed(reqID, result.errorCode, result.err.Error())
+				return
+			}
+			s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
+		case <-timer.C:
+			cancel()
+			select {
+			case result := <-resultCh:
+				terminalEmitted.Store(true)
+				if result.err != nil {
+					s.emitSessionSubmitFailed(reqID, result.errorCode, result.err.Error())
+					return
+				}
+				s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
+				return
+			default:
+			}
+			terminalEmitted.Store(true)
+			s.emitSessionSubmitFailed(reqID, "timeout", fmt.Sprintf("session.submit timed out after %s", sessionSubmitAsyncTimeout))
 		}
 	}()
 

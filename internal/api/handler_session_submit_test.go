@@ -135,6 +135,58 @@ func TestHandleSessionSubmitFollowUpQueuesMessage(t *testing.T) {
 	}
 }
 
+func TestHandleSessionSubmitEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
+	fs := newSessionFakeState(t)
+	blocker := &blockingNudgeProvider{
+		Fake:    fs.sp,
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		close(blocker.unblock)
+	})
+	prevTimeout := sessionSubmitAsyncTimeout
+	sessionSubmitAsyncTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		sessionSubmitAsyncTimeout = prevTimeout
+	})
+
+	srv := New(&stateWithSessionProvider{fakeState: fs, provider: blocker})
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "blocked-submit")
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, rec.Body)
+
+	select {
+	case <-blocker.started:
+	case <-time.After(testEventTimeout):
+		t.Fatal("provider nudge was not reached")
+	}
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success != nil {
+		t.Fatalf("unexpected success: %+v", success)
+	}
+	if failure == nil {
+		t.Fatal("expected request.failed for blocked provider nudge")
+	}
+	if failure.ErrorCode != "timeout" {
+		t.Fatalf("failure error_code = %q, want timeout", failure.ErrorCode)
+	}
+}
+
+func TestSessionSubmitAsyncTimeoutMatchesClientTimeout(t *testing.T) {
+	if sessionSubmitAsyncTimeout != sessionMessageTimeout {
+		t.Fatalf("sessionSubmitAsyncTimeout = %s, want client timeout %s", sessionSubmitAsyncTimeout, sessionMessageTimeout)
+	}
+}
+
 func TestHandleSessionGetIncludesSubmissionCapabilities(t *testing.T) {
 	fs := newSessionFakeState(t)
 	h := newTestCityHandler(t, fs)
