@@ -17,7 +17,8 @@ import (
 // humaHandleAgentList is the Huma-typed handler for GET /v0/agents.
 func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput) (*ListOutput[agentResponse], error) {
 	bp := input.toBlockingParams()
-	if bp.isBlocking() {
+	blocking := bp.isBlocking()
+	if blocking {
 		waitForChange(ctx, s.state.EventProvider(), bp)
 	}
 
@@ -35,12 +36,13 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 	}
 
 	index := s.latestIndex()
+	bucket := responseCacheTimeBucket(time.Now())
 	cacheKey := ""
-	if !wantPeek {
+	if !wantPeek && !blocking {
 		// Cache key derived from input struct tags — adding a new query
 		// param to AgentListInput automatically participates in the key.
 		cacheKey = cacheKeyFor("agents", input)
-		if body, ok := cachedResponseAs[ListBody[agentResponse]](s, cacheKey, index); ok {
+		if body, ok := cachedResponseAs[ListBody[agentResponse]](s, cacheKey, bucket); ok {
 			return &ListOutput[agentResponse]{
 				Index: index,
 				Body:  body,
@@ -166,7 +168,7 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 		PartialErrors: partialErrors,
 	}
 	if cacheKey != "" {
-		s.storeResponse(cacheKey, index, body)
+		s.storeResponse(cacheKey, bucket, body)
 	}
 
 	return &ListOutput[agentResponse]{
