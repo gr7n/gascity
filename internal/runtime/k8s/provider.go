@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,11 @@ import (
 
 // Compile-time interface check.
 var _ runtime.Provider = (*Provider)(nil)
+
+var (
+	k8sNudgeSubmitDebounce  = 500 * time.Millisecond
+	k8sNudgeEnterRetryDelay = 200 * time.Millisecond
+)
 
 // Provider is a native Kubernetes session provider using client-go.
 // Eliminates subprocess overhead by making direct API calls over reused
@@ -358,7 +364,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 
 	// Send initial nudge if configured (matches tmux adapter step 6).
 	if cfg.Nudge != "" {
-		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
+		_ = p.sendStartupNudge(ctx, podName, cfg.Nudge)
 	}
 
 	return nil
@@ -492,13 +498,53 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	ctx := context.Background()
 	podName, err := p.findRunningPod(ctx, name)
 	if err != nil {
-		return nil // best-effort
+		return fmt.Errorf("%w: k8s session %q: %w", runtime.ErrSessionNotFound, name, err)
 	}
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "send-keys", "-t", tmuxSession, "-l", message}, nil)
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "send-keys", "-t", tmuxSession, "Enter"}, nil)
-	return nil
+	p.wakeTmuxPane(ctx, podName)
+	if err := p.execTmux(ctx, podName, []string{"send-keys", "-t", tmuxSession, "-l", message}); err != nil {
+		return fmt.Errorf("nudging k8s session %q with text: %w", name, err)
+	}
+	time.Sleep(k8sNudgeSubmitDebounce)
+	p.wakeTmuxPane(ctx, podName)
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(k8sNudgeEnterRetryDelay)
+		}
+		if err := p.execTmux(ctx, podName, []string{"send-keys", "-t", tmuxSession, "Enter"}); err != nil {
+			lastErr = err
+			continue
+		}
+		p.wakeTmuxPane(ctx, podName)
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("unknown Enter delivery failure")
+	}
+	return fmt.Errorf("submitting k8s session %q: %w", name, lastErr)
+}
+
+func (p *Provider) wakeTmuxPane(ctx context.Context, podName string) {
+	_ = p.execTmux(ctx, podName, []string{"resize-pane", "-t", tmuxSession, "-y", "-1"})
+	time.Sleep(50 * time.Millisecond)
+	_ = p.execTmux(ctx, podName, []string{"resize-pane", "-t", tmuxSession, "-y", "+1"})
+}
+
+func (p *Provider) execTmux(ctx context.Context, podName string, args []string) error {
+	cmd := append([]string{"tmux"}, args...)
+	_, err := p.ops.execInPod(ctx, podName, "agent", cmd, nil)
+	return err
+}
+
+func (p *Provider) sendStartupNudge(ctx context.Context, podName, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return nil
+	}
+	if err := p.execTmux(ctx, podName, []string{"send-keys", "-t", tmuxSession, "-l", message}); err != nil {
+		return err
+	}
+	return p.execTmux(ctx, podName, []string{"send-keys", "-t", tmuxSession, "Enter"})
 }
 
 // SendKeys sends bare keystrokes to the tmux session.
