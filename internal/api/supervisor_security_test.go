@@ -87,6 +87,7 @@ func TestSupervisorHostAllowlistAcceptsLoopbackAndConfiguredHost(t *testing.T) {
 		{"ipv4 loopback", "http://127.0.0.1:8372/v0/cities", nil},
 		{"ipv6 loopback", "http://[::1]:8372/v0/cities", nil},
 		{"configured hostname", "http://thriva-dev:8372/v0/cities", []string{"thriva-dev"}},
+		{"configured private ip", "http://100.96.12.40:8372/v0/cities", []string{"100.96.12.40"}},
 	}
 
 	for _, tc := range cases {
