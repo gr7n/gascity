@@ -13,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/runtime"
+	sessionhybrid "github.com/gastownhall/gascity/internal/runtime/hybrid"
 	sessiont3bridge "github.com/gastownhall/gascity/internal/runtime/t3bridge"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -60,6 +61,90 @@ func TestHybridRemoteMatcherEmptyPatternMatchesNothing(t *testing.T) {
 	match := hybridRemoteMatcher(" , ")
 	if match("k8s-canary") {
 		t.Fatal("empty pattern matched k8s-canary")
+	}
+}
+
+func TestHybridRemoteStartMatcherUsesStartupIdentity(t *testing.T) {
+	match := hybridRemoteStartMatcher("k8s-canary, rig/web-worker")
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{name: "s-gr-7sgzx", env: map[string]string{"GC_TEMPLATE": "k8s-canary"}},
+		{name: "s-gr-7sgzy", env: map[string]string{"GC_AGENT": "rig/web-worker"}},
+		{name: "s-gr-7sgzz", env: map[string]string{"GC_ALIAS": "k8s-canary-overnight"}},
+		{name: "s-gr-7sha0", env: map[string]string{"GC_SESSION_NAME": "rig/web-worker-3"}},
+		{name: "k8s-canary-direct", env: nil},
+	} {
+		if !match(tc.name, runtime.Config{Env: tc.env}) {
+			t.Fatalf("match(%q, %#v) = false, want true", tc.name, tc.env)
+		}
+	}
+
+	if match("s-gr-local", runtime.Config{Env: map[string]string{"GC_TEMPLATE": "reviewer"}}) {
+		t.Fatal("local startup identity matched remote pattern")
+	}
+}
+
+func TestRegisterHybridRemoteRoutesUsesDurableSessionMetadata(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	const sessionName = "s-gr-7sgzx"
+	if err := remote.Start(t.Context(), sessionName, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	hybrid := sessionhybrid.New(local, remote, func(string) bool { return false })
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "gr-7sgzx",
+		Type:   session.BeadType,
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": sessionName,
+			"template":     "k8s-canary",
+			"provider":     "codex",
+			"alias":        "friendly-name-that-should-not-matter",
+		},
+	}})
+
+	registerHybridRemoteRoutes(hybrid, snapshot, "k8s-canary")
+
+	if _, err := hybrid.Peek(sessionName, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", sessionName) != 0 {
+		t.Fatal("Peek routed to local for snapshot-seeded remote session")
+	}
+	if remote.CountCalls("Peek", sessionName) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", sessionName))
+	}
+}
+
+func TestRegisterHybridRemoteRoutesIgnoresAliasOnlyMatch(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	const sessionName = "s-gr-local"
+	hybrid := sessionhybrid.New(local, remote, func(string) bool { return false })
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "gr-local",
+		Type:   session.BeadType,
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": sessionName,
+			"template":     "reviewer",
+			"provider":     "codex",
+			"alias":        "k8s-canary-please",
+		},
+	}})
+
+	registerHybridRemoteRoutes(hybrid, snapshot, "k8s-canary")
+
+	if _, err := hybrid.Peek(sessionName, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", sessionName) != 1 {
+		t.Fatalf("local Peek calls = %d, want 1", local.CountCalls("Peek", sessionName))
+	}
+	if remote.CountCalls("Peek", sessionName) != 0 {
+		t.Fatal("alias-only match routed to remote")
 	}
 }
 

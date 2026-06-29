@@ -213,13 +213,13 @@ func loadProviderSessionSnapshot(ctx sessionProviderContext) *sessionBeadSnapsho
 	}
 	store, err := openSessionProviderStore(ctx.cityPath)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
-	all, err := store.ListByLabel(sessionBeadLabel, 0)
+	snapshot, err := loadSessionBeadSnapshot(store)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
-	return newSessionBeadSnapshot(all)
+	return snapshot
 }
 
 func newSessionProviderFromContext(ctx sessionProviderContext, sessionBeads *sessionBeadSnapshot) runtime.Provider {
@@ -236,6 +236,7 @@ func newSessionProviderFromContextWithError(ctx sessionProviderContext, sessionB
 	if err != nil {
 		return nil, err
 	}
+	registerHybridRemoteRoutes(sp, sessionBeads, hybridRemotePattern(ctx.sc))
 	// If the city-level provider is not ACP but some agents need ACP,
 	// wrap in an auto provider that routes per-session.
 	// NOTE: agents comes from loadCityConfig which applies pack overrides,
@@ -256,6 +257,41 @@ func newSessionProviderFromContextWithError(ctx sessionProviderContext, sessionB
 		return autoSP, nil
 	}
 	return sp, nil
+}
+
+func registerHybridRemoteRoutes(sp runtime.Provider, snapshot *sessionBeadSnapshot, pattern string) {
+	router, ok := sp.(interface{ RouteRemote(string) })
+	if !ok || snapshot == nil {
+		return
+	}
+	match := hybridRemoteMatcher(pattern)
+	for _, bead := range snapshot.Open() {
+		sessionName := strings.TrimSpace(bead.Metadata["session_name"])
+		if sessionName == "" || !beadMatchesHybridRemoteRoute(bead, match) {
+			continue
+		}
+		router.RouteRemote(sessionName)
+	}
+}
+
+func beadMatchesHybridRemoteRoute(bead beads.Bead, match func(string) bool) bool {
+	meta := bead.Metadata
+	for _, candidate := range []string{
+		meta["session_name"],
+		meta["template"],
+		meta["provider"],
+		session.ProviderFamilyFromMetadata(meta, ""),
+		meta["provider_kind"],
+		meta["builtin_ancestor"],
+		meta["agent_name"],
+		meta["configured_named_identity"],
+		meta["common_name"],
+	} {
+		if match(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentSessionCreateTransport(cfg *config.City, agentCfg config.Agent) string {
@@ -958,11 +994,16 @@ func newHybridProvider(sc config.SessionConfig, cityName, cityPath string) (runt
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: k8s backend: %w", err)
 	}
+	pattern := hybridRemotePattern(sc)
+	return sessionhybrid.NewWithStartMatcher(local, remote, hybridRemoteMatcher(pattern), hybridRemoteStartMatcher(pattern)), nil
+}
+
+func hybridRemotePattern(sc config.SessionConfig) string {
 	pattern := sc.RemoteMatch
 	if v := os.Getenv("GC_HYBRID_REMOTE_MATCH"); v != "" {
 		pattern = v
 	}
-	return sessionhybrid.New(local, remote, hybridRemoteMatcher(pattern)), nil
+	return pattern
 }
 
 func hybridRemoteMatcher(pattern string) func(string) bool {
@@ -980,6 +1021,21 @@ func hybridRemoteMatcher(pattern string) func(string) bool {
 		}
 		for _, fragment := range fragments {
 			if name == fragment || strings.Contains(name, fragment) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func hybridRemoteStartMatcher(pattern string) func(string, runtime.Config) bool {
+	match := hybridRemoteMatcher(pattern)
+	return func(name string, cfg runtime.Config) bool {
+		if match(name) {
+			return true
+		}
+		for _, key := range []string{"GC_TEMPLATE", "GC_AGENT", "GC_ALIAS", "GC_SESSION_NAME"} {
+			if match(strings.TrimSpace(cfg.Env[key])) {
 				return true
 			}
 		}
