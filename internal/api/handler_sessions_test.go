@@ -4683,6 +4683,25 @@ func TestHandleSessionMessageQueuesSuspendedSessionMessage(t *testing.T) {
 	}
 }
 
+func TestHandleSessionMessageRejectsWhenEventsUnavailable(t *testing.T) {
+	fs := newSessionFakeState(t)
+	h := newTestCityHandler(t, fs)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Message Me")
+	fs.eventProv = nil
+
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/messages", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("message status = %d, want %d; body: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no_event_provider") {
+		t.Fatalf("body = %s, want no_event_provider detail", rec.Body.String())
+	}
+}
+
 func TestHandleSessionMessageMaterializesNamedSessionAsync(t *testing.T) {
 	fs := newSessionFakeState(t)
 	srv := New(fs)

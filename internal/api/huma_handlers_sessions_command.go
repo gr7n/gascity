@@ -572,8 +572,11 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 	if reqIDErr != nil {
 		return nil, huma.Error500InternalServerError(reqIDErr.Error())
 	}
-	eventCursor, cursorErr := s.currentCityEventCursor()
+	eventCursor, cursorErr := s.requiredCityEventCursor()
 	if cursorErr != nil {
+		if errors.Is(cursorErr, errNoCityEventProvider) {
+			return nil, huma.Error503ServiceUnavailable("no_event_provider: session.submit requires city events so async results are observable")
+		}
 		return nil, huma.Error500InternalServerError(cursorErr.Error())
 	}
 	message := input.Body.Message
@@ -676,8 +679,11 @@ func (s *Server) humaHandleSessionMessage(_ context.Context, input *SessionMessa
 	if reqIDErr != nil {
 		return nil, huma.Error500InternalServerError(reqIDErr.Error())
 	}
-	eventCursor, cursorErr := s.currentCityEventCursor()
+	eventCursor, cursorErr := s.requiredCityEventCursor()
 	if cursorErr != nil {
+		if errors.Is(cursorErr, errNoCityEventProvider) {
+			return nil, huma.Error503ServiceUnavailable("no_event_provider: session.message requires city events so async results are observable")
+		}
 		return nil, huma.Error500InternalServerError(cursorErr.Error())
 	}
 	message := input.Body.Message

@@ -4,12 +4,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
 
 	"github.com/gastownhall/gascity/internal/events"
 )
+
+var errNoCityEventProvider = errors.New("no city event provider configured")
 
 func newRequestID() (string, error) {
 	b := make([]byte, 12)
@@ -23,6 +26,18 @@ func (s *Server) currentCityEventCursor() (string, error) {
 	ep := s.state.EventProvider()
 	if ep == nil {
 		return "0", nil
+	}
+	seq, err := ep.LatestSeq()
+	if err != nil {
+		return "", fmt.Errorf("capturing city event cursor: %w", err)
+	}
+	return strconv.FormatUint(seq, 10), nil
+}
+
+func (s *Server) requiredCityEventCursor() (string, error) {
+	ep := s.state.EventProvider()
+	if ep == nil {
+		return "", errNoCityEventProvider
 	}
 	seq, err := ep.LatestSeq()
 	if err != nil {

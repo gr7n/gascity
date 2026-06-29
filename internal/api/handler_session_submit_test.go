@@ -53,6 +53,25 @@ func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	}
 }
 
+func TestHandleSessionSubmitRejectsWhenEventsUnavailable(t *testing.T) {
+	fs := newSessionFakeState(t)
+	h := newTestCityHandler(t, fs)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Submit Me")
+	fs.eventProv = nil
+
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("submit status = %d, want %d; body: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no_event_provider") {
+		t.Fatalf("body = %s, want no_event_provider detail", rec.Body.String())
+	}
+}
+
 func TestSessionCreateCommandableTimeoutAllowsSlowInteractiveStartup(t *testing.T) {
 	if sessionCreateCommandableTimeout < 5*time.Minute {
 		t.Fatalf("sessionCreateCommandableTimeout = %s, want at least 5m for slow provider startup", sessionCreateCommandableTimeout)
