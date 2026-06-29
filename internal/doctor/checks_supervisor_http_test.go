@@ -21,6 +21,16 @@ func (m *mockHTTPDoer) Do(*http.Request) (*http.Response, error) {
 	return m.resp, m.err
 }
 
+type captureHTTPDoer struct {
+	resp *http.Response
+	url  string
+}
+
+func (c *captureHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	c.url = req.URL.String()
+	return c.resp, nil
+}
+
 func httpOKResponse() *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -38,7 +48,11 @@ func httpStatusResponse(code int) *http.Response {
 // makeSupervisorHTTPCheck builds a SupervisorHTTPCheck with injected config
 // loader and HTTP client. port=0 exercises the PortOrDefault() path (returns 8372).
 func makeSupervisorHTTPCheck(supervisorRunning bool, port int, doer httpDoer) *SupervisorHTTPCheck {
-	cfg := supervisor.Config{Supervisor: supervisor.Section{Port: port}}
+	return makeSupervisorHTTPCheckWithBind(supervisorRunning, "", port, doer)
+}
+
+func makeSupervisorHTTPCheckWithBind(supervisorRunning bool, bind string, port int, doer httpDoer) *SupervisorHTTPCheck {
+	cfg := supervisor.Config{Supervisor: supervisor.Section{Bind: bind, Port: port}}
 	return &SupervisorHTTPCheck{
 		supervisorRunning: supervisorRunning,
 		loadConfig:        func(_ string) (supervisor.Config, error) { return cfg, nil },
@@ -91,7 +105,7 @@ func TestSupervisorHTTPCheck_OKReachableOnConfiguredPort(t *testing.T) {
 	if r.Status != StatusOK {
 		t.Fatalf("status = %d, want OK; msg = %s", r.Status, r.Message)
 	}
-	want := fmt.Sprintf("supervisor socket OK, HTTP API reachable on port %d", port)
+	want := fmt.Sprintf("supervisor socket OK, HTTP API reachable at 127.0.0.1:%d", port)
 	if r.Message != want {
 		t.Errorf("message = %q, want %q", r.Message, want)
 	}
@@ -106,9 +120,33 @@ func TestSupervisorHTTPCheck_OKReachableUsesPortOrDefault(t *testing.T) {
 	if r.Status != StatusOK {
 		t.Fatalf("status = %d, want OK; msg = %s", r.Status, r.Message)
 	}
-	want := fmt.Sprintf("supervisor socket OK, HTTP API reachable on port %d", 8372)
+	want := fmt.Sprintf("supervisor socket OK, HTTP API reachable at 127.0.0.1:%d", 8372)
 	if r.Message != want {
 		t.Errorf("message = %q, want %q", r.Message, want)
+	}
+}
+
+func TestSupervisorHTTPCheck_DialsConfiguredBind(t *testing.T) {
+	doer := &captureHTTPDoer{resp: httpOKResponse()}
+	c := makeSupervisorHTTPCheckWithBind(true, "100.96.12.40", 8372, doer)
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusOK {
+		t.Fatalf("status = %d, want OK; msg = %s", r.Status, r.Message)
+	}
+	if doer.url != "http://100.96.12.40:8372/v0/cities" {
+		t.Errorf("url = %q, want configured bind URL", doer.url)
+	}
+}
+
+func TestSupervisorHTTPCheck_NormalizesWildcardBind(t *testing.T) {
+	doer := &captureHTTPDoer{resp: httpOKResponse()}
+	c := makeSupervisorHTTPCheckWithBind(true, "0.0.0.0", 8372, doer)
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusOK {
+		t.Fatalf("status = %d, want OK; msg = %s", r.Status, r.Message)
+	}
+	if doer.url != "http://127.0.0.1:8372/v0/cities" {
+		t.Errorf("url = %q, want loopback-normalized URL", doer.url)
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -64,12 +66,15 @@ func (c *SupervisorHTTPCheck) Run(_ *CheckContext) *CheckResult {
 		return r
 	}
 	port := cfg.Supervisor.PortOrDefault()
+	bind := supervisorHTTPDialBind(cfg.Supervisor.BindOrDefault())
+	addr := net.JoinHostPort(bind, strconv.Itoa(port))
+	url := fmt.Sprintf("http://%s/v0/cities", addr)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		fmt.Sprintf("http://127.0.0.1:%d/v0/cities", port), nil)
+		url, nil)
 	if err != nil {
 		r.Status = StatusError
-		r.Message = fmt.Sprintf("supervisor HTTP API on port %d: %v", port, err)
+		r.Message = fmt.Sprintf("supervisor HTTP API at %s: %v", addr, err)
 		return r
 	}
 
@@ -77,29 +82,40 @@ func (c *SupervisorHTTPCheck) Run(_ *CheckContext) *CheckResult {
 	if err != nil {
 		if isConnectionRefused(err) {
 			r.Status = StatusError
-			r.Message = fmt.Sprintf("supervisor HTTP API on port %d: connection refused", port)
+			r.Message = fmt.Sprintf("supervisor HTTP API at %s: connection refused", addr)
 			return r
 		}
 		if isTimeout(err) {
 			r.Status = StatusError
-			r.Message = fmt.Sprintf("supervisor HTTP API on port %d: timeout", port)
+			r.Message = fmt.Sprintf("supervisor HTTP API at %s: timeout", addr)
 			return r
 		}
 		r.Status = StatusError
-		r.Message = fmt.Sprintf("supervisor HTTP API on port %d: %v", port, err)
+		r.Message = fmt.Sprintf("supervisor HTTP API at %s: %v", addr, err)
 		return r
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort body close
 
 	if resp.StatusCode/100 != 2 {
 		r.Status = StatusError
-		r.Message = fmt.Sprintf("supervisor HTTP API on port %d: non-2xx HTTP %d", port, resp.StatusCode)
+		r.Message = fmt.Sprintf("supervisor HTTP API at %s: non-2xx HTTP %d", addr, resp.StatusCode)
 		return r
 	}
 
 	r.Status = StatusOK
-	r.Message = fmt.Sprintf("supervisor socket OK, HTTP API reachable on port %d", port)
+	r.Message = fmt.Sprintf("supervisor socket OK, HTTP API reachable at %s", addr)
 	return r
+}
+
+func supervisorHTTPDialBind(bind string) string {
+	switch bind {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::", "[::]":
+		return "::1"
+	default:
+		return bind
+	}
 }
 
 func isConnectionRefused(err error) bool {
