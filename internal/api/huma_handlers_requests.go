@@ -32,16 +32,6 @@ var asyncRequestOperationByEventType = map[string]string{
 	events.RequestFailed:               "",
 }
 
-var asyncRequestEventTypes = []string{
-	events.RequestProgress,
-	events.RequestResultCityCreate,
-	events.RequestResultCityUnregister,
-	events.RequestResultSessionCreate,
-	events.RequestResultSessionMessage,
-	events.RequestResultSessionSubmit,
-	events.RequestFailed,
-}
-
 // humaHandleRequestStatus is the Huma-typed handler for
 // GET /v0/city/{cityName}/request/{id}. It gives polling clients a durable
 // fallback for async operation results when an SSE frame is missed.
@@ -107,7 +97,7 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		Status:    requestStatusPending,
 	}
 
-	evts, err := listAsyncRequestStatusEvents(ep, afterSeq)
+	evts, err := listAsyncRequestStatusEvents(ep, requestID, afterSeq)
 	if err != nil {
 		return result, fmt.Errorf("list events: %w", err)
 	}
@@ -158,8 +148,14 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 	return result, nil
 }
 
-func listAsyncRequestStatusEvents(ep events.Provider, afterSeq uint64) ([]events.Event, error) {
-	filter := events.Filter{AfterSeq: afterSeq, Types: asyncRequestEventTypes}
+func listAsyncRequestStatusEvents(ep events.Provider, requestID string, afterSeq uint64) ([]events.Event, error) {
+	if requestLookup, ok := ep.(events.RequestEventProvider); ok {
+		evts, err := requestLookup.ListRequestEvents(requestID, afterSeq)
+		if err == nil {
+			return evts, nil
+		}
+	}
+	filter := events.Filter{AfterSeq: afterSeq, Types: events.RequestEventTypes}
 	if afterSeq == 0 {
 		if tail, ok := ep.(events.TailProvider); ok {
 			return tail.ListTail(filter, requestStatusTailScanLimit)
@@ -222,7 +218,7 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 	}
 
 	cursors := events.ParseCursor(strings.TrimSpace(afterCursor))
-	evts, err := listSupervisorAsyncRequestStatusEvents(mux, cursors)
+	evts, err := listSupervisorAsyncRequestStatusEvents(mux, requestID, cursors)
 	if err != nil {
 		return result, fmt.Errorf("list supervisor events: %w", err)
 	}
@@ -274,12 +270,12 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 	return result, nil
 }
 
-func listSupervisorAsyncRequestStatusEvents(mux *events.Multiplexer, cursors map[string]uint64) ([]events.TaggedEvent, error) {
-	filter := events.Filter{Types: asyncRequestEventTypes}
+func listSupervisorAsyncRequestStatusEvents(mux *events.Multiplexer, requestID string, cursors map[string]uint64) ([]events.TaggedEvent, error) {
+	filter := events.Filter{Types: events.RequestEventTypes}
 	if len(cursors) == 0 {
 		return mux.ListTail(filter, requestStatusTailScanLimit)
 	}
-	return mux.ListAfterCursor(cursors, filter)
+	return mux.ListRequestEventsAfterCursor(requestID, cursors, filter)
 }
 
 func supervisorRequestStatusFromEvent(event events.TaggedEvent, requestID string) (SupervisorRequestStatus, bool, error) {

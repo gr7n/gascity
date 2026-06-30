@@ -266,6 +266,41 @@ func TestRequestStatusUsesBoundedTailWithoutAfterSeq(t *testing.T) {
 	}
 }
 
+func TestRequestStatusPrefersRequestEventProvider(t *testing.T) {
+	state := newFakeState(t)
+	ep := state.eventProv.(*events.Fake)
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-indexed",
+		SessionID: "director",
+		Queued:    true,
+		Intent:    "default",
+	})
+	recorder := &indexedRecordingEventProvider{recordingEventProvider: &recordingEventProvider{Provider: ep}}
+	state.eventProv = recorder
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/request/req-indexed?after_seq=0"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp RequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != requestStatusSucceeded || resp.Event == nil {
+		t.Fatalf("response = %#v, want indexed success", resp)
+	}
+	if len(recorder.requestLookups) != 1 || recorder.requestLookups[0].requestID != "req-indexed" {
+		t.Fatalf("request lookups = %#v, want req-indexed lookup", recorder.requestLookups)
+	}
+	if len(recorder.filters) != 0 || len(recorder.tailFilters) != 0 {
+		t.Fatalf("request status fell back to general scans: filters=%#v tail=%#v", recorder.filters, recorder.tailFilters)
+	}
+}
+
 func TestRequestStatusKeepsAfterSeqOnFullList(t *testing.T) {
 	state := newFakeState(t)
 	ep := state.eventProv.(*events.Fake)
@@ -444,4 +479,34 @@ func (p *recordingEventProvider) allFilters() []events.Filter {
 	filters = append(filters, p.filters...)
 	filters = append(filters, p.tailFilters...)
 	return filters
+}
+
+type indexedRecordingEventProvider struct {
+	*recordingEventProvider
+	requestLookups []requestLookup
+	requestErr     error
+}
+
+type requestLookup struct {
+	requestID string
+	afterSeq  uint64
+}
+
+func (p *indexedRecordingEventProvider) ListRequestEvents(requestID string, afterSeq uint64) ([]events.Event, error) {
+	p.requestLookups = append(p.requestLookups, requestLookup{requestID: requestID, afterSeq: afterSeq})
+	if p.requestErr != nil {
+		return nil, p.requestErr
+	}
+	evts, err := p.Provider.List(events.Filter{AfterSeq: afterSeq, Types: events.RequestEventTypes})
+	if err != nil {
+		return nil, err
+	}
+	var matches []events.Event
+	for _, event := range evts {
+		eventRequestID, ok := events.RequestIDFromEvent(event)
+		if ok && eventRequestID == requestID {
+			matches = append(matches, event)
+		}
+	}
+	return matches, nil
 }

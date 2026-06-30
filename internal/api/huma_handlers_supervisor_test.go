@@ -592,6 +592,44 @@ func TestSupervisorRequestStatusReadsCityProviderResults(t *testing.T) {
 	}
 }
 
+func TestSupervisorRequestStatusPrefersRequestEventProvider(t *testing.T) {
+	state := newFakeState(t)
+	state.cityName = "alpha"
+	ep := state.eventProv.(*events.Fake)
+	ep.Record(events.Event{Type: events.SessionWoke, Actor: "seed"})
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-submit",
+		SessionID: "director",
+		Queued:    false,
+		Intent:    "default",
+	})
+	recorder := &indexedRecordingEventProvider{recordingEventProvider: &recordingEventProvider{Provider: ep}}
+	state.eventProv = recorder
+
+	sm := newTestSupervisorMux(t, map[string]*fakeState{"alpha": state})
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-submit?after_cursor=alpha:1", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.Status != requestStatusSucceeded || resp.Event == nil || resp.Event.City != "alpha" {
+		t.Fatalf("response = %+v, want alpha indexed session.submit success", resp)
+	}
+	if len(recorder.requestLookups) != 1 || recorder.requestLookups[0].requestID != "req-submit" || recorder.requestLookups[0].afterSeq != 1 {
+		t.Fatalf("request lookups = %#v, want alpha req-submit after seq 1", recorder.requestLookups)
+	}
+	if len(recorder.filters) != 0 || len(recorder.tailFilters) != 0 {
+		t.Fatalf("supervisor request status fell back to general scans: filters=%#v tail=%#v", recorder.filters, recorder.tailFilters)
+	}
+}
+
 func TestSupervisorRequestStatusUsesBoundedTailWithoutCursor(t *testing.T) {
 	state := newFakeState(t)
 	state.cityName = "alpha"
