@@ -3035,6 +3035,7 @@ type SessionResponse struct {
 	AgentKind              *string                 `json:"agent_kind,omitempty"`
 	Alias                  *string                 `json:"alias,omitempty"`
 	Attached               bool                    `json:"attached"`
+	ChatVisible            *bool                   `json:"chat_visible,omitempty"`
 	ConfiguredNamedSession *bool                   `json:"configured_named_session,omitempty"`
 	ContextPct             *int64                  `json:"context_pct,omitempty"`
 	ContextWindow          *int64                  `json:"context_window,omitempty"`
@@ -3047,6 +3048,8 @@ type SessionResponse struct {
 	LastOutput             *string                 `json:"last_output,omitempty"`
 	Metadata               *map[string]string      `json:"metadata,omitempty"`
 	Model                  *string                 `json:"model,omitempty"`
+	OperatorVisibility     *string                 `json:"operator_visibility,omitempty"`
+	OperatorVisible        *bool                   `json:"operator_visible,omitempty"`
 	Options                *map[string]string      `json:"options,omitempty"`
 	Pool                   *string                 `json:"pool,omitempty"`
 	Provider               string                  `json:"provider"`
@@ -3327,11 +3330,20 @@ type StatusMailCounts struct {
 
 // StatusNamedSessionDetail defines model for StatusNamedSessionDetail.
 type StatusNamedSessionDetail struct {
+	// ChatVisible Whether this named session should be offered as a direct human chat target.
+	ChatVisible bool `json:"chat_visible"`
+
 	// Identity Qualified named-session identity.
 	Identity string `json:"identity"`
 
 	// Mode Named-session mode (on-demand, always, etc.).
 	Mode string `json:"mode"`
+
+	// OperatorVisibility Operator-facing visibility: operator, background, or internal.
+	OperatorVisibility string `json:"operator_visibility"`
+
+	// OperatorVisible Whether operator UIs should show this named session as an ordinary human-facing lane.
+	OperatorVisible bool `json:"operator_visible"`
 
 	// Status Lifecycle status string (materialized, reserved-unmaterialized, etc.).
 	Status string `json:"status"`

@@ -6741,6 +6741,9 @@
           "attached": {
             "type": "boolean"
           },
+          "chat_visible": {
+            "type": "boolean"
+          },
           "configured_named_session": {
             "type": "boolean"
           },
@@ -6781,6 +6784,12 @@
           },
           "model": {
             "type": "string"
+          },
+          "operator_visibility": {
+            "type": "string"
+          },
+          "operator_visible": {
+            "type": "boolean"
           },
           "options": {
             "additionalProperties": {
@@ -7456,6 +7465,10 @@
       "StatusNamedSessionDetail": {
         "additionalProperties": false,
         "properties": {
+          "chat_visible": {
+            "description": "Whether this named session should be offered as a direct human chat target.",
+            "type": "boolean"
+          },
           "identity": {
             "description": "Qualified named-session identity.",
             "type": "string"
@@ -7463,6 +7476,14 @@
           "mode": {
             "description": "Named-session mode (on-demand, always, etc.).",
             "type": "string"
+          },
+          "operator_visibility": {
+            "description": "Operator-facing visibility: operator, background, or internal.",
+            "type": "string"
+          },
+          "operator_visible": {
+            "description": "Whether operator UIs should show this named session as an ordinary human-facing lane.",
+            "type": "boolean"
           },
           "status": {
             "description": "Lifecycle status string (materialized, reserved-unmaterialized, etc.).",
@@ -7472,7 +7493,10 @@
         "required": [
           "identity",
           "status",
-          "mode"
+          "mode",
+          "operator_visibility",
+          "operator_visible",
+          "chat_visible"
         ],
         "type": "object"
       },

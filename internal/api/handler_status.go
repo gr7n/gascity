@@ -272,9 +272,12 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 		mode := ns.ModeOrDefault()
 		status := s.namedSessionStatus(cfg, sessionSnapshot, cityName, identity, mode, suspendedRigs)
 		namedSessionDetails = append(namedSessionDetails, StatusNamedSessionDetail{
-			Identity: identity,
-			Status:   status,
-			Mode:     mode,
+			Identity:           identity,
+			Status:             status,
+			Mode:               mode,
+			OperatorVisibility: ns.OperatorVisibilityOrDefault(),
+			OperatorVisible:    ns.OperatorVisible(),
+			ChatVisible:        ns.ChatVisible(),
 		})
 	}
 

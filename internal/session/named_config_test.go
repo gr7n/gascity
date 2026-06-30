@@ -71,6 +71,33 @@ func TestNamedSessionContinuityEligible_ArchivedRequiresExplicitContinuity(t *te
 	}
 }
 
+func TestFindNamedSessionSpecCarriesOperatorVisibility(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name: "worker",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template:           "worker",
+			OperatorVisibility: "background",
+		}},
+	}
+
+	spec, ok := FindNamedSessionSpec(cfg, "test-city", "worker")
+	if !ok {
+		t.Fatal("FindNamedSessionSpec(worker) = false")
+	}
+	if spec.OperatorVisibility != config.NamedSessionOperatorVisibilityBackground {
+		t.Fatalf("OperatorVisibility = %q, want background", spec.OperatorVisibility)
+	}
+	if spec.OperatorVisible {
+		t.Fatal("OperatorVisible = true, want false")
+	}
+	if spec.ChatVisible {
+		t.Fatal("ChatVisible = true, want false")
+	}
+}
+
 func TestFindCanonicalNamedSessionBead_SkipsFailedCreate(t *testing.T) {
 	spec := NamedSessionSpec{
 		Identity:    "mayor",

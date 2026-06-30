@@ -1101,9 +1101,13 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				meta["wake_mode"] = tp.WakeMode
 			}
 			if isConfiguredNamed {
+				operatorVisibility, operatorVisible, chatVisible := namedSessionOperatorVisibilityForTemplateParams(tp)
 				meta[namedSessionMetadataKey] = boolMetadata(true)
 				meta[namedSessionIdentityMetadata] = tp.ConfiguredNamedIdentity
 				meta[namedSessionModeMetadata] = tp.ConfiguredNamedMode
+				meta[namedSessionOperatorVisibilityKey] = operatorVisibility
+				meta[namedSessionOperatorVisibleKey] = boolMetadata(operatorVisible)
+				meta[namedSessionChatVisibleKey] = boolMetadata(chatVisible)
 			}
 			// Store the qualified template name so the API can derive the
 			// rig from it (e.g., "tower-of-hanoi/polecat" not just "polecat").
@@ -1327,6 +1331,7 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			queueMeta("dependency_only", boolMetadata(tp.DependencyOnly))
 		}
 		if isConfiguredNamed {
+			operatorVisibility, operatorVisible, chatVisible := namedSessionOperatorVisibilityForTemplateParams(tp)
 			if b.Metadata[namedSessionMetadataKey] != boolMetadata(true) {
 				queueMeta(namedSessionMetadataKey, boolMetadata(true))
 			}
@@ -1335,6 +1340,15 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			}
 			if b.Metadata[namedSessionModeMetadata] != tp.ConfiguredNamedMode {
 				queueMeta(namedSessionModeMetadata, tp.ConfiguredNamedMode)
+			}
+			if b.Metadata[namedSessionOperatorVisibilityKey] != operatorVisibility {
+				queueMeta(namedSessionOperatorVisibilityKey, operatorVisibility)
+			}
+			if b.Metadata[namedSessionOperatorVisibleKey] != boolMetadata(operatorVisible) {
+				queueMeta(namedSessionOperatorVisibleKey, boolMetadata(operatorVisible))
+			}
+			if b.Metadata[namedSessionChatVisibleKey] != boolMetadata(chatVisible) {
+				queueMeta(namedSessionChatVisibleKey, boolMetadata(chatVisible))
 			}
 		} else {
 			if b.Metadata[namedSessionMetadataKey] != "" {
@@ -1345,6 +1359,15 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			}
 			if b.Metadata[namedSessionModeMetadata] != "" {
 				queueMeta(namedSessionModeMetadata, "")
+			}
+			if b.Metadata[namedSessionOperatorVisibilityKey] != "" {
+				queueMeta(namedSessionOperatorVisibilityKey, "")
+			}
+			if b.Metadata[namedSessionOperatorVisibleKey] != "" {
+				queueMeta(namedSessionOperatorVisibleKey, "")
+			}
+			if b.Metadata[namedSessionChatVisibleKey] != "" {
+				queueMeta(namedSessionChatVisibleKey, "")
 			}
 		}
 		if b.Metadata["wake_mode"] != tp.WakeMode {

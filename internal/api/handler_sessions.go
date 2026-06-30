@@ -66,6 +66,15 @@ type sessionResponse struct {
 	// ConfiguredNamedSession marks canonical singleton sessions materialized from
 	// [[named_session]] configuration.
 	ConfiguredNamedSession bool `json:"configured_named_session,omitempty"`
+	// OperatorVisibility is the configured operator-facing visibility for a
+	// named session. Empty on ordinary sessions.
+	OperatorVisibility string `json:"operator_visibility,omitempty"`
+	// OperatorVisible reports whether operator UIs should show this named
+	// session as an ordinary human-facing lane. Nil on ordinary sessions.
+	OperatorVisible *bool `json:"operator_visible,omitempty"`
+	// ChatVisible reports whether this named session should be offered as a
+	// direct human chat target. Nil on ordinary sessions.
+	ChatVisible *bool `json:"chat_visible,omitempty"`
 
 	// Options contains the effective per-session option overrides from
 	// template_overrides bead metadata (e.g., {"permission_mode":"unrestricted"}).
@@ -175,11 +184,74 @@ func sessionResponseWithReason(info session.Info, b *beads.Bead, cfg *config.Cit
 	}
 	r.Reason = session.LifecycleDisplayReasonWithLiveness(b.Status, b.Metadata, time.Now().UTC(), info.SessionName, isRunning)
 	r.ConfiguredNamedSession = strings.TrimSpace(b.Metadata[apiNamedSessionMetadataKey]) == "true"
+	applyNamedSessionOperatorProjection(&r, b, cfg)
 	r.SubmissionCapabilities = session.SubmissionCapabilitiesForMetadata(b.Metadata, hasDeferredQueue)
 	// Expose only real_world_app_* prefixed metadata keys to API consumers.
 	// Internal fields (session_key, command, work_dir, etc.) are redacted.
 	r.Metadata = filterMetadata(b.Metadata)
 	return r
+}
+
+func applyNamedSessionOperatorProjection(r *sessionResponse, b *beads.Bead, cfg *config.City) {
+	if r == nil || b == nil || !r.ConfiguredNamedSession {
+		return
+	}
+	visibility := strings.ToLower(strings.TrimSpace(b.Metadata[apiNamedSessionOperatorVisibilityKey]))
+	operatorVisible, chatVisible := operatorVisibilityBooleans(visibility)
+
+	identity := strings.TrimSpace(b.Metadata[apiNamedSessionIdentityKey])
+	if cfg != nil && identity != "" {
+		if named := config.FindNamedSession(cfg, identity); named != nil {
+			visibility = named.OperatorVisibilityOrDefault()
+			operatorVisible = named.OperatorVisible()
+			chatVisible = named.ChatVisible()
+		}
+	}
+	visibility = normalizeNamedSessionOperatorVisibility(visibility)
+	if raw := strings.TrimSpace(b.Metadata[apiNamedSessionOperatorVisibleKey]); raw != "" {
+		operatorVisible = parseBoolMetadata(raw, operatorVisible)
+	}
+	if raw := strings.TrimSpace(b.Metadata[apiNamedSessionChatVisibleKey]); raw != "" {
+		chatVisible = parseBoolMetadata(raw, chatVisible)
+	}
+	r.OperatorVisibility = visibility
+	r.OperatorVisible = boolPtr(operatorVisible)
+	r.ChatVisible = boolPtr(chatVisible)
+}
+
+func normalizeNamedSessionOperatorVisibility(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case config.NamedSessionOperatorVisibilityBackground:
+		return config.NamedSessionOperatorVisibilityBackground
+	case config.NamedSessionOperatorVisibilityInternal:
+		return config.NamedSessionOperatorVisibilityInternal
+	default:
+		return config.NamedSessionOperatorVisibilityOperator
+	}
+}
+
+func operatorVisibilityBooleans(visibility string) (bool, bool) {
+	switch normalizeNamedSessionOperatorVisibility(visibility) {
+	case config.NamedSessionOperatorVisibilityBackground, config.NamedSessionOperatorVisibilityInternal:
+		return false, false
+	default:
+		return true, true
+	}
+}
+
+func parseBoolMetadata(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 // filterMetadataAllowedKeys lists non-real_world_app_ metadata keys that are safe to expose.

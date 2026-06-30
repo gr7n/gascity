@@ -4167,6 +4167,7 @@ export interface components {
             agent_kind?: string;
             alias?: string;
             attached: boolean;
+            chat_visible?: boolean;
             configured_named_session?: boolean;
             /** Format: int64 */
             context_pct?: number;
@@ -4183,6 +4184,8 @@ export interface components {
                 [key: string]: string;
             };
             model?: string;
+            operator_visibility?: string;
+            operator_visible?: boolean;
             options?: {
                 [key: string]: string;
             };
@@ -4431,10 +4434,16 @@ export interface components {
             unread: number;
         };
         StatusNamedSessionDetail: {
+            /** @description Whether this named session should be offered as a direct human chat target. */
+            chat_visible: boolean;
             /** @description Qualified named-session identity. */
             identity: string;
             /** @description Named-session mode (on-demand, always, etc.). */
             mode: string;
+            /** @description Operator-facing visibility: operator, background, or internal. */
+            operator_visibility: string;
+            /** @description Whether operator UIs should show this named session as an ordinary human-facing lane. */
+            operator_visible: boolean;
             /** @description Lifecycle status string (materialized, reserved-unmaterialized, etc.). */
             status: string;
         };

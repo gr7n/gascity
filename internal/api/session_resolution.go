@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,10 +18,13 @@ import (
 )
 
 const (
-	apiTemplateTargetPrefix    = "template:"
-	apiNamedSessionMetadataKey = session.NamedSessionMetadataKey
-	apiNamedSessionIdentityKey = session.NamedSessionIdentityMetadata
-	apiNamedSessionModeKey     = session.NamedSessionModeMetadata
+	apiTemplateTargetPrefix              = "template:"
+	apiNamedSessionMetadataKey           = session.NamedSessionMetadataKey
+	apiNamedSessionIdentityKey           = session.NamedSessionIdentityMetadata
+	apiNamedSessionModeKey               = session.NamedSessionModeMetadata
+	apiNamedSessionOperatorVisibilityKey = session.NamedSessionOperatorVisibilityMetadata
+	apiNamedSessionOperatorVisibleKey    = session.NamedSessionOperatorVisibleMetadata
+	apiNamedSessionChatVisibleKey        = session.NamedSessionChatVisibleMetadata
 )
 
 var (
@@ -314,10 +318,13 @@ func (s *Server) materializeNamedSessionWithContext(ctx context.Context, store b
 	}
 	mgr := s.sessionManager(store)
 	extraMeta := map[string]string{
-		apiNamedSessionMetadataKey: "true",
-		apiNamedSessionIdentityKey: spec.Identity,
-		apiNamedSessionModeKey:     spec.Mode,
-		"session_origin":           "named",
+		apiNamedSessionMetadataKey:           "true",
+		apiNamedSessionIdentityKey:           spec.Identity,
+		apiNamedSessionModeKey:               spec.Mode,
+		apiNamedSessionOperatorVisibilityKey: normalizeNamedSessionOperatorVisibility(spec.OperatorVisibility),
+		apiNamedSessionOperatorVisibleKey:    strconv.FormatBool(spec.OperatorVisible),
+		apiNamedSessionChatVisibleKey:        strconv.FormatBool(spec.ChatVisible),
+		"session_origin":                     "named",
 	}
 	if family := apiResolvedProviderFamilyMetadata(resolved); family != "" {
 		extraMeta["provider_kind"] = family

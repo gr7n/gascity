@@ -4987,8 +4987,9 @@ func TestResolveSessionIDMaterializingNamedWithContext_RollsBackCanceledCreate(t
 	}
 }
 
-func TestHandleSessionGetIncludesConfiguredNamedSessionFlag(t *testing.T) {
+func TestHandleSessionGetIncludesConfiguredNamedSessionOperatorVisibility(t *testing.T) {
 	fs := newSessionFakeState(t)
+	fs.cfg.NamedSessions[0].OperatorVisibility = config.NamedSessionOperatorVisibilityBackground
 	srv := New(fs)
 	h := newTestCityHandlerWith(t, fs, srv)
 	_ = h
@@ -5019,6 +5020,34 @@ func TestHandleSessionGetIncludesConfiguredNamedSessionFlag(t *testing.T) {
 	}
 	if !resp.ConfiguredNamedSession {
 		t.Fatal("ConfiguredNamedSession = false, want true")
+	}
+	if resp.OperatorVisibility != config.NamedSessionOperatorVisibilityBackground {
+		t.Fatalf("OperatorVisibility = %q, want background", resp.OperatorVisibility)
+	}
+	if resp.OperatorVisible == nil {
+		t.Fatal("OperatorVisible = nil, want false pointer")
+	}
+	if *resp.OperatorVisible {
+		t.Fatal("OperatorVisible = true, want false")
+	}
+	if resp.ChatVisible == nil {
+		t.Fatal("ChatVisible = nil, want false pointer")
+	}
+	if *resp.ChatVisible {
+		t.Fatal("ChatVisible = true, want false")
+	}
+	b, err := fs.cityBeadStore.Get(id)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", id, err)
+	}
+	if got := b.Metadata[apiNamedSessionOperatorVisibilityKey]; got != config.NamedSessionOperatorVisibilityBackground {
+		t.Fatalf("metadata operator_visibility = %q, want background", got)
+	}
+	if got := b.Metadata[apiNamedSessionOperatorVisibleKey]; got != "false" {
+		t.Fatalf("metadata operator_visible = %q, want false", got)
+	}
+	if got := b.Metadata[apiNamedSessionChatVisibleKey]; got != "false" {
+		t.Fatalf("metadata chat_visible = %q, want false", got)
 	}
 }
 

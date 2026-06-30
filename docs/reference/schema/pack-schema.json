@@ -706,6 +706,15 @@
             "always"
           ],
           "description": "Mode controls when the controller ensures this named session is live.\n\"on_demand\" (default): reserve identity and materialize when work or\nan explicit reference requires it.\n\"always\": keep the canonical session controller-managed.\nNote: mode=\"always\" is independent of min_active_sessions; both produce\nsessions, and gc doctor reports accidental duplicate-pool combinations."
+        },
+        "operator_visibility": {
+          "type": "string",
+          "enum": [
+            "operator",
+            "background",
+            "internal"
+          ],
+          "description": "OperatorVisibility controls whether operator-facing UIs should present\nthis named session as a direct conversation target. Empty defaults to\n\"operator\"; \"background\" and \"internal\" remain runtime lanes but should\nnot appear as primary human chat targets."
         }
       },
       "additionalProperties": false,
