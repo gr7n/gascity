@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import indexHTML from "../../index.html?raw";
 import { api, type BeadRecord } from "../api";
-import { renderIssues } from "./issues";
+import { installIssueInteractions, renderIssues } from "./issues";
 
 vi.mock("../api", () => ({
   api: {
@@ -173,5 +173,17 @@ describe("issue detail timestamps", () => {
     const updated = document.getElementById("issue-detail-updated");
     expect(updated?.textContent).toBe("");
     expect(updated?.querySelector("time")).toBeNull();
+  });
+
+  it("redacts background assignees in issue rows and detail", async () => {
+    document.body.insertAdjacentHTML("afterbegin", `<button class="tab-btn" data-tab="progress" type="button">Progress</button>`);
+    installIssueInteractions();
+    document.querySelector<HTMLButtonElement>(".tab-btn[data-tab='progress']")?.click();
+
+    await openDetail(bead({ assignee: "mayor", status: "in_progress" }));
+
+    expect(document.body.textContent).not.toContain("mayor");
+    expect(document.querySelector(".issue-row .issue-status")?.textContent).toContain("Internal");
+    expect(document.getElementById("issue-detail-owner")?.textContent).toBe("Owner: Internal");
   });
 });

@@ -1,4 +1,5 @@
 import { api, cityScope, mutationHeaders, type BeadRecord } from "../api";
+import { formatOperatorAddress } from "../util/background";
 import { byId, clear, el } from "../util/dom";
 import { calculateActivity, statusBadgeClass } from "../util/legacy";
 import { popPause, pushPause, showToast } from "../ui";
@@ -122,6 +123,7 @@ export function resetConvoysNoCity(): void {
 function buildConvoyListRow(convoy: BeadRecord): ConvoyRow | null {
   if (!convoy.id) return null;
   const latest = convoy.updated_at ?? convoy.created_at;
+  const assignee = formatOperatorAddress(convoy.assignee);
   return {
     id: convoy.id,
     title: convoy.title ?? convoy.id,
@@ -131,7 +133,7 @@ function buildConvoyListRow(convoy: BeadRecord): ConvoyRow | null {
     closed: 0,
     ready: 0,
     inProgress: 0,
-    assignees: convoy.assignee ? [convoy.assignee] : [],
+    assignees: convoy.assignee ? [assignee ?? "Internal"] : [],
     lastActivity: calculateActivity(latest),
   };
 }
@@ -236,12 +238,13 @@ async function openConvoyDetail(convoyID: string): Promise<void> {
     return;
   }
   children.forEach((child) => {
-    const progress = child.assignee ? child.assignee : child.status === "closed" ? "done" : "ready";
+    const assignee = formatOperatorAddress(child.assignee);
+    const progress = child.assignee ? assignee ?? "Internal" : child.status === "closed" ? "done" : "ready";
     tbody.append(el("tr", {}, [
       el("td", { class: "convoy-issue-status" }, [el("span", { class: `badge ${statusBadgeClass(child.status)}` }, [child.status ?? "unknown"])]),
       el("td", {}, [el("span", { class: "issue-id" }, [child.id ?? ""])]),
       el("td", { class: "issue-title" }, [child.title ?? child.id ?? ""]),
-      el("td", {}, [child.assignee ? el("span", { class: "badge badge-blue" }, [child.assignee]) : el("span", { class: "badge badge-muted" }, ["Unassigned"])]),
+      el("td", {}, [child.assignee ? el("span", { class: "badge badge-blue" }, [assignee ?? "Internal"]) : el("span", { class: "badge badge-muted" }, ["Unassigned"])]),
       el("td", {}, [progress]),
     ]));
   });

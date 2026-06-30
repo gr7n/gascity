@@ -1,4 +1,5 @@
 const BACKGROUND_VISIBILITY = new Set(["background", "hidden", "internal", "system"]);
+const BACKGROUND_IDENTITIES = new Set(["mayor", "infra-worker", "k8s-canary"]);
 
 export function isBackgroundRecord(value: unknown): boolean {
   const record = asRecord(value);
@@ -31,15 +32,25 @@ export function hasBackgroundParticipant(record: { from?: unknown; to?: unknown 
 export function isBackgroundIdentity(value: unknown): boolean {
   const identity = stringValue(value);
   if (!identity) return false;
-  if (identity === "mayor") return true;
+  if (BACKGROUND_IDENTITIES.has(identity)) return true;
   const normalized = identity.replace(/--/g, "/");
   const segments = normalized.split(/[/.]/).filter(Boolean);
-  return segments[segments.length - 1] === "mayor";
+  if (BACKGROUND_IDENTITIES.has(segments[segments.length - 1] ?? "")) return true;
+  return [...BACKGROUND_IDENTITIES].some((background) => identity.endsWith(`-${background}`));
 }
 
 export function formatOperatorAddress(value: string | undefined | null): string | undefined {
   if (!value) return value ?? undefined;
   return isBackgroundIdentity(value) ? "Internal" : value;
+}
+
+export function redactBackgroundPayload(value: unknown): unknown {
+  if (typeof value === "string") return isBackgroundIdentity(value) ? "Internal" : value;
+  if (Array.isArray(value)) return value.map((item) => redactBackgroundPayload(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactBackgroundPayload(item)]),
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

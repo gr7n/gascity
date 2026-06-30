@@ -2,6 +2,7 @@ import type { BeadRecord } from "../api";
 import { api, cityScope, mutationHeaders } from "../api";
 import { promptActionDialog } from "../modals";
 import { byId, clear, el } from "../util/dom";
+import { formatOperatorAddress } from "../util/background";
 import { beadPriority, formatTimestamp, priorityBadgeClass, truncate } from "../util/legacy";
 import { getOptions } from "./options";
 import { popPause, pushPause, showToast } from "../ui";
@@ -119,6 +120,7 @@ function renderIssueTable(): void {
 
   const tbody = el("tbody");
   filtered.forEach((issue) => {
+    const assignee = formatOperatorAddress(issue.assignee);
     const row = el("tr", {
       class: `issue-row priority-${beadPriority(issue.priority)}`,
       "data-issue-id": issue.id ?? "",
@@ -131,7 +133,7 @@ function renderIssueTable(): void {
       el("td", { class: "issue-rig" }, [inferRig(issue)]),
       el("td", { class: "issue-status" }, [
         issue.assignee
-          ? el("span", { class: "badge badge-blue", title: issue.assignee }, [issue.assignee])
+          ? el("span", { class: "badge badge-blue", title: assignee }, [assignee ?? "Internal"])
           : el("span", { class: "badge badge-green" }, ["Ready"]),
       ]),
       el("td", { class: "issue-age" }, [formatTimestamp(issue.created_at)]),
@@ -280,7 +282,7 @@ async function openIssueDetail(issueID: string): Promise<void> {
   byId("issue-detail-status")!.textContent = issue.status ?? "open";
   byId("issue-detail-status")!.className = `issue-status ${issue.status ?? "open"}`;
   byId("issue-detail-type")!.textContent = issue.issue_type ? `Type: ${issue.issue_type}` : "";
-  byId("issue-detail-owner")!.textContent = issue.assignee ? `Owner: ${issue.assignee}` : "Owner: unassigned";
+  byId("issue-detail-owner")!.textContent = issue.assignee ? `Owner: ${formatOperatorAddress(issue.assignee) ?? "Internal"}` : "Owner: unassigned";
   renderIssueTimestamp("issue-detail-created", "Created", issue.created_at);
   renderIssueTimestamp("issue-detail-updated", "Updated", updatedTimestampForDetail(issue));
 

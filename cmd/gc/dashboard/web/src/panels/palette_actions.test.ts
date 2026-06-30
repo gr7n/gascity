@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSharedModals } from "../modals";
 import { installCommandPalette } from "../palette";
+import { api } from "../api";
 import { syncCityScopeFromLocation } from "../state";
 import { installAdminInteractions } from "./admin";
 import { installConvoyInteractions } from "./convoys";
@@ -147,6 +148,25 @@ describe("command palette action flows", () => {
     (document.getElementById("convoy-create-cancel-btn") as HTMLButtonElement).click();
     await executePaletteCommand("assign work");
     expect((document.getElementById("action-modal") as HTMLElement).style.display).toBe("flex");
+  });
+
+  it("redacts background identities from raw output commands", async () => {
+    const getMock = vi.spyOn(api, "GET") as unknown as ReturnType<typeof vi.fn>;
+    getMock.mockResolvedValue({
+      data: { items: [{ alias: "mayor", assignee: "rig/infra-worker" }, { alias: "reviewer" }] },
+      error: undefined,
+      request: undefined,
+      response: new Response(),
+    });
+    installCommandPalette({ refreshAll: vi.fn().mockResolvedValue(undefined) });
+
+    await executePaletteCommand("agent list");
+
+    const output = document.getElementById("output-panel-content")?.textContent ?? "";
+    expect(output).toContain("Internal");
+    expect(output).toContain("reviewer");
+    expect(output).not.toContain("mayor");
+    expect(output).not.toContain("infra-worker");
   });
 });
 

@@ -6,6 +6,7 @@ import { openConvoyCreate } from "./panels/convoys";
 import { openIssueModal } from "./panels/issues";
 import { openMailComposer } from "./panels/mail";
 import { closeOutput, openOutput } from "./ui";
+import { redactBackgroundPayload } from "./util/background";
 
 interface PaletteCommand {
   category: string;
@@ -33,7 +34,7 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
     const city = cityScope();
     const read = async (label: string, promise: Promise<unknown>): Promise<void> => {
       const data = await promise;
-      openOutput(label, JSON.stringify(data, null, 2));
+      openOutput(label, JSON.stringify(redactBackgroundPayload(data), null, 2));
     };
     return [
       { name: "refresh", desc: "Refresh all panels", category: "Dashboard", run: () => deps.refreshAll() },
@@ -94,10 +95,10 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
               api.GET("/v0/city/{cityName}/beads", { params: { path: { cityName: city }, query: { status: "open", limit: 500 } } }),
               api.GET("/v0/city/{cityName}/beads", { params: { path: { cityName: city }, query: { status: "in_progress", limit: 500 } } }),
             ]);
-            openOutput("beads", JSON.stringify({
+            openOutput("beads", JSON.stringify(redactBackgroundPayload({
               open: open.data?.items ?? [],
               in_progress: progress.data?.items ?? [],
-            }, null, 2));
+            }), null, 2));
           },
         },
       ] : []),

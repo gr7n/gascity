@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatOperatorAddress, hasBackgroundParticipant, isBackgroundIdentity, isBackgroundRecord } from "./background";
+import { formatOperatorAddress, hasBackgroundParticipant, isBackgroundIdentity, isBackgroundRecord, redactBackgroundPayload } from "./background";
 
 describe("background identity helpers", () => {
   it("recognizes legacy mayor identities across common address formats", () => {
@@ -9,8 +9,11 @@ describe("background identity helpers", () => {
     expect(isBackgroundIdentity("rig/mayor")).toBe(true);
     expect(isBackgroundIdentity("gastown.mayor")).toBe(true);
     expect(isBackgroundIdentity("rig--mayor")).toBe(true);
+    expect(isBackgroundIdentity("infra-worker")).toBe(true);
+    expect(isBackgroundIdentity("rig/infra-worker")).toBe(true);
+    expect(isBackgroundIdentity("sess-k8s-canary")).toBe(true);
     expect(isBackgroundIdentity("reviewer")).toBe(false);
-    expect(isBackgroundIdentity("new-mayor")).toBe(false);
+    expect(isBackgroundIdentity("new-mayoralty")).toBe(false);
   });
 
   it("recognizes explicit background visibility markers", () => {
@@ -22,8 +25,23 @@ describe("background identity helpers", () => {
 
   it("redacts operator-facing labels without losing non-background addresses", () => {
     expect(formatOperatorAddress("gastown.mayor")).toBe("Internal");
+    expect(formatOperatorAddress("rig/infra-worker")).toBe("Internal");
     expect(formatOperatorAddress("rig/reviewer")).toBe("rig/reviewer");
     expect(hasBackgroundParticipant({ from: "director", to: "mayor" })).toBe(true);
     expect(hasBackgroundParticipant({ from: "director", to: "reviewer" })).toBe(false);
+  });
+
+  it("redacts background identities inside raw output payloads", () => {
+    expect(redactBackgroundPayload({
+      items: [
+        { assignee: "mayor", nested: { session_name: "rig/infra-worker" } },
+        { assignee: "reviewer" },
+      ],
+    })).toEqual({
+      items: [
+        { assignee: "Internal", nested: { session_name: "Internal" } },
+        { assignee: "reviewer" },
+      ],
+    });
   });
 });

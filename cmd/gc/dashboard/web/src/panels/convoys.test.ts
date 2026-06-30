@@ -78,4 +78,23 @@ describe("convoy list rendering", () => {
       params: { path: { cityName: "test-city" }, query: { limit: 200 } },
     });
   });
+
+  it("redacts background assignees in convoy rows", async () => {
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/v0/city/{cityName}/convoys") {
+        return {
+          data: { items: [convoy({ assignee: "rig/infra-worker" })] },
+          error: undefined,
+          request: undefined,
+          response: undefined,
+        };
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    await renderConvoys();
+
+    expect(document.body.textContent).toContain("Internal");
+    expect(document.body.textContent).not.toContain("infra-worker");
+  });
 });
