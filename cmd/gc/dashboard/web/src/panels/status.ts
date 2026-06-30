@@ -73,22 +73,25 @@ export async function renderStatus(): Promise<void> {
   if (cityScope() !== city) return;
 
   const sessions = (sessionsR.data?.items ?? []) as SessionSummary[];
+  const visibleSessions = sessions.filter((session) => !isBackgroundRecord(session));
   const beads = beadsR.data?.items ?? [];
   const convoys = convoysR.data?.items ?? [];
   renderCityScopeFromSessions(city, sessionsR);
 
   // Generic "stuck" detection: any running, pooled agent whose last
   // activity is >30 min old. No role name required.
-  const stuckAgents = sessions.filter((session) => {
+  const stuckAgents = visibleSessions.filter((session) => {
     if (!session.pool || !session.running || !session.last_active) return false;
     return Date.now() - new Date(session.last_active).getTime() >= 30 * 60 * 1000;
   }).length;
   const staleAssigned = beads.filter((bead) => bead.assignee && bead.status !== "closed").length;
   const highPriorityIssues = beads.filter((bead) => beadPriority(bead.priority) <= 2).length;
-  const deadSessions = sessions.filter((session) => !session.running).length;
+  const deadSessions = visibleSessions.filter((session) => !session.running).length;
   const statusUnavailable = Boolean(statusR.error || !statusR.data);
   const partialUnavailable = statusUnavailable || Boolean(sessionsR.error || beadsR.error || convoysR.error);
-  const runningAgents = statusR.data?.agents.running ?? sessions.filter((session) => session.running).length;
+  const runningAgents = sessionsR.data
+    ? visibleSessions.filter((session) => session.running).length
+    : statusR.data?.agents.running ?? 0;
   const assignedWork = statusR.data?.work.in_progress ?? staleAssigned;
   const openWork = statusR.data?.work.open ?? beads.length;
   const unreadMail = statusR.data?.mail.unread ?? "n/a";

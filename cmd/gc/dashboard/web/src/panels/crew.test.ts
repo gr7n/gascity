@@ -141,6 +141,70 @@ describe("crew empty states", () => {
     expect(document.getElementById("rigged-count")?.textContent).toBe("1");
   });
 
+  it("keeps background sessions out of crew, rigged, and pooled panels", async () => {
+    vi.spyOn(api, "GET").mockImplementation(async (path: string) => {
+      if (path === "/v0/city/{cityName}/sessions") {
+        return {
+          data: {
+            items: [
+              {
+                active_bead: "",
+                agent_kind: "crew",
+                attached: true,
+                id: "s-fontaine",
+                last_active: "2026-04-18T20:00:00Z",
+                last_output: "",
+                rig: "rig-a/crew",
+                running: true,
+                template: "rig-a/crew/fontaine",
+              },
+              {
+                active_bead: "bd-mayor",
+                agent_kind: "crew",
+                attached: false,
+                id: "sess-mayor",
+                last_active: "2026-04-18T20:00:00Z",
+                last_output: "background patrol",
+                pool: "ops",
+                rig: "rig-a",
+                running: true,
+                session_name: "gastown.mayor",
+                template: "mayor",
+              },
+              {
+                active_bead: "",
+                agent_kind: "pool",
+                attached: false,
+                id: "sess-k8s-canary",
+                last_active: "2026-04-18T20:00:00Z",
+                last_output: "canary",
+                pool: "ops",
+                running: true,
+                template: "rig--k8s-canary",
+              },
+            ],
+          },
+        } as never;
+      }
+      if (path === "/v0/city/{cityName}/session/{id}/pending") {
+        return { data: { pending: false } } as never;
+      }
+      if (path === "/v0/city/{cityName}/bead/{id}") {
+        return { data: null } as never;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    await renderCrew();
+
+    expect(document.getElementById("crew-count")?.textContent).toBe("1");
+    expect(document.getElementById("rigged-count")?.textContent).toBe("0");
+    expect(document.getElementById("pooled-count")?.textContent).toBe("0");
+    expect(document.body.textContent).toContain("rig-a/crew/fontaine");
+    expect(document.body.textContent).not.toContain("mayor");
+    expect(document.body.textContent).not.toContain("k8s-canary");
+  });
+
   it("falls back to the empty state when only role/pool sessions exist", async () => {
     vi.spyOn(api, "GET").mockImplementation(async (path: string) => {
       if (path === "/v0/city/{cityName}/sessions") {

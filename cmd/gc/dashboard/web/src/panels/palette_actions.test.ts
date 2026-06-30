@@ -150,7 +150,7 @@ describe("command palette action flows", () => {
     expect((document.getElementById("action-modal") as HTMLElement).style.display).toBe("flex");
   });
 
-  it("redacts background identities from raw output commands", async () => {
+  it("filters background identities from raw session output commands", async () => {
     const getMock = vi.spyOn(api, "GET") as unknown as ReturnType<typeof vi.fn>;
     getMock.mockResolvedValue({
       data: { items: [{ alias: "mayor", assignee: "rig/infra-worker" }, { alias: "reviewer" }] },
@@ -163,8 +163,8 @@ describe("command palette action flows", () => {
     await executePaletteCommand("agent list");
 
     const output = document.getElementById("output-panel-content")?.textContent ?? "";
-    expect(output).toContain("Internal");
     expect(output).toContain("reviewer");
+    expect(output).not.toContain("Internal");
     expect(output).not.toContain("mayor");
     expect(output).not.toContain("infra-worker");
   });

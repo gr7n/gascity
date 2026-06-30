@@ -51,6 +51,16 @@ function scopeStats(): Record<string, string> {
   return stats;
 }
 
+function summaryStats(): Record<string, string> {
+  const stats: Record<string, string> = {};
+  document.querySelectorAll("#status-banner .stat").forEach((stat) => {
+    const label = stat.querySelector(".stat-label")?.textContent ?? "";
+    const value = stat.querySelector(".stat-value")?.textContent ?? "";
+    stats[label] = value;
+  });
+  return stats;
+}
+
 describe("status panel scope rendering", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -327,6 +337,7 @@ describe("status panel scope rendering", () => {
       Terminal: "Detached",
       State: "Running",
     });
+    expect(summaryStats().Agents).toBe("1");
     expect(document.getElementById("scope-status")?.textContent).not.toContain("Mayor");
   });
 

@@ -5,6 +5,7 @@ import { calculateActivity, formatTimestamp, statusBadgeClass, truncate } from "
 import { connectAgentOutput, type AgentOutputMessage, type SSEHandle } from "../sse";
 import { popPause, pushPause, showToast } from "../ui";
 import { logDebug } from "../logger";
+import { isBackgroundRecord } from "../util/background";
 
 let logHandle: SSEHandle | null = null;
 let logSessionID = "";
@@ -42,7 +43,7 @@ export async function renderCrew(): Promise<void> {
     return;
   }
 
-  const sessions = data.items;
+  const sessions = data.items.filter((session) => !isBackgroundRecord(session));
   // The Crew table is for persistent named workers — sessions whose backing
   // agent is classified server-side as "crew". Other agent kinds (pool,
   // role) belong on the Rigged/Pooled panels (or stay invisible until a

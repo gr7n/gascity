@@ -6,7 +6,7 @@ import { openConvoyCreate } from "./panels/convoys";
 import { openIssueModal } from "./panels/issues";
 import { openMailComposer } from "./panels/mail";
 import { closeOutput, openOutput } from "./ui";
-import { redactBackgroundPayload } from "./util/background";
+import { isBackgroundRecord, redactBackgroundPayload } from "./util/background";
 
 interface PaletteCommand {
   category: string;
@@ -36,6 +36,21 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
       const data = await promise;
       openOutput(label, JSON.stringify(redactBackgroundPayload(data), null, 2));
     };
+    const readVisibleSessions = async (): Promise<void> => {
+      const data = await api.GET("/v0/city/{cityName}/sessions", {
+        params: { path: { cityName: city }, query: { state: "active", peek: true } },
+      });
+      const filtered = data?.data && Array.isArray(data.data.items)
+        ? {
+            ...data,
+            data: {
+              ...data.data,
+              items: data.data.items.filter((item) => !isBackgroundRecord(item)),
+            },
+          }
+        : data;
+      openOutput("sessions", JSON.stringify(redactBackgroundPayload(filtered), null, 2));
+    };
     return [
       { name: "refresh", desc: "Refresh all panels", category: "Dashboard", run: () => deps.refreshAll() },
       { name: "supervisor health", desc: "Show supervisor health JSON", category: "Supervisor", run: () => read("health", api.GET("/health")) },
@@ -58,9 +73,7 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
           name: "agent list",
           desc: "Show current sessions JSON",
           category: "Status",
-          run: () => read("sessions", api.GET("/v0/city/{cityName}/sessions", {
-            params: { path: { cityName: city }, query: { state: "active", peek: true } },
-          })),
+          run: readVisibleSessions,
         },
         {
           name: "convoy list",
