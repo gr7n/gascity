@@ -168,7 +168,7 @@ describe("status panel scope rendering", () => {
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
     expect(scopeStats()).toMatchObject({
       City: "alpha",
-      Session: "control-dispatcher",
+      Agent: "control-dispatcher",
       Terminal: "Detached",
       State: "Running",
     });
@@ -283,7 +283,7 @@ describe("status panel scope rendering", () => {
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
     expect(scopeStats()).toMatchObject({
       City: "alpha",
-      Session: "control-dispatcher",
+      Agent: "control-dispatcher",
       Terminal: "Detached",
       State: "Running",
     });
@@ -333,7 +333,7 @@ describe("status panel scope rendering", () => {
 
     expect(scopeStats()).toMatchObject({
       City: "alpha",
-      Session: "director",
+      Agent: "director",
       Terminal: "Detached",
       State: "Running",
     });
@@ -365,7 +365,7 @@ describe("status panel scope rendering", () => {
     expect(Object.keys(stats)).toHaveLength(5);
     expect(document.getElementById("scope-badge")?.textContent).toBe("City");
     expect(stats["City"]).toBe("alpha");
-    expect(stats["Session"]).toBe("—");
+    expect(stats["Agent"]).toBe("—");
     expect(stats["Activity"]).toBe("—");
     expect(stats["Terminal"]).toBe("—");
     expect(stats["State"]).toBe("—");
@@ -405,7 +405,7 @@ describe("status panel scope rendering", () => {
     expect(document.querySelectorAll(".scope-stat")).toHaveLength(5);
     expect(scopeStats()).toMatchObject({
       City: "alpha",
-      Session: "control-dispatcher",
+      Agent: "control-dispatcher",
       Terminal: "Attached",
       State: "Running",
     });

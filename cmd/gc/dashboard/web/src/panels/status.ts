@@ -39,13 +39,16 @@ export async function renderStatus(): Promise<void> {
   const statusP = requestWithTimeout<StatusBody>(
     "status",
     city,
-    (signal) => api.GET("/v0/city/{cityName}/status", { params: { path: { cityName: city } }, signal }) as Promise<APIResult<StatusBody>>,
+    (signal) => api.GET("/v0/city/{cityName}/status", {
+      params: { path: { cityName: city }, query: { lite: true } },
+      signal,
+    }) as Promise<APIResult<StatusBody>>,
   );
   const sessionsP = requestWithTimeout<SessionList>(
     "sessions",
     city,
     (signal) => api.GET("/v0/city/{cityName}/sessions", {
-      params: { path: { cityName: city }, query: { state: "active" } },
+      params: { path: { cityName: city }, query: { state: "active", lite: true } },
       signal,
     }) as Promise<APIResult<SessionList>>,
   );
@@ -263,7 +266,7 @@ function renderCityScopeBanner(city: string, sessions: SessionSummary[]): void {
   if (!overseer) {
     status.append(
       scopeStat("City", city),
-      scopeStat("Session", "—"),
+      scopeStat("Agent", "—"),
       scopeStat("Activity", "—"),
       scopeStat("Terminal", "—"),
       scopeStat("State", "—"),
@@ -276,7 +279,7 @@ function renderCityScopeBanner(city: string, sessions: SessionSummary[]): void {
     : false;
   status.append(
     scopeStat("City", city),
-    scopeStat("Session", overseer.template),
+    scopeStat("Agent", overseer.template),
     scopeStat("Activity", overseer.last_active ? formatTimestamp(overseer.last_active) : "Unknown", active ? "active" : "idle"),
     scopeStat("Terminal", overseer.attached ? "Attached" : "Detached"),
     scopeStat("State", overseer.running ? "Running" : "Stopped"),
