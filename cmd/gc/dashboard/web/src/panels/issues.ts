@@ -38,7 +38,7 @@ export async function renderIssues(): Promise<void> {
 
   allIssues = sortIssues(
     [...(openR.data?.items ?? []), ...(progressR.data?.items ?? [])]
-      .filter((bead) => !isInternalBead(bead)),
+      .filter((bead) => !isBackgroundBead(bead)),
   );
   byId("issues-count")!.textContent = String(allIssues.length);
 
@@ -133,7 +133,7 @@ function renderIssueTable(): void {
       el("td", { class: "issue-rig" }, [inferRig(issue)]),
       el("td", { class: "issue-status" }, [
         issue.assignee
-          ? el("span", { class: "badge badge-blue", title: assignee }, [assignee ?? "Internal"])
+          ? el("span", { class: "badge badge-blue", title: assignee }, [assignee ?? "Automation"])
           : el("span", { class: "badge badge-green" }, ["Ready"]),
       ]),
       el("td", { class: "issue-age" }, [formatTimestamp(issue.created_at)]),
@@ -176,7 +176,7 @@ function inferRig(issue: BeadRecord): string {
   return issue.id?.split("-")[0] ?? "city";
 }
 
-function isInternalBead(issue: BeadRecord): boolean {
+function isBackgroundBead(issue: BeadRecord): boolean {
   if ((issue.issue_type ?? "").toLowerCase() === "convoy") return true;
   return (issue.labels ?? []).some((label) => label.startsWith("gc:queue") || label.startsWith("gc:message"));
 }
@@ -282,7 +282,7 @@ async function openIssueDetail(issueID: string): Promise<void> {
   byId("issue-detail-status")!.textContent = issue.status ?? "open";
   byId("issue-detail-status")!.className = `issue-status ${issue.status ?? "open"}`;
   byId("issue-detail-type")!.textContent = issue.issue_type ? `Type: ${issue.issue_type}` : "";
-  byId("issue-detail-owner")!.textContent = issue.assignee ? `Owner: ${formatOperatorAddress(issue.assignee) ?? "Internal"}` : "Owner: unassigned";
+  byId("issue-detail-owner")!.textContent = issue.assignee ? `Owner: ${formatOperatorAddress(issue.assignee) ?? "Automation"}` : "Owner: unassigned";
   renderIssueTimestamp("issue-detail-created", "Created", issue.created_at);
   renderIssueTimestamp("issue-detail-updated", "Updated", updatedTimestampForDetail(issue));
 

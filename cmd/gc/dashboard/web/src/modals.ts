@@ -159,7 +159,7 @@ function helpText(mode: ActionDialogConfig["mode"]): string {
     case "assign":
       return "Launch a bead directly to a target, with an optional rig override.";
     case "reassign":
-      return "Pick a new assignee from the visible city agents or type one manually.";
+      return "Pick an assignee from the city list or type a target manually.";
     default:
       return "Dispatch this bead to a target, with an optional rig constraint.";
   }

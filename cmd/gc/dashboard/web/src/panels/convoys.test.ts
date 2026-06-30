@@ -94,7 +94,7 @@ describe("convoy list rendering", () => {
 
     await renderConvoys();
 
-    expect(document.body.textContent).toContain("Internal");
+    expect(document.body.textContent).toContain("Automation");
     expect(document.body.textContent).not.toContain("infra-worker");
   });
 });

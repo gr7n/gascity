@@ -117,7 +117,7 @@ describe("mail compose flows", () => {
       from: "gastown.mayor",
       id: "mail-1",
       read: false,
-      subject: "Internal note",
+      subject: "Background note",
       to: "director",
     } as never);
 
@@ -197,12 +197,12 @@ describe("mail detail visibility", () => {
           data: {
             items: [
               {
-                body: "Internal background note",
+                body: "Background-only note",
                 created_at: "2026-01-01T00:00:01Z",
                 from: "gastown.mayor",
                 id: "mail-background",
                 read: true,
-                subject: "Internal note",
+                subject: "Background note",
                 thread_id: "thread-1",
                 to: "director",
               },
@@ -235,7 +235,7 @@ describe("mail detail visibility", () => {
     const detailText = (document.getElementById("mail-detail") as HTMLElement).textContent ?? "";
     expect(detailText).toContain("Visible update");
     expect(detailText).toContain("reviewer");
-    expect(detailText).not.toContain("Internal background note");
+    expect(detailText).not.toContain("Background-only note");
     expect(detailText).not.toContain("gastown.mayor");
   });
 });

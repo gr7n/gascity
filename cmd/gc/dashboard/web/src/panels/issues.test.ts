@@ -183,7 +183,7 @@ describe("issue detail timestamps", () => {
     await openDetail(bead({ assignee: "mayor", status: "in_progress" }));
 
     expect(document.body.textContent).not.toContain("mayor");
-    expect(document.querySelector(".issue-row .issue-status")?.textContent).toContain("Internal");
-    expect(document.getElementById("issue-detail-owner")?.textContent).toBe("Owner: Internal");
+    expect(document.querySelector(".issue-row .issue-status")?.textContent).toContain("Automation");
+    expect(document.getElementById("issue-detail-owner")?.textContent).toBe("Owner: Automation");
   });
 });

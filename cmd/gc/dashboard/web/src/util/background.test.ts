@@ -24,8 +24,8 @@ describe("background identity helpers", () => {
   });
 
   it("redacts operator-facing labels without losing non-background addresses", () => {
-    expect(formatOperatorAddress("gastown.mayor")).toBe("Internal");
-    expect(formatOperatorAddress("rig/infra-worker")).toBe("Internal");
+    expect(formatOperatorAddress("gastown.mayor")).toBe("Automation");
+    expect(formatOperatorAddress("rig/infra-worker")).toBe("Automation");
     expect(formatOperatorAddress("rig/reviewer")).toBe("rig/reviewer");
     expect(hasBackgroundParticipant({ from: "director", to: "mayor" })).toBe(true);
     expect(hasBackgroundParticipant({ from: "director", to: "reviewer" })).toBe(false);
@@ -39,7 +39,7 @@ describe("background identity helpers", () => {
       ],
     })).toEqual({
       items: [
-        { assignee: "Internal", nested: { session_name: "Internal" } },
+        { assignee: "Automation", nested: { session_name: "Automation" } },
         { assignee: "reviewer" },
       ],
     });

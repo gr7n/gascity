@@ -41,11 +41,11 @@ export function isBackgroundIdentity(value: unknown): boolean {
 
 export function formatOperatorAddress(value: string | undefined | null): string | undefined {
   if (!value) return value ?? undefined;
-  return isBackgroundIdentity(value) ? "Internal" : value;
+  return isBackgroundIdentity(value) ? "Automation" : value;
 }
 
 export function redactBackgroundPayload(value: unknown): unknown {
-  if (typeof value === "string") return isBackgroundIdentity(value) ? "Internal" : value;
+  if (typeof value === "string") return isBackgroundIdentity(value) ? "Automation" : value;
   if (Array.isArray(value)) return value.map((item) => redactBackgroundPayload(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(

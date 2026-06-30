@@ -133,7 +133,7 @@ function buildConvoyListRow(convoy: BeadRecord): ConvoyRow | null {
     closed: 0,
     ready: 0,
     inProgress: 0,
-    assignees: convoy.assignee ? [assignee ?? "Internal"] : [],
+    assignees: convoy.assignee ? [assignee ?? "Automation"] : [],
     lastActivity: calculateActivity(latest),
   };
 }
@@ -239,12 +239,12 @@ async function openConvoyDetail(convoyID: string): Promise<void> {
   }
   children.forEach((child) => {
     const assignee = formatOperatorAddress(child.assignee);
-    const progress = child.assignee ? assignee ?? "Internal" : child.status === "closed" ? "done" : "ready";
+    const progress = child.assignee ? assignee ?? "Automation" : child.status === "closed" ? "done" : "ready";
     tbody.append(el("tr", {}, [
       el("td", { class: "convoy-issue-status" }, [el("span", { class: `badge ${statusBadgeClass(child.status)}` }, [child.status ?? "unknown"])]),
       el("td", {}, [el("span", { class: "issue-id" }, [child.id ?? ""])]),
       el("td", { class: "issue-title" }, [child.title ?? child.id ?? ""]),
-      el("td", {}, [child.assignee ? el("span", { class: "badge badge-blue" }, [assignee ?? "Internal"]) : el("span", { class: "badge badge-muted" }, ["Unassigned"])]),
+      el("td", {}, [child.assignee ? el("span", { class: "badge badge-blue" }, [assignee ?? "Automation"]) : el("span", { class: "badge badge-muted" }, ["Unassigned"])]),
       el("td", {}, [progress]),
     ]));
   });

@@ -173,7 +173,7 @@ async function openThread(threadID: string): Promise<void> {
   }
   const messages = res.data.items.filter((message) => !hasBackgroundParticipant(message));
   if (messages.length === 0) {
-    showToast("error", "Thread hidden", "This thread only contains internal mail");
+    showToast("error", "Thread unavailable", "This thread is not available in the dashboard");
     return;
   }
   const latest = messages[messages.length - 1] ?? messages[0];
@@ -192,7 +192,7 @@ async function openMessage(messageID: string): Promise<void> {
     return;
   }
   if (hasBackgroundParticipant(res.data)) {
-    showToast("error", "Message hidden", "Internal mail is not shown in this dashboard");
+    showToast("error", "Message unavailable", "This message is not available in the dashboard");
     return;
   }
   currentMessage = res.data;
@@ -355,7 +355,7 @@ async function sendCurrentMessage(): Promise<void> {
     return;
   }
   if (isBackgroundIdentity(to)) {
-    showToast("error", "Recipient unavailable", "Choose a visible operator recipient");
+    showToast("error", "Recipient unavailable", "Choose a listed recipient");
     logWarn("mail", "Send blocked by background recipient", { city, subject, to });
     return;
   }
