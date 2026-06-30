@@ -16,6 +16,7 @@ import (
 // Filter specifies predicates for ReadFiltered. Zero values are ignored.
 type Filter struct {
 	Type     string    // match events with this Type
+	Types    []string  // match events whose Type is in this list
 	Actor    string    // match events with this Actor
 	Subject  string    // match events with this Subject
 	Since    time.Time // match events at or after this time
@@ -32,6 +33,18 @@ func matchesFilter(e Event, f Filter) bool {
 	}
 	if f.Type != "" && e.Type != f.Type {
 		return false
+	}
+	if len(f.Types) > 0 {
+		matched := false
+		for _, eventType := range f.Types {
+			if e.Type == eventType {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	if f.Actor != "" && e.Actor != f.Actor {
 		return false

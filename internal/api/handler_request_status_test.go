@@ -218,6 +218,83 @@ func TestRequestStatusAfterSeq(t *testing.T) {
 	}
 }
 
+func TestRequestStatusScopesEventScansToRequestTypes(t *testing.T) {
+	state := newFakeState(t)
+	ep := state.eventProv.(*events.Fake)
+	for i := 0; i < 25; i++ {
+		recordPayloadEvent(t, ep, events.BeadUpdated, "noise", events.NoPayload{})
+	}
+	recordPayloadEvent(t, ep, events.RequestProgress, "director", RequestProgressPayload{
+		RequestID:     "req-fast",
+		Operation:     RequestOperationSessionSubmit,
+		Stage:         RequestStageDelivering,
+		SessionTarget: "director",
+		ElapsedMs:     7,
+	})
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-fast",
+		SessionID: "director",
+	})
+	recorder := &recordingEventProvider{Provider: ep}
+	state.eventProv = recorder
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/request/req-fast"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp RequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != requestStatusSucceeded || resp.Event == nil {
+		t.Fatalf("response = %#v, want succeeded with terminal event", resp)
+	}
+	if len(recorder.filters) == 0 {
+		t.Fatal("expected request status to list events")
+	}
+	allowed := map[string]bool{
+		events.RequestProgress:             true,
+		events.RequestResultCityCreate:     true,
+		events.RequestResultCityUnregister: true,
+		events.RequestResultSessionCreate:  true,
+		events.RequestResultSessionMessage: true,
+		events.RequestResultSessionSubmit:  true,
+		events.RequestFailed:               true,
+	}
+	seenProgress := false
+	seenSubmitResult := false
+	for _, filter := range recorder.filters {
+		if filter.Type == "" && len(filter.Types) == 0 {
+			t.Fatalf("request status used broad event scan: %#v", filter)
+		}
+		filterTypes := filter.Types
+		if filter.Type != "" {
+			filterTypes = append(filterTypes, filter.Type)
+		}
+		for _, eventType := range filterTypes {
+			if !allowed[eventType] {
+				t.Fatalf("request status scanned non-request event type %q", eventType)
+			}
+			if eventType == events.RequestProgress {
+				seenProgress = true
+			}
+			if eventType == events.RequestResultSessionSubmit {
+				seenSubmitResult = true
+			}
+		}
+		if len(filterTypes) == 0 {
+			t.Fatalf("request status scanned non-request event type %q", filter.Type)
+		}
+	}
+	if !seenProgress || !seenSubmitResult {
+		t.Fatalf("filters = %#v, want progress and session.submit result scans", recorder.filters)
+	}
+}
+
 func TestRequestStatusRejectsInvalidAfterSeq(t *testing.T) {
 	state := newFakeState(t)
 	h := newTestCityHandler(t, state)
@@ -257,4 +334,14 @@ func recordPayloadEvent(t *testing.T, ep events.Recorder, eventType, subject str
 		Subject: subject,
 		Payload: raw,
 	})
+}
+
+type recordingEventProvider struct {
+	events.Provider
+	filters []events.Filter
+}
+
+func (p *recordingEventProvider) List(filter events.Filter) ([]events.Event, error) {
+	p.filters = append(p.filters, filter)
+	return p.Provider.List(filter)
 }

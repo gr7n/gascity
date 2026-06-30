@@ -21,6 +21,21 @@ func TestMatchesFilter_Subject(t *testing.T) {
 	}
 }
 
+func TestMatchesFilter_Types(t *testing.T) {
+	if !matchesFilter(Event{Type: RequestProgress}, Filter{Types: []string{RequestProgress, RequestFailed}}) {
+		t.Error("expected match on included event type")
+	}
+	if matchesFilter(Event{Type: BeadUpdated}, Filter{Types: []string{RequestProgress, RequestFailed}}) {
+		t.Error("expected non-request event type to be filtered out")
+	}
+	if !matchesFilter(Event{Type: RequestProgress}, Filter{Type: RequestProgress, Types: []string{RequestProgress, RequestFailed}}) {
+		t.Error("expected Type and Types to both match")
+	}
+	if matchesFilter(Event{Type: RequestProgress}, Filter{Type: RequestProgress, Types: []string{RequestFailed}}) {
+		t.Error("expected Type and Types predicates to both apply")
+	}
+}
+
 func TestMatchesFilter_Until(t *testing.T) {
 	now := time.Now()
 	e := Event{Type: BeadCreated, Ts: now}

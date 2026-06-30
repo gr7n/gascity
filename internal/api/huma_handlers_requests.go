@@ -27,6 +27,16 @@ var asyncRequestOperationByEventType = map[string]string{
 	events.RequestFailed:               "",
 }
 
+var asyncRequestEventTypes = []string{
+	events.RequestProgress,
+	events.RequestResultCityCreate,
+	events.RequestResultCityUnregister,
+	events.RequestResultSessionCreate,
+	events.RequestResultSessionMessage,
+	events.RequestResultSessionSubmit,
+	events.RequestFailed,
+}
+
 // humaHandleRequestStatus is the Huma-typed handler for
 // GET /v0/city/{cityName}/request/{id}. It gives polling clients a durable
 // fallback for async operation results when an SSE frame is missed.
@@ -92,7 +102,7 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		Status:    requestStatusPending,
 	}
 
-	evts, err := ep.List(events.Filter{AfterSeq: afterSeq})
+	evts, err := ep.List(events.Filter{AfterSeq: afterSeq, Types: asyncRequestEventTypes})
 	if err != nil {
 		return result, fmt.Errorf("list events: %w", err)
 	}
@@ -197,7 +207,7 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 	}
 
 	cursors := events.ParseCursor(strings.TrimSpace(afterCursor))
-	evts, err := mux.ListAfterCursor(cursors, events.Filter{})
+	evts, err := mux.ListAfterCursor(cursors, events.Filter{Types: asyncRequestEventTypes})
 	if err != nil {
 		return result, fmt.Errorf("list supervisor events: %w", err)
 	}
