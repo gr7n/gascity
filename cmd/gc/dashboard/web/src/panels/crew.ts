@@ -34,7 +34,7 @@ export async function renderCrew(): Promise<void> {
   clear(crewBody);
 
   const { data, error } = await api.GET("/v0/city/{cityName}/sessions", {
-    params: { path: { cityName: city }, query: { state: "active" } },
+    params: { path: { cityName: city }, query: { state: "active", lite: true } },
   });
   if (error || !data?.items) {
     crewLoading.textContent = "Failed to load crew";

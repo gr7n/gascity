@@ -59,7 +59,7 @@ describe("crew empty states", () => {
     const getCalls = getSpy.mock.calls as Array<[string, unknown?]>;
     const sessionsCall = getCalls.find(([path]) => path === "/v0/city/{cityName}/sessions");
     expect(sessionsCall?.[1]).toMatchObject({
-      params: { query: { state: "active" } },
+      params: { query: { state: "active", lite: true } },
     });
     expect((sessionsCall?.[1] as { params?: { query?: Record<string, unknown> } } | undefined)?.params?.query)
       .not.toHaveProperty("peek");
