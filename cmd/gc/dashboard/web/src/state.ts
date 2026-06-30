@@ -148,6 +148,14 @@ export function isKnownUnavailableCity(status: CurrentCityStatus = currentCitySt
 export function invalidateForEventType(type: string): boolean {
   if (!type) return false;
   const hasCityScope = currentCity !== "";
+  if (type.startsWith("request.result.session.")) {
+    if (!hasCityScope) {
+      invalidate("cities", "status", "supervisor");
+      return true;
+    }
+    invalidate("status", "crew", "options");
+    return true;
+  }
   if (type.startsWith("session.") || type.startsWith("agent.")) {
     if (!hasCityScope) return false;
     invalidate("status", "crew", "options");

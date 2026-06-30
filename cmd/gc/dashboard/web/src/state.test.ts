@@ -34,4 +34,24 @@ describe("dashboard state invalidation", () => {
 
     expect([...consumeInvalidated()].sort()).toEqual(["crew", "options", "status"]);
   });
+
+  it("keeps async session result refresh scoped to session-facing city panels", async () => {
+    const { consumeInvalidated, invalidateForEventType } = await import("./state");
+    consumeInvalidated();
+
+    invalidateForEventType("request.result.session.submit");
+
+    expect([...consumeInvalidated()].sort()).toEqual(["crew", "options", "status"]);
+  });
+
+  it("keeps async session result refresh on supervisor panels without city scope", async () => {
+    window.history.pushState({}, "", "/dashboard");
+    const { consumeInvalidated, invalidateForEventType, syncCityScopeFromLocation } = await import("./state");
+    syncCityScopeFromLocation();
+    consumeInvalidated();
+
+    expect(invalidateForEventType("request.result.session.create")).toBe(true);
+
+    expect([...consumeInvalidated()].sort()).toEqual(["cities", "status", "supervisor"]);
+  });
 });
