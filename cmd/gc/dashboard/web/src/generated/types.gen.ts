@@ -11663,6 +11663,10 @@ export type GetV0CityByCityNameSessionsData = {
          * Include last output preview.
          */
         peek?: boolean;
+        /**
+         * Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+         */
+        lite?: boolean;
     };
     url: '/v0/city/{cityName}/sessions';
 };

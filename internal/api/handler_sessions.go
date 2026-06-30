@@ -237,14 +237,20 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	stateFilter := q.Get("state")
 	templateFilter := q.Get("template")
-	wantPeek := q.Get("peek") == "true"
+	lite := sessionLiteQuery(q.Get("lite")) || strings.EqualFold(strings.TrimSpace(q.Get("fresh")), "false")
+	wantPeek := q.Get("peek") == "true" && !lite
 
 	all, partialErrors, err := sessionReadModelRows(store)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	listResult := catalog.ListFullFromBeads(all, stateFilter, templateFilter)
+	var listResult *worker.SessionListResult
+	if lite {
+		listResult = catalog.ListLiteFromBeads(all, stateFilter, templateFilter)
+	} else {
+		listResult = catalog.ListFullFromBeads(all, stateFilter, templateFilter)
+	}
 	sessions := listResult.Sessions
 	pp := parsePagination(r, maxPaginationLimit)
 	pageSessions, total, nextCursor := pageForResponse(sessions, pp)
@@ -257,9 +263,17 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]sessionResponse, len(pageSessions))
 	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
+	provider := s.state.SessionProvider()
+	if lite {
+		provider = nil
+	}
 	for i, sess := range pageSessions {
-		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, s.state.SessionProvider(), hasDeferredQueue)
-		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, provider, hasDeferredQueue)
+		if !lite {
+			s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		} else {
+			items[i].Running = sess.State == session.StateActive && !sess.Closed
+		}
 	}
 
 	if !pp.IsPaging {

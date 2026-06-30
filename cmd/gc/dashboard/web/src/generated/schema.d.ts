@@ -13168,6 +13168,8 @@ export interface operations {
                 template?: string;
                 /** @description Include last output preview. */
                 peek?: boolean;
+                /** @description Use cached session read-model state instead of live provider probes for low-cost dashboard polls. */
+                lite?: boolean;
             };
             header?: never;
             path: {

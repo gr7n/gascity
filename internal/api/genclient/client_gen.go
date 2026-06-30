@@ -6442,6 +6442,9 @@ type GetV0CityByCityNameSessionsParams struct {
 
 	// Peek Include last output preview.
 	Peek *bool `form:"peek,omitempty" json:"peek,omitempty"`
+
+	// Lite Use cached session read-model state instead of live provider probes for low-cost dashboard polls.
+	Lite *bool `form:"lite,omitempty" json:"lite,omitempty"`
 }
 
 // CreateSessionParams defines parameters for CreateSession.
@@ -23807,6 +23810,22 @@ func NewGetV0CityByCityNameSessionsRequest(server string, cityName string, param
 		if params.Peek != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "peek", *params.Peek, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Lite != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "lite", *params.Lite, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err

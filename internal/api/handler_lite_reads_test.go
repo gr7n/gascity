@@ -88,3 +88,52 @@ func TestLiteControlPlaneReadsDoNotProbeLiveProvider(t *testing.T) {
 		})
 	}
 }
+
+func TestLiteSessionListDoesNotProbeLiveProvider(t *testing.T) {
+	base := newSessionFakeState(t)
+	info := createTestSession(t, base.cityBeadStore, base.sp, "Lite Session")
+	state := &liteProbeState{
+		fakeState: base,
+		provider:  panicOnLiveProbeProvider{Provider: base.sp},
+	}
+	h := newTestCityHandler(t, state)
+
+	for _, path := range []string{
+		"/sessions?state=active&limit=10&lite=true&peek=true",
+		"/sessions?state=active&limit=10&fresh=false&peek=true",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, cityURL(state, path), nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Items []sessionResponse `json:"items"`
+				Total int               `json:"total"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Total != 1 || len(body.Items) != 1 {
+				t.Fatalf("session list total/items = %d/%d, want 1/1", body.Total, len(body.Items))
+			}
+			got := body.Items[0]
+			if got.ID != info.ID {
+				t.Fatalf("session ID = %q, want %q", got.ID, info.ID)
+			}
+			if got.State != string(info.State) {
+				t.Fatalf("session state = %q, want %q", got.State, info.State)
+			}
+			if !got.Running {
+				t.Fatal("lite session Running = false, want true from stored active state")
+			}
+			if got.LastOutput != "" {
+				t.Fatalf("lite session LastOutput = %q, want empty even when peek=true", got.LastOutput)
+			}
+			if !got.SubmissionCapabilities.SupportsInterruptNow {
+				t.Fatalf("lite session submission capabilities = %+v, want interrupt support from metadata", got.SubmissionCapabilities)
+			}
+		})
+	}
+}

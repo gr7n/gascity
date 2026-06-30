@@ -33,7 +33,12 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 	if err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
-	listResult := mgr.ListFullFromBeads(all, input.State, input.Template)
+	var listResult *session.ListResult
+	if input.Lite {
+		listResult = mgr.ListLiteFromBeads(all, input.State, input.Template)
+	} else {
+		listResult = mgr.ListFullFromBeads(all, input.State, input.Template)
+	}
 	sessions := listResult.Sessions
 
 	limit := maxPaginationLimit
@@ -56,12 +61,20 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 		beadIndex[listResult.Beads[i].ID] = &listResult.Beads[i]
 	}
 
-	wantPeek := input.Peek
+	wantPeek := input.Peek && !input.Lite
 	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
+	provider := s.state.SessionProvider()
+	if input.Lite {
+		provider = nil
+	}
 	items := make([]sessionResponse, len(pageSessions))
 	for i, sess := range pageSessions {
-		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, s.state.SessionProvider(), hasDeferredQueue)
-		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, provider, hasDeferredQueue)
+		if !input.Lite {
+			s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		} else {
+			items[i].Running = sess.State == session.StateActive && !sess.Closed
+		}
 	}
 
 	if !pp.IsPaging {
