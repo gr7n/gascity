@@ -126,6 +126,87 @@ func (e RequestFailedPayloadOperation) Valid() bool {
 	}
 }
 
+// Defines values for RequestFailedPayloadStage.
+const (
+	RequestFailedPayloadStageDelivering    RequestFailedPayloadStage = "delivering"
+	RequestFailedPayloadStageMaterializing RequestFailedPayloadStage = "materializing"
+	RequestFailedPayloadStageResolving     RequestFailedPayloadStage = "resolving"
+	RequestFailedPayloadStageSubmitted     RequestFailedPayloadStage = "submitted"
+	RequestFailedPayloadStageTimeout       RequestFailedPayloadStage = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the RequestFailedPayloadStage enum.
+func (e RequestFailedPayloadStage) Valid() bool {
+	switch e {
+	case RequestFailedPayloadStageDelivering:
+		return true
+	case RequestFailedPayloadStageMaterializing:
+		return true
+	case RequestFailedPayloadStageResolving:
+		return true
+	case RequestFailedPayloadStageSubmitted:
+		return true
+	case RequestFailedPayloadStageTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestProgressPayloadOperation.
+const (
+	RequestProgressPayloadOperationCityCreate     RequestProgressPayloadOperation = "city.create"
+	RequestProgressPayloadOperationCityUnregister RequestProgressPayloadOperation = "city.unregister"
+	RequestProgressPayloadOperationSessionCreate  RequestProgressPayloadOperation = "session.create"
+	RequestProgressPayloadOperationSessionMessage RequestProgressPayloadOperation = "session.message"
+	RequestProgressPayloadOperationSessionSubmit  RequestProgressPayloadOperation = "session.submit"
+)
+
+// Valid indicates whether the value is a known member of the RequestProgressPayloadOperation enum.
+func (e RequestProgressPayloadOperation) Valid() bool {
+	switch e {
+	case RequestProgressPayloadOperationCityCreate:
+		return true
+	case RequestProgressPayloadOperationCityUnregister:
+		return true
+	case RequestProgressPayloadOperationSessionCreate:
+		return true
+	case RequestProgressPayloadOperationSessionMessage:
+		return true
+	case RequestProgressPayloadOperationSessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestProgressPayloadStage.
+const (
+	RequestProgressPayloadStageDelivering    RequestProgressPayloadStage = "delivering"
+	RequestProgressPayloadStageMaterializing RequestProgressPayloadStage = "materializing"
+	RequestProgressPayloadStageResolving     RequestProgressPayloadStage = "resolving"
+	RequestProgressPayloadStageSubmitted     RequestProgressPayloadStage = "submitted"
+	RequestProgressPayloadStageTimeout       RequestProgressPayloadStage = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the RequestProgressPayloadStage enum.
+func (e RequestProgressPayloadStage) Valid() bool {
+	switch e {
+	case RequestProgressPayloadStageDelivering:
+		return true
+	case RequestProgressPayloadStageMaterializing:
+		return true
+	case RequestProgressPayloadStageResolving:
+		return true
+	case RequestProgressPayloadStageSubmitted:
+		return true
+	case RequestProgressPayloadStageTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RequestStatusOperation.
 const (
 	RequestStatusOperationCityCreate     RequestStatusOperation = "city.create"
@@ -147,6 +228,33 @@ func (e RequestStatusOperation) Valid() bool {
 	case RequestStatusOperationSessionMessage:
 		return true
 	case RequestStatusOperationSessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestStatusStage.
+const (
+	RequestStatusStageDelivering    RequestStatusStage = "delivering"
+	RequestStatusStageMaterializing RequestStatusStage = "materializing"
+	RequestStatusStageResolving     RequestStatusStage = "resolving"
+	RequestStatusStageSubmitted     RequestStatusStage = "submitted"
+	RequestStatusStageTimeout       RequestStatusStage = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the RequestStatusStage enum.
+func (e RequestStatusStage) Valid() bool {
+	switch e {
+	case RequestStatusStageDelivering:
+		return true
+	case RequestStatusStageMaterializing:
+		return true
+	case RequestStatusStageResolving:
+		return true
+	case RequestStatusStageSubmitted:
+		return true
+	case RequestStatusStageTimeout:
 		return true
 	default:
 		return false
@@ -239,25 +347,52 @@ func (e SupervisorRequestPayloadRemoteAddrClass) Valid() bool {
 
 // Defines values for SupervisorRequestStatusOperation.
 const (
-	CityCreate     SupervisorRequestStatusOperation = "city.create"
-	CityUnregister SupervisorRequestStatusOperation = "city.unregister"
-	SessionCreate  SupervisorRequestStatusOperation = "session.create"
-	SessionMessage SupervisorRequestStatusOperation = "session.message"
-	SessionSubmit  SupervisorRequestStatusOperation = "session.submit"
+	SupervisorRequestStatusOperationCityCreate     SupervisorRequestStatusOperation = "city.create"
+	SupervisorRequestStatusOperationCityUnregister SupervisorRequestStatusOperation = "city.unregister"
+	SupervisorRequestStatusOperationSessionCreate  SupervisorRequestStatusOperation = "session.create"
+	SupervisorRequestStatusOperationSessionMessage SupervisorRequestStatusOperation = "session.message"
+	SupervisorRequestStatusOperationSessionSubmit  SupervisorRequestStatusOperation = "session.submit"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorRequestStatusOperation enum.
 func (e SupervisorRequestStatusOperation) Valid() bool {
 	switch e {
-	case CityCreate:
+	case SupervisorRequestStatusOperationCityCreate:
 		return true
-	case CityUnregister:
+	case SupervisorRequestStatusOperationCityUnregister:
 		return true
-	case SessionCreate:
+	case SupervisorRequestStatusOperationSessionCreate:
 		return true
-	case SessionMessage:
+	case SupervisorRequestStatusOperationSessionMessage:
 		return true
-	case SessionSubmit:
+	case SupervisorRequestStatusOperationSessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestStatusStage.
+const (
+	SupervisorRequestStatusStageDelivering    SupervisorRequestStatusStage = "delivering"
+	SupervisorRequestStatusStageMaterializing SupervisorRequestStatusStage = "materializing"
+	SupervisorRequestStatusStageResolving     SupervisorRequestStatusStage = "resolving"
+	SupervisorRequestStatusStageSubmitted     SupervisorRequestStatusStage = "submitted"
+	SupervisorRequestStatusStageTimeout       SupervisorRequestStatusStage = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestStatusStage enum.
+func (e SupervisorRequestStatusStage) Valid() bool {
+	switch e {
+	case SupervisorRequestStatusStageDelivering:
+		return true
+	case SupervisorRequestStatusStageMaterializing:
+		return true
+	case SupervisorRequestStatusStageResolving:
+		return true
+	case SupervisorRequestStatusStageSubmitted:
+		return true
+	case SupervisorRequestStatusStageTimeout:
 		return true
 	default:
 		return false
@@ -2506,6 +2641,9 @@ type Record struct {
 
 // RequestFailedPayload defines model for RequestFailedPayload.
 type RequestFailedPayload struct {
+	// ElapsedMs Elapsed milliseconds since the async request was accepted, if known.
+	ElapsedMs *int64 `json:"elapsed_ms,omitempty"`
+
 	// ErrorCode Machine-readable error code.
 	ErrorCode string `json:"error_code"`
 
@@ -2517,10 +2655,43 @@ type RequestFailedPayload struct {
 
 	// RequestId Correlation ID from the 202 response.
 	RequestId string `json:"request_id"`
+
+	// Stage Async stage active when the failure was emitted, if known.
+	Stage *RequestFailedPayloadStage `json:"stage,omitempty"`
 }
 
 // RequestFailedPayloadOperation Which operation failed.
 type RequestFailedPayloadOperation string
+
+// RequestFailedPayloadStage Async stage active when the failure was emitted, if known.
+type RequestFailedPayloadStage string
+
+// RequestProgressPayload defines model for RequestProgressPayload.
+type RequestProgressPayload struct {
+	// ElapsedMs Elapsed milliseconds since the async request was accepted.
+	ElapsedMs int64 `json:"elapsed_ms"`
+
+	// Operation Async operation reporting progress.
+	Operation RequestProgressPayloadOperation `json:"operation"`
+
+	// RequestId Correlation ID from the 202 response.
+	RequestId string `json:"request_id"`
+
+	// SessionId Resolved session ID once known.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// SessionTarget Original session target from the request, when applicable.
+	SessionTarget *string `json:"session_target,omitempty"`
+
+	// Stage Current async request stage.
+	Stage RequestProgressPayloadStage `json:"stage"`
+}
+
+// RequestProgressPayloadOperation Async operation reporting progress.
+type RequestProgressPayloadOperation string
+
+// RequestProgressPayloadStage Current async request stage.
+type RequestProgressPayloadStage string
 
 // RequestStatus defines model for RequestStatus.
 type RequestStatus struct {
@@ -2530,8 +2701,14 @@ type RequestStatus struct {
 	// Operation Async operation once known.
 	Operation *RequestStatusOperation `json:"operation,omitempty"`
 
+	// Progress Discriminated union of city event stream envelopes. Each variant constrains the envelope type and payload schema together.
+	Progress *TypedEventStreamEnvelope `json:"progress,omitempty"`
+
 	// RequestId Async request ID.
 	RequestId string `json:"request_id"`
+
+	// Stage Latest async request progress stage, if known.
+	Stage *RequestStatusStage `json:"stage,omitempty"`
 
 	// Status Current request state derived from terminal async-result events.
 	Status RequestStatusStatus `json:"status"`
@@ -2539,6 +2716,9 @@ type RequestStatus struct {
 
 // RequestStatusOperation Async operation once known.
 type RequestStatusOperation string
+
+// RequestStatusStage Latest async request progress stage, if known.
+type RequestStatusStage string
 
 // RequestStatusStatus Current request state derived from terminal async-result events.
 type RequestStatusStatus string
@@ -3370,8 +3550,14 @@ type SupervisorRequestStatus struct {
 	// Operation Async operation once known.
 	Operation *SupervisorRequestStatusOperation `json:"operation,omitempty"`
 
+	// Progress Discriminated union of supervisor event stream envelopes. Each variant constrains the envelope type and payload schema together and includes the source city.
+	Progress *TypedTaggedEventStreamEnvelope `json:"progress,omitempty"`
+
 	// RequestId Async request ID.
 	RequestId string `json:"request_id"`
+
+	// Stage Latest async request progress stage, if known.
+	Stage *SupervisorRequestStatusStage `json:"stage,omitempty"`
 
 	// Status Current request state derived from terminal async-result events.
 	Status SupervisorRequestStatusStatus `json:"status"`
@@ -3379,6 +3565,9 @@ type SupervisorRequestStatus struct {
 
 // SupervisorRequestStatusOperation Async operation once known.
 type SupervisorRequestStatusOperation string
+
+// SupervisorRequestStatusStage Latest async request progress stage, if known.
+type SupervisorRequestStatusStage string
 
 // SupervisorRequestStatusStatus Current request state derived from terminal async-result events.
 type SupervisorRequestStatusStatus string
@@ -3982,6 +4171,18 @@ type TypedEventStreamEnvelopeRequestFailed struct {
 	Actor    string                   `json:"actor"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  RequestFailedPayload     `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRequestProgress defines model for TypedEventStreamEnvelopeRequestProgress.
+type TypedEventStreamEnvelopeRequestProgress struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RequestProgressPayload   `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -4872,6 +5073,19 @@ type TypedTaggedEventStreamEnvelopeRequestFailed struct {
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  RequestFailedPayload     `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRequestProgress defines model for TypedTaggedEventStreamEnvelopeRequestProgress.
+type TypedTaggedEventStreamEnvelopeRequestProgress struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RequestProgressPayload   `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -6949,6 +7163,32 @@ func (t *EventPayload) MergeRequestFailedPayload(v RequestFailedPayload) error {
 	return err
 }
 
+// AsRequestProgressPayload returns the union data inside the EventPayload as a RequestProgressPayload
+func (t EventPayload) AsRequestProgressPayload() (RequestProgressPayload, error) {
+	var body RequestProgressPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRequestProgressPayload overwrites any union data inside the EventPayload as the provided RequestProgressPayload
+func (t *EventPayload) FromRequestProgressPayload(v RequestProgressPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRequestProgressPayload performs a merge with any union data inside the EventPayload, using the provided RequestProgressPayload
+func (t *EventPayload) MergeRequestProgressPayload(v RequestProgressPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsRotatedPayload returns the union data inside the EventPayload as a RotatedPayload
 func (t EventPayload) AsRotatedPayload() (RotatedPayload, error) {
 	var body RotatedPayload
@@ -8747,6 +8987,34 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRequestFailed(v 
 	return err
 }
 
+// AsTypedEventStreamEnvelopeRequestProgress returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRequestProgress
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRequestProgress() (TypedEventStreamEnvelopeRequestProgress, error) {
+	var body TypedEventStreamEnvelopeRequestProgress
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRequestProgress overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRequestProgress
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRequestProgress(v TypedEventStreamEnvelopeRequestProgress) error {
+	v.Type = "request.progress"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRequestProgress performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRequestProgress
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRequestProgress(v TypedEventStreamEnvelopeRequestProgress) error {
+	v.Type = "request.progress"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeRequestResultCityCreate returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRequestResultCityCreate
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRequestResultCityCreate() (TypedEventStreamEnvelopeRequestResultCityCreate, error) {
 	var body TypedEventStreamEnvelopeRequestResultCityCreate
@@ -9579,6 +9847,8 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeProviderSwapped()
 	case "request.failed":
 		return t.AsTypedEventStreamEnvelopeRequestFailed()
+	case "request.progress":
+		return t.AsTypedEventStreamEnvelopeRequestProgress()
 	case "request.result.city.create":
 		return t.AsTypedEventStreamEnvelopeRequestResultCityCreate()
 	case "request.result.city.unregister":
@@ -10876,6 +11146,34 @@ func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRequ
 	return err
 }
 
+// AsTypedTaggedEventStreamEnvelopeRequestProgress returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRequestProgress
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRequestProgress() (TypedTaggedEventStreamEnvelopeRequestProgress, error) {
+	var body TypedTaggedEventStreamEnvelopeRequestProgress
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRequestProgress overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRequestProgress
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRequestProgress(v TypedTaggedEventStreamEnvelopeRequestProgress) error {
+	v.Type = "request.progress"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRequestProgress performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRequestProgress
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRequestProgress(v TypedTaggedEventStreamEnvelopeRequestProgress) error {
+	v.Type = "request.progress"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedTaggedEventStreamEnvelopeRequestResultCityCreate returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRequestResultCityCreate
 func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRequestResultCityCreate() (TypedTaggedEventStreamEnvelopeRequestResultCityCreate, error) {
 	var body TypedTaggedEventStreamEnvelopeRequestResultCityCreate
@@ -11708,6 +12006,8 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeProviderSwapped()
 	case "request.failed":
 		return t.AsTypedTaggedEventStreamEnvelopeRequestFailed()
+	case "request.progress":
+		return t.AsTypedTaggedEventStreamEnvelopeRequestProgress()
 	case "request.result.city.create":
 		return t.AsTypedTaggedEventStreamEnvelopeRequestResultCityCreate()
 	case "request.result.city.unregister":

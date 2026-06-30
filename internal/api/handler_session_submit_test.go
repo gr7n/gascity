@@ -97,6 +97,12 @@ func TestHandleSessionSubmitResultCanBePolledByRequestID(t *testing.T) {
 	if status.Operation != RequestOperationSessionSubmit {
 		t.Fatalf("operation = %q, want %q", status.Operation, RequestOperationSessionSubmit)
 	}
+	if status.Stage != RequestStageSubmitted {
+		t.Fatalf("stage = %q, want %q", status.Stage, RequestStageSubmitted)
+	}
+	if status.Progress == nil || status.Progress.Type != events.RequestProgress {
+		t.Fatalf("progress = %#v, want latest request.progress", status.Progress)
+	}
 	if status.Event == nil || status.Event.Type != events.RequestResultSessionSubmit {
 		t.Fatalf("event = %#v, want session submit result", status.Event)
 	}
@@ -237,6 +243,10 @@ func TestHandleSessionSubmitEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	case <-time.After(testEventTimeout):
 		t.Fatal("provider nudge was not reached")
 	}
+	progress := waitForRequestProgressStage(t, fs.eventProv, accepted.RequestID, RequestStageDelivering, testEventTimeout)
+	if progress.SessionID != info.ID {
+		t.Fatalf("progress session_id = %q, want %q", progress.SessionID, info.ID)
+	}
 	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
 	if success != nil {
 		t.Fatalf("unexpected success: %+v", success)
@@ -247,6 +257,29 @@ func TestHandleSessionSubmitEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	if failure.ErrorCode != "timeout" {
 		t.Fatalf("failure error_code = %q, want timeout", failure.ErrorCode)
 	}
+	if failure.Stage != RequestStageDelivering {
+		t.Fatalf("failure stage = %q, want %q", failure.Stage, RequestStageDelivering)
+	}
+	if !strings.Contains(failure.ErrorMessage, "stage="+RequestStageDelivering) {
+		t.Fatalf("failure error_message = %q, want stage diagnostic", failure.ErrorMessage)
+	}
+}
+
+func waitForRequestProgressStage(t *testing.T, prov events.Provider, requestID, stage string, timeout time.Duration) *RequestProgressPayload {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		progressEvents, _ := prov.List(events.Filter{Type: events.RequestProgress})
+		for _, e := range progressEvents {
+			var p RequestProgressPayload
+			if json.Unmarshal(e.Payload, &p) == nil && requestIDMatches(p.RequestID, requestID) && p.Stage == stage {
+				return &p
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for request.progress stage=%q request_id=%q", stage, requestID)
+	return nil
 }
 
 func TestSessionSubmitAsyncTimeoutMatchesClientTimeout(t *testing.T) {

@@ -808,7 +808,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | BeadClaimRejectedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundChannelMismatchPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | Record | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | BeadClaimRejectedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundChannelMismatchPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | Record | RequestFailedPayload | RequestProgressPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -2369,6 +2369,10 @@ export type Record = {
 
 export type RequestFailedPayload = {
     /**
+     * Elapsed milliseconds since the async request was accepted, if known.
+     */
+    elapsed_ms?: number;
+    /**
      * Machine-readable error code.
      */
     error_code: string;
@@ -2384,6 +2388,37 @@ export type RequestFailedPayload = {
      * Correlation ID from the 202 response.
      */
     request_id: string;
+    /**
+     * Async stage active when the failure was emitted, if known.
+     */
+    stage?: 'resolving' | 'materializing' | 'delivering' | 'submitted' | 'timeout';
+};
+
+export type RequestProgressPayload = {
+    /**
+     * Elapsed milliseconds since the async request was accepted.
+     */
+    elapsed_ms: number;
+    /**
+     * Async operation reporting progress.
+     */
+    operation: 'city.create' | 'city.unregister' | 'session.create' | 'session.message' | 'session.submit';
+    /**
+     * Correlation ID from the 202 response.
+     */
+    request_id: string;
+    /**
+     * Resolved session ID once known.
+     */
+    session_id?: string;
+    /**
+     * Original session target from the request, when applicable.
+     */
+    session_target?: string;
+    /**
+     * Current async request stage.
+     */
+    stage: 'resolving' | 'materializing' | 'delivering' | 'submitted' | 'timeout';
 };
 
 export type RequestStatus = {
@@ -2396,9 +2431,17 @@ export type RequestStatus = {
      */
     operation?: 'city.create' | 'city.unregister' | 'session.create' | 'session.message' | 'session.submit';
     /**
+     * Latest non-terminal progress event for this request, if one was observed.
+     */
+    progress?: TypedEventStreamEnvelope;
+    /**
      * Async request ID.
      */
     request_id: string;
+    /**
+     * Latest async request progress stage, if known.
+     */
+    stage?: 'resolving' | 'materializing' | 'delivering' | 'submitted' | 'timeout';
     /**
      * Current request state derived from terminal async-result events.
      */
@@ -3415,9 +3458,17 @@ export type SupervisorRequestStatus = {
      */
     operation?: 'city.create' | 'city.unregister' | 'session.create' | 'session.message' | 'session.submit';
     /**
+     * Latest non-terminal tagged progress event for this request, if one was observed.
+     */
+    progress?: TypedTaggedEventStreamEnvelope;
+    /**
      * Async request ID.
      */
     request_id: string;
+    /**
+     * Latest async request progress stage, if known.
+     */
+    stage?: 'resolving' | 'materializing' | 'delivering' | 'submitted' | 'timeout';
     /**
      * Current request state derived from terminal async-result events.
      */
@@ -3581,6 +3632,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeProviderSwapped) | ({
     type: 'request.failed';
 } & TypedEventStreamEnvelopeRequestFailed) | ({
+    type: 'request.progress';
+} & TypedEventStreamEnvelopeRequestProgress) | ({
     type: 'request.result.city.create';
 } & TypedEventStreamEnvelopeRequestResultCityCreate) | ({
     type: 'request.result.city.unregister';
@@ -4265,6 +4318,20 @@ export type TypedEventStreamEnvelopeRequestFailed = {
 };
 
 /**
+ * TypedEventStreamEnvelope request.progress
+ */
+export type TypedEventStreamEnvelopeRequestProgress = {
+    actor: string;
+    message?: string;
+    payload: RequestProgressPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'request.progress';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedEventStreamEnvelope request.result.city.create
  */
 export type TypedEventStreamEnvelopeRequestResultCityCreate = {
@@ -4708,6 +4775,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeProviderSwapped) | ({
     type: 'request.failed';
 } & TypedTaggedEventStreamEnvelopeRequestFailed) | ({
+    type: 'request.progress';
+} & TypedTaggedEventStreamEnvelopeRequestProgress) | ({
     type: 'request.result.city.create';
 } & TypedTaggedEventStreamEnvelopeRequestResultCityCreate) | ({
     type: 'request.result.city.unregister';
@@ -5433,6 +5502,21 @@ export type TypedTaggedEventStreamEnvelopeRequestFailed = {
     subject?: string;
     ts: string;
     type: 'request.failed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope request.progress
+ */
+export type TypedTaggedEventStreamEnvelopeRequestProgress = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RequestProgressPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'request.progress';
     workflow?: WorkflowEventProjection;
 };
 

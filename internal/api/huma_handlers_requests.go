@@ -97,8 +97,10 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		return result, fmt.Errorf("list events: %w", err)
 	}
 
-	var best *RequestStatus
-	var bestSeq uint64
+	var terminal *RequestStatus
+	var terminalSeq uint64
+	var progress *RequestStatus
+	var progressSeq uint64
 	for _, event := range evts {
 		candidate, match, err := requestStatusFromEvent(event, requestID)
 		if err != nil {
@@ -108,20 +110,44 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		if !match {
 			continue
 		}
-		if best == nil || event.Seq < bestSeq {
-			candidateCopy := candidate
-			best = &candidateCopy
-			bestSeq = event.Seq
+		switch candidate.Status {
+		case requestStatusPending:
+			if progress == nil || event.Seq > progressSeq {
+				candidateCopy := candidate
+				progress = &candidateCopy
+				progressSeq = event.Seq
+			}
+		default:
+			if terminal == nil || event.Seq < terminalSeq {
+				candidateCopy := candidate
+				terminal = &candidateCopy
+				terminalSeq = event.Seq
+			}
 		}
 	}
 
-	if best != nil {
-		return *best, nil
+	if terminal != nil {
+		if progress != nil {
+			if terminal.Stage == "" {
+				terminal.Stage = progress.Stage
+			}
+			if terminal.Progress == nil {
+				terminal.Progress = progress.Progress
+			}
+		}
+		return *terminal, nil
+	}
+	if progress != nil {
+		return *progress, nil
 	}
 	return result, nil
 }
 
 func requestStatusFromEvent(event events.Event, requestID string) (RequestStatus, bool, error) {
+	if event.Type == events.RequestProgress {
+		return requestProgressStatusFromEvent(event, requestID)
+	}
+
 	terminal, match, err := requestTerminalStatusFromEvent(event, requestID)
 	if err != nil || !match {
 		return RequestStatus{}, match, err
@@ -136,7 +162,31 @@ func requestStatusFromEvent(event events.Event, requestID string) (RequestStatus
 		RequestID: requestID,
 		Status:    terminal.status,
 		Operation: terminal.operation,
+		Stage:     terminal.stage,
 		Event:     &wire,
+	}, true, nil
+}
+
+func requestProgressStatusFromEvent(event events.Event, requestID string) (RequestStatus, bool, error) {
+	var payload RequestProgressPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return RequestStatus{}, false, fmt.Errorf("decode request progress payload: %w", err)
+	}
+	if payload.RequestID != requestID {
+		return RequestStatus{}, false, nil
+	}
+
+	wire, ok := toWireEvent(event)
+	if !ok {
+		return RequestStatus{}, false, fmt.Errorf("decode progress event %s", event.Type)
+	}
+
+	return RequestStatus{
+		RequestID: requestID,
+		Status:    requestStatusPending,
+		Operation: payload.Operation,
+		Stage:     payload.Stage,
+		Progress:  &wire,
 	}, true, nil
 }
 
@@ -152,21 +202,58 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 		return result, fmt.Errorf("list supervisor events: %w", err)
 	}
 
+	var terminal *SupervisorRequestStatus
+	var terminalSeq uint64
+	var progress *SupervisorRequestStatus
+	var progressSeq uint64
 	for _, event := range evts {
 		candidate, match, err := supervisorRequestStatusFromEvent(event, requestID)
 		if err != nil {
 			log.Printf("api: supervisor request status skip event city=%s type=%s seq=%d: %v", event.City, event.Type, event.Seq, err)
 			continue
 		}
-		if match {
-			return candidate, nil
+		if !match {
+			continue
 		}
+		switch candidate.Status {
+		case requestStatusPending:
+			if progress == nil || event.Seq > progressSeq {
+				candidateCopy := candidate
+				progress = &candidateCopy
+				progressSeq = event.Seq
+			}
+		default:
+			if terminal == nil || event.Seq < terminalSeq {
+				candidateCopy := candidate
+				terminal = &candidateCopy
+				terminalSeq = event.Seq
+			}
+		}
+	}
+
+	if terminal != nil {
+		if progress != nil {
+			if terminal.Stage == "" {
+				terminal.Stage = progress.Stage
+			}
+			if terminal.Progress == nil {
+				terminal.Progress = progress.Progress
+			}
+		}
+		return *terminal, nil
+	}
+	if progress != nil {
+		return *progress, nil
 	}
 
 	return result, nil
 }
 
 func supervisorRequestStatusFromEvent(event events.TaggedEvent, requestID string) (SupervisorRequestStatus, bool, error) {
+	if event.Type == events.RequestProgress {
+		return supervisorRequestProgressStatusFromEvent(event, requestID)
+	}
+
 	terminal, match, err := requestTerminalStatusFromEvent(event.Event, requestID)
 	if err != nil || !match {
 		return SupervisorRequestStatus{}, match, err
@@ -181,13 +268,38 @@ func supervisorRequestStatusFromEvent(event events.TaggedEvent, requestID string
 		RequestID: requestID,
 		Status:    terminal.status,
 		Operation: terminal.operation,
+		Stage:     terminal.stage,
 		Event:     &wire,
+	}, true, nil
+}
+
+func supervisorRequestProgressStatusFromEvent(event events.TaggedEvent, requestID string) (SupervisorRequestStatus, bool, error) {
+	var payload RequestProgressPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return SupervisorRequestStatus{}, false, fmt.Errorf("decode request progress payload: %w", err)
+	}
+	if payload.RequestID != requestID {
+		return SupervisorRequestStatus{}, false, nil
+	}
+
+	wire, ok := toWireTaggedEvent(event)
+	if !ok {
+		return SupervisorRequestStatus{}, false, fmt.Errorf("decode progress tagged event %s", event.Type)
+	}
+
+	return SupervisorRequestStatus{
+		RequestID: requestID,
+		Status:    requestStatusPending,
+		Operation: payload.Operation,
+		Stage:     payload.Stage,
+		Progress:  &wire,
 	}, true, nil
 }
 
 type terminalRequestStatus struct {
 	status    string
 	operation string
+	stage     string
 }
 
 func requestTerminalStatusFromEvent(event events.Event, requestID string) (terminalRequestStatus, bool, error) {
@@ -199,6 +311,7 @@ func requestTerminalStatusFromEvent(event events.Event, requestID string) (termi
 	var payload struct {
 		RequestID string `json:"request_id"`
 		Operation string `json:"operation"`
+		Stage     string `json:"stage"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return terminalRequestStatus{}, false, fmt.Errorf("decode request payload: %w", err)
@@ -217,5 +330,6 @@ func requestTerminalStatusFromEvent(event events.Event, requestID string) (termi
 	return terminalRequestStatus{
 		status:    status,
 		operation: operation,
+		stage:     payload.Stage,
 	}, true, nil
 }

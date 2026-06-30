@@ -13,6 +13,8 @@ type RequestStatus struct {
 	RequestID string     `json:"request_id" doc:"Async request ID."`
 	Status    string     `json:"status" enum:"pending,succeeded,failed" doc:"Current request state derived from terminal async-result events."`
 	Operation string     `json:"operation,omitempty" enum:"city.create,city.unregister,session.create,session.message,session.submit" doc:"Async operation once known."`
+	Stage     string     `json:"stage,omitempty" enum:"resolving,materializing,delivering,submitted,timeout" doc:"Latest async request progress stage, if known."`
+	Progress  *WireEvent `json:"progress,omitempty" doc:"Latest non-terminal progress event for this request, if one was observed."`
 	Event     *WireEvent `json:"event,omitempty" doc:"Terminal result event when the request has succeeded or failed."`
 }
 
@@ -30,6 +32,8 @@ type SupervisorRequestStatus struct {
 	RequestID string           `json:"request_id" doc:"Async request ID."`
 	Status    string           `json:"status" enum:"pending,succeeded,failed" doc:"Current request state derived from terminal async-result events."`
 	Operation string           `json:"operation,omitempty" enum:"city.create,city.unregister,session.create,session.message,session.submit" doc:"Async operation once known."`
+	Stage     string           `json:"stage,omitempty" enum:"resolving,materializing,delivering,submitted,timeout" doc:"Latest async request progress stage, if known."`
+	Progress  *WireTaggedEvent `json:"progress,omitempty" doc:"Latest non-terminal tagged progress event for this request, if one was observed."`
 	Event     *WireTaggedEvent `json:"event,omitempty" doc:"Terminal tagged result event when the request has succeeded or failed."`
 }
 

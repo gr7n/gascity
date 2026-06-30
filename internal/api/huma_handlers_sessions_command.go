@@ -581,6 +581,7 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 	}
 	message := input.Body.Message
 	sessionTarget := input.ID
+	startedAt := time.Now()
 	go func() {
 		defer s.recoverAsRequestFailed(reqID, RequestOperationSessionSubmit)
 
@@ -588,20 +589,51 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 			sessionID string
 			queued    bool
 			intent    string
+			stage     string
+			elapsedMs int64
 			errorCode string
 			err       error
+		}
+		type submitStageSnapshot struct {
+			stage     string
+			sessionID string
 		}
 
 		resultCh := make(chan submitResult, 1)
 		var terminalEmitted atomic.Bool
+		var currentStage atomic.Value
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		elapsedMs := func() int64 {
+			elapsed := time.Since(startedAt).Milliseconds()
+			if elapsed < 0 {
+				return 0
+			}
+			return elapsed
+		}
+		setStage := func(stage, sessionID string) {
+			if stage == "" || terminalEmitted.Load() {
+				return
+			}
+			currentStage.Store(submitStageSnapshot{stage: stage, sessionID: sessionID})
+			s.emitSessionSubmitProgress(reqID, sessionTarget, sessionID, stage, elapsedMs())
+		}
+		stageSnapshot := func() submitStageSnapshot {
+			snapshot, _ := currentStage.Load().(submitStageSnapshot)
+			return snapshot
+		}
+		failureMessage := func(message, stage string) string {
+			if strings.TrimSpace(stage) == "" {
+				return message
+			}
+			return fmt.Sprintf("%s (stage=%s)", message, stage)
+		}
 		sendResult := func(result submitResult) {
 			if terminalEmitted.Load() {
 				if result.err != nil {
-					log.Printf("api: late session.submit result after timeout request_id=%s target=%s error_code=%s err=%v", reqID, sessionTarget, result.errorCode, result.err)
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s stage=%s error_code=%s err=%v", reqID, sessionTarget, result.stage, result.errorCode, result.err)
 				} else {
-					log.Printf("api: late session.submit result after timeout request_id=%s target=%s session_id=%s", reqID, sessionTarget, result.sessionID)
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s stage=%s session_id=%s", reqID, sessionTarget, result.stage, result.sessionID)
 				}
 				return
 			}
@@ -613,21 +645,29 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 					sendResult(submitResult{errorCode: "internal_error", err: fmt.Errorf("panic: %v", r)})
 				}
 			}()
+			setStage(RequestStageResolving, "")
+			if _, ok, err := s.findNamedSessionSpecForTarget(store, sessionTarget); err == nil && ok {
+				setStage(RequestStageMaterializing, "")
+			}
 			id, err := s.resolveSessionIDMaterializingNamedWithContext(ctx, store, sessionTarget)
 			if err != nil {
-				sendResult(submitResult{errorCode: "resolve_failed", err: err})
+				snapshot := stageSnapshot()
+				sendResult(submitResult{errorCode: "resolve_failed", stage: snapshot.stage, elapsedMs: elapsedMs(), err: err})
 				return
 			}
+			setStage(RequestStageDelivering, id)
 			outcome, submitErr := s.submitMessageToSession(ctx, store, id, message, intent)
 			if submitErr != nil {
 				code := "submit_failed"
 				if errors.Is(submitErr, context.DeadlineExceeded) || errors.Is(submitErr, context.Canceled) {
 					code = "timeout"
 				}
-				sendResult(submitResult{sessionID: id, errorCode: code, err: submitErr})
+				snapshot := stageSnapshot()
+				sendResult(submitResult{sessionID: id, errorCode: code, stage: snapshot.stage, elapsedMs: elapsedMs(), err: submitErr})
 				return
 			}
-			sendResult(submitResult{sessionID: id, queued: outcome.Queued, intent: string(intent)})
+			setStage(RequestStageSubmitted, id)
+			sendResult(submitResult{sessionID: id, queued: outcome.Queued, intent: string(intent), stage: RequestStageSubmitted, elapsedMs: elapsedMs()})
 		}()
 
 		timer := time.NewTimer(sessionSubmitAsyncTimeout)
@@ -636,7 +676,7 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 		case result := <-resultCh:
 			terminalEmitted.Store(true)
 			if result.err != nil {
-				s.emitSessionSubmitFailed(reqID, result.errorCode, result.err.Error())
+				s.emitSessionSubmitFailedWithStage(reqID, result.errorCode, failureMessage(result.err.Error(), result.stage), result.stage, result.elapsedMs)
 				return
 			}
 			s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
@@ -646,7 +686,7 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 			case result := <-resultCh:
 				terminalEmitted.Store(true)
 				if result.err != nil {
-					s.emitSessionSubmitFailed(reqID, result.errorCode, result.err.Error())
+					s.emitSessionSubmitFailedWithStage(reqID, result.errorCode, failureMessage(result.err.Error(), result.stage), result.stage, result.elapsedMs)
 					return
 				}
 				s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
@@ -654,7 +694,14 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 			default:
 			}
 			terminalEmitted.Store(true)
-			s.emitSessionSubmitFailed(reqID, "timeout", fmt.Sprintf("session.submit timed out after %s", sessionSubmitAsyncTimeout))
+			snapshot := stageSnapshot()
+			activeStage := snapshot.stage
+			if activeStage == "" {
+				activeStage = RequestStageTimeout
+			}
+			elapsed := elapsedMs()
+			s.emitSessionSubmitProgress(reqID, sessionTarget, snapshot.sessionID, RequestStageTimeout, elapsed)
+			s.emitSessionSubmitFailedWithStage(reqID, "timeout", fmt.Sprintf("session.submit timed out after %s (stage=%s)", sessionSubmitAsyncTimeout, activeStage), activeStage, elapsed)
 		}
 	}()
 

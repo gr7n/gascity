@@ -109,6 +109,7 @@ const (
 	CityResumed       = "city.resumed"
 	// Typed async request result events. 5 success types (one per
 	// operation, fully typed payload) + 1 shared failure type.
+	RequestProgress             = "request.progress"
 	RequestResultCityCreate     = "request.result.city.create"
 	RequestResultCityUnregister = "request.result.city.unregister"
 	RequestResultSessionCreate  = "request.result.session.create"
@@ -205,6 +206,7 @@ var KnownEventTypes = []string{
 	ConvoyCreated, ConvoyClosed,
 	ControllerStarted, ControllerStopped,
 	CitySuspended, CityResumed,
+	RequestProgress,
 	RequestResultCityCreate, RequestResultCityUnregister,
 	RequestResultSessionCreate, RequestResultSessionMessage,
 	RequestResultSessionSubmit, RequestFailed,

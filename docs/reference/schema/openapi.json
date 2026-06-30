@@ -2234,6 +2234,9 @@
             "$ref": "#/components/schemas/RequestFailedPayload"
           },
           {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          {
             "$ref": "#/components/schemas/RotatedPayload"
           },
           {
@@ -5855,6 +5858,11 @@
       "RequestFailedPayload": {
         "additionalProperties": false,
         "properties": {
+          "elapsed_ms": {
+            "description": "Elapsed milliseconds since the async request was accepted, if known.",
+            "format": "int64",
+            "type": "integer"
+          },
           "error_code": {
             "description": "Machine-readable error code.",
             "type": "string"
@@ -5877,6 +5885,17 @@
           "request_id": {
             "description": "Correlation ID from the 202 response.",
             "type": "string"
+          },
+          "stage": {
+            "description": "Async stage active when the failure was emitted, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -5884,6 +5903,57 @@
           "operation",
           "error_code",
           "error_message"
+        ],
+        "type": "object"
+      },
+      "RequestProgressPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "elapsed_ms": {
+            "description": "Elapsed milliseconds since the async request was accepted.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "operation": {
+            "description": "Async operation reporting progress.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Correlation ID from the 202 response.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Resolved session ID once known.",
+            "type": "string"
+          },
+          "session_target": {
+            "description": "Original session target from the request, when applicable.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Current async request stage.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "operation",
+          "stage",
+          "elapsed_ms"
         ],
         "type": "object"
       },
@@ -5905,8 +5975,23 @@
             ],
             "type": "string"
           },
+          "progress": {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelope",
+            "description": "Latest non-terminal progress event for this request, if one was observed."
+          },
           "request_id": {
             "description": "Async request ID.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Latest async request progress stage, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
             "type": "string"
           },
           "status": {
@@ -7874,8 +7959,23 @@
             ],
             "type": "string"
           },
+          "progress": {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelope",
+            "description": "Latest non-terminal tagged progress event for this request, if one was observed."
+          },
           "request_id": {
             "description": "Async request ID.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Latest async request progress stage, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
             "type": "string"
           },
           "status": {
@@ -8081,6 +8181,7 @@
             "project.identity.stamped": "#/components/schemas/TypedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedEventStreamEnvelopeRequestFailed",
+            "request.progress": "#/components/schemas/TypedEventStreamEnvelopeRequestProgress",
             "request.result.city.create": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityCreate",
             "request.result.city.unregister": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityUnregister",
             "request.result.session.create": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionCreate",
@@ -8241,6 +8342,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestProgress"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityCreate"
@@ -9013,6 +9117,7 @@
                 "controller.stopped",
                 "city.suspended",
                 "city.resumed",
+                "request.progress",
                 "request.result.city.create",
                 "request.result.city.unregister",
                 "request.result.session.create",
@@ -10283,6 +10388,48 @@
         "title": "TypedEventStreamEnvelope request.failed",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeRequestProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "request.progress",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope request.progress",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeRequestResultCityCreate": {
         "additionalProperties": false,
         "properties": {
@@ -11381,6 +11528,7 @@
             "project.identity.stamped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestFailed",
+            "request.progress": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestProgress",
             "request.result.city.create": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityCreate",
             "request.result.city.unregister": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityUnregister",
             "request.result.session.create": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionCreate",
@@ -11541,6 +11689,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestProgress"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityCreate"
@@ -12376,6 +12527,7 @@
                 "controller.stopped",
                 "city.suspended",
                 "city.resumed",
+                "request.progress",
                 "request.result.city.create",
                 "request.result.city.unregister",
                 "request.result.session.create",
@@ -13761,6 +13913,52 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope request.failed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRequestProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "request.progress",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope request.progress",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeRequestResultCityCreate": {
