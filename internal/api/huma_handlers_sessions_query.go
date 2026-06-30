@@ -36,6 +36,20 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 	listResult := mgr.ListFullFromBeads(all, input.State, input.Template)
 	sessions := listResult.Sessions
 
+	limit := maxPaginationLimit
+	if input.Limit > 0 {
+		limit = input.Limit
+		if limit > maxPaginationLimit {
+			limit = maxPaginationLimit
+		}
+	}
+	pp := pageParams{
+		Offset:   decodeCursor(input.Cursor),
+		Limit:    limit,
+		IsPaging: input.cursorPresent,
+	}
+	pageSessions, total, nextCursor := pageForResponse(sessions, pp)
+
 	// Build bead index for reason enrichment.
 	beadIndex := make(map[string]*beads.Bead)
 	for i := range listResult.Beads {
@@ -44,34 +58,13 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 
 	wantPeek := input.Peek
 	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
-	items := make([]sessionResponse, len(sessions))
-	for i, sess := range sessions {
+	items := make([]sessionResponse, len(pageSessions))
+	for i, sess := range pageSessions {
 		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, s.state.SessionProvider(), hasDeferredQueue)
 		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
 	}
 
-	// Pagination support.
-	limit := maxPaginationLimit
-	if input.Limit > 0 {
-		limit = input.Limit
-		if limit > maxPaginationLimit {
-			limit = maxPaginationLimit
-		}
-	}
-
-	pp := pageParams{
-		Offset:   decodeCursor(input.Cursor),
-		Limit:    limit,
-		IsPaging: input.cursorPresent,
-	}
-
 	if !pp.IsPaging {
-		// No pagination cursor — capture the full match count BEFORE truncating
-		// so clients can tell how many items exist vs. how many fit the page.
-		total := len(items)
-		if pp.Limit < len(items) {
-			items = items[:pp.Limit]
-		}
 		return &ListOutput[sessionResponse]{
 			Index:     s.latestIndex(),
 			CacheAgeS: cacheAgeSeconds(store),
@@ -84,15 +77,11 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 		}, nil
 	}
 
-	page, total, nextCursor := paginate(items, pp)
-	if page == nil {
-		page = []sessionResponse{}
-	}
 	return &ListOutput[sessionResponse]{
 		Index:     s.latestIndex(),
 		CacheAgeS: cacheAgeSeconds(store),
 		Body: ListBody[sessionResponse]{
-			Items:         page,
+			Items:         items,
 			Total:         total,
 			NextCursor:    nextCursor,
 			Partial:       len(partialErrors) > 0,

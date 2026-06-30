@@ -246,6 +246,8 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	}
 	listResult := catalog.ListFullFromBeads(all, stateFilter, templateFilter)
 	sessions := listResult.Sessions
+	pp := parsePagination(r, maxPaginationLimit)
+	pageSessions, total, nextCursor := pageForResponse(sessions, pp)
 
 	// Build bead index for reason enrichment.
 	beadIndex := make(map[string]*beads.Bead)
@@ -253,18 +255,14 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		beadIndex[listResult.Beads[i].ID] = &listResult.Beads[i]
 	}
 
-	items := make([]sessionResponse, len(sessions))
+	items := make([]sessionResponse, len(pageSessions))
 	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
-	for i, sess := range sessions {
+	for i, sess := range pageSessions {
 		items[i] = sessionResponseWithReason(sess, beadIndex[sess.ID], cfg, s.state.SessionProvider(), hasDeferredQueue)
 		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
 	}
 
-	pp := parsePagination(r, maxPaginationLimit)
 	if !pp.IsPaging {
-		if pp.Limit < len(items) {
-			items = items[:pp.Limit]
-		}
 		writeJSON(w, http.StatusOK, listResponse{
 			Items:         items,
 			Total:         len(items),
@@ -273,12 +271,8 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	page, total, nextCursor := paginate(items, pp)
-	if page == nil {
-		page = []sessionResponse{}
-	}
 	writeJSON(w, http.StatusOK, listResponse{
-		Items:         page,
+		Items:         items,
 		Total:         total,
 		NextCursor:    nextCursor,
 		Partial:       len(partialErrors) > 0,

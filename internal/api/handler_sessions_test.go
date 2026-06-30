@@ -2090,6 +2090,82 @@ func TestHandleSessionListPeek(t *testing.T) {
 	}
 }
 
+func TestHandleSessionListPaginatesBeforePeekEnrichment(t *testing.T) {
+	fs := newSessionFakeState(t)
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	first := createTestSession(t, fs.cityBeadStore, fs.sp, "First Peek Session")
+	second := createTestSession(t, fs.cityBeadStore, fs.sp, "Second Peek Session")
+	third := createTestSession(t, fs.cityBeadStore, fs.sp, "Third Peek Session")
+	fs.sp.SetPeekOutput(first.SessionName, "first output")
+	fs.sp.SetPeekOutput(second.SessionName, "second output")
+	fs.sp.SetPeekOutput(third.SessionName, "third output")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", cityURL(fs, "/sessions?limit=1&peek=true"), nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Items []sessionResponse `json:"items"`
+		Total int               `json:"total"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].LastOutput == "" {
+		t.Fatal("last_output = empty, want returned page to be enriched")
+	}
+	if resp.Total != 3 {
+		t.Fatalf("total = %d, want 3", resp.Total)
+	}
+
+	peekCalls := 0
+	for _, call := range fs.sp.SnapshotCalls() {
+		if call.Method == "Peek" {
+			peekCalls++
+		}
+	}
+	if peekCalls != 1 {
+		t.Fatalf("Peek calls = %d, want 1 for returned page only", peekCalls)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("GET", cityURL(fs, "/sessions?cursor=")+encodeCursor(1)+"&limit=1&peek=true", nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cursor status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode cursor response: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("cursor items = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].LastOutput == "" {
+		t.Fatal("cursor last_output = empty, want returned page to be enriched")
+	}
+	if resp.Total != 3 {
+		t.Fatalf("cursor total = %d, want 3", resp.Total)
+	}
+
+	peekCalls = 0
+	for _, call := range fs.sp.SnapshotCalls() {
+		if call.Method == "Peek" {
+			peekCalls++
+		}
+	}
+	if peekCalls != 2 {
+		t.Fatalf("Peek calls after cursor page = %d, want 2 total for two returned pages", peekCalls)
+	}
+}
+
 func TestHandleSessionCreate(t *testing.T) {
 	fs := newSessionFakeState(t)
 	srv := New(fs)
