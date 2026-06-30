@@ -4856,9 +4856,15 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	}
 }
 
-func TestSessionMessageAsyncTimeoutMatchesClientTimeout(t *testing.T) {
+func TestSessionMessageAsyncTimeoutIsOperatorBounded(t *testing.T) {
 	if sessionMessageAsyncTimeout != sessionMessageTimeout {
 		t.Fatalf("sessionMessageAsyncTimeout = %s, want client timeout %s", sessionMessageAsyncTimeout, sessionMessageTimeout)
+	}
+	if sessionMessageTimeout != defaultSessionMessageTimeout {
+		t.Fatalf("sessionMessageTimeout = %s, want default %s", sessionMessageTimeout, defaultSessionMessageTimeout)
+	}
+	if sessionMessageAsyncTimeout > 45*time.Second {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want an operator-bounded wait", sessionMessageAsyncTimeout)
 	}
 }
 

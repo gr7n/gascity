@@ -262,7 +262,9 @@ type Client struct {
 	initErr  error  // set when NewClient failed to build the transport (malformed baseURL, etc.)
 }
 
-var sessionMessageTimeout = 4 * time.Minute
+const defaultSessionMessageTimeout = 35 * time.Second
+
+var sessionMessageTimeout = defaultSessionMessageTimeout
 
 // SessionSubmitResponse is the domain-facing shape of a session submit result.
 type SessionSubmitResponse struct {
