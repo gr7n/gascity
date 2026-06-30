@@ -218,6 +218,83 @@ func TestRequestStatusAfterSeq(t *testing.T) {
 	}
 }
 
+func TestRequestStatusUsesBoundedTailWithoutAfterSeq(t *testing.T) {
+	state := newFakeState(t)
+	ep := state.eventProv.(*events.Fake)
+	for i := 0; i < 20; i++ {
+		recordPayloadEvent(t, ep, events.RequestProgress, "noise", RequestProgressPayload{
+			RequestID: "req-noise",
+			Operation: RequestOperationSessionSubmit,
+			Stage:     RequestStageDelivering,
+		})
+	}
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-fast",
+		SessionID: "director",
+		Queued:    true,
+		Intent:    "default",
+	})
+	recorder := &recordingEventProvider{Provider: ep}
+	state.eventProv = recorder
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/request/req-fast"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp RequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != requestStatusSucceeded || resp.Event == nil {
+		t.Fatalf("response = %#v, want succeeded with terminal event", resp)
+	}
+	if len(recorder.filters) != 0 {
+		t.Fatalf("cursorless request status used full list filters: %#v", recorder.filters)
+	}
+	if len(recorder.tailFilters) != 1 {
+		t.Fatalf("tail filters = %#v, want one bounded tail lookup", recorder.tailFilters)
+	}
+	if got := recorder.tailLimits[0]; got != requestStatusTailScanLimit {
+		t.Fatalf("tail limit = %d, want %d", got, requestStatusTailScanLimit)
+	}
+	if recorder.tailFilters[0].AfterSeq != 0 {
+		t.Fatalf("tail filter AfterSeq = %d, want 0", recorder.tailFilters[0].AfterSeq)
+	}
+}
+
+func TestRequestStatusKeepsAfterSeqOnFullList(t *testing.T) {
+	state := newFakeState(t)
+	ep := state.eventProv.(*events.Fake)
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-want",
+		SessionID: "director",
+	})
+	recorder := &recordingEventProvider{Provider: ep}
+	state.eventProv = recorder
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/request/req-want?after_seq=1"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if len(recorder.tailFilters) != 0 {
+		t.Fatalf("after_seq request status used tail filters: %#v", recorder.tailFilters)
+	}
+	if len(recorder.filters) != 1 {
+		t.Fatalf("list filters = %#v, want one after_seq lookup", recorder.filters)
+	}
+	if got := recorder.filters[0].AfterSeq; got != 1 {
+		t.Fatalf("AfterSeq = %d, want 1", got)
+	}
+}
+
 func TestRequestStatusScopesEventScansToRequestTypes(t *testing.T) {
 	state := newFakeState(t)
 	ep := state.eventProv.(*events.Fake)
@@ -253,7 +330,8 @@ func TestRequestStatusScopesEventScansToRequestTypes(t *testing.T) {
 	if resp.Status != requestStatusSucceeded || resp.Event == nil {
 		t.Fatalf("response = %#v, want succeeded with terminal event", resp)
 	}
-	if len(recorder.filters) == 0 {
+	filters := recorder.allFilters()
+	if len(filters) == 0 {
 		t.Fatal("expected request status to list events")
 	}
 	allowed := map[string]bool{
@@ -267,7 +345,7 @@ func TestRequestStatusScopesEventScansToRequestTypes(t *testing.T) {
 	}
 	seenProgress := false
 	seenSubmitResult := false
-	for _, filter := range recorder.filters {
+	for _, filter := range filters {
 		if filter.Type == "" && len(filter.Types) == 0 {
 			t.Fatalf("request status used broad event scan: %#v", filter)
 		}
@@ -291,7 +369,7 @@ func TestRequestStatusScopesEventScansToRequestTypes(t *testing.T) {
 		}
 	}
 	if !seenProgress || !seenSubmitResult {
-		t.Fatalf("filters = %#v, want progress and session.submit result scans", recorder.filters)
+		t.Fatalf("filters = %#v, want progress and session.submit result scans", filters)
 	}
 }
 
@@ -338,10 +416,32 @@ func recordPayloadEvent(t *testing.T, ep events.Recorder, eventType, subject str
 
 type recordingEventProvider struct {
 	events.Provider
-	filters []events.Filter
+	filters     []events.Filter
+	tailFilters []events.Filter
+	tailLimits  []int
 }
 
 func (p *recordingEventProvider) List(filter events.Filter) ([]events.Event, error) {
 	p.filters = append(p.filters, filter)
 	return p.Provider.List(filter)
+}
+
+func (p *recordingEventProvider) ListTail(filter events.Filter, limit int) ([]events.Event, error) {
+	p.tailFilters = append(p.tailFilters, filter)
+	p.tailLimits = append(p.tailLimits, limit)
+	if tail, ok := p.Provider.(events.TailProvider); ok {
+		return tail.ListTail(filter, limit)
+	}
+	evts, err := p.Provider.List(filter)
+	if err != nil || limit <= 0 || len(evts) <= limit {
+		return evts, err
+	}
+	return evts[len(evts)-limit:], nil
+}
+
+func (p *recordingEventProvider) allFilters() []events.Filter {
+	filters := make([]events.Filter, 0, len(p.filters)+len(p.tailFilters))
+	filters = append(filters, p.filters...)
+	filters = append(filters, p.tailFilters...)
+	return filters
 }

@@ -16,6 +16,11 @@ const (
 	requestStatusPending   = "pending"
 	requestStatusSucceeded = "succeeded"
 	requestStatusFailed    = "failed"
+
+	// Cursorless status checks are a recovery path for recent async requests,
+	// not a durable event-history query. Keep them bounded so stale/missing
+	// request IDs cannot make UI health checks scan large city logs.
+	requestStatusTailScanLimit = 64
 )
 
 var asyncRequestOperationByEventType = map[string]string{
@@ -102,7 +107,7 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		Status:    requestStatusPending,
 	}
 
-	evts, err := ep.List(events.Filter{AfterSeq: afterSeq, Types: asyncRequestEventTypes})
+	evts, err := listAsyncRequestStatusEvents(ep, afterSeq)
 	if err != nil {
 		return result, fmt.Errorf("list events: %w", err)
 	}
@@ -151,6 +156,16 @@ func lookupAsyncRequestStatus(ep events.Provider, requestID string, afterSeq uin
 		return *progress, nil
 	}
 	return result, nil
+}
+
+func listAsyncRequestStatusEvents(ep events.Provider, afterSeq uint64) ([]events.Event, error) {
+	filter := events.Filter{AfterSeq: afterSeq, Types: asyncRequestEventTypes}
+	if afterSeq == 0 {
+		if tail, ok := ep.(events.TailProvider); ok {
+			return tail.ListTail(filter, requestStatusTailScanLimit)
+		}
+	}
+	return ep.List(filter)
 }
 
 func requestStatusFromEvent(event events.Event, requestID string) (RequestStatus, bool, error) {
@@ -207,7 +222,7 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 	}
 
 	cursors := events.ParseCursor(strings.TrimSpace(afterCursor))
-	evts, err := mux.ListAfterCursor(cursors, events.Filter{Types: asyncRequestEventTypes})
+	evts, err := listSupervisorAsyncRequestStatusEvents(mux, cursors)
 	if err != nil {
 		return result, fmt.Errorf("list supervisor events: %w", err)
 	}
@@ -257,6 +272,14 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 	}
 
 	return result, nil
+}
+
+func listSupervisorAsyncRequestStatusEvents(mux *events.Multiplexer, cursors map[string]uint64) ([]events.TaggedEvent, error) {
+	filter := events.Filter{Types: asyncRequestEventTypes}
+	if len(cursors) == 0 {
+		return mux.ListTail(filter, requestStatusTailScanLimit)
+	}
+	return mux.ListAfterCursor(cursors, filter)
 }
 
 func supervisorRequestStatusFromEvent(event events.TaggedEvent, requestID string) (SupervisorRequestStatus, bool, error) {

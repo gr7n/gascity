@@ -592,6 +592,53 @@ func TestSupervisorRequestStatusReadsCityProviderResults(t *testing.T) {
 	}
 }
 
+func TestSupervisorRequestStatusUsesBoundedTailWithoutCursor(t *testing.T) {
+	state := newFakeState(t)
+	state.cityName = "alpha"
+	ep := state.eventProv.(*events.Fake)
+	for i := 0; i < 20; i++ {
+		recordPayloadEvent(t, ep, events.RequestProgress, "noise", RequestProgressPayload{
+			RequestID: "req-noise",
+			Operation: RequestOperationSessionSubmit,
+			Stage:     RequestStageDelivering,
+		})
+	}
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-submit",
+		SessionID: "director",
+		Queued:    false,
+		Intent:    "default",
+	})
+	recorder := &recordingEventProvider{Provider: ep}
+	state.eventProv = recorder
+
+	sm := newTestSupervisorMux(t, map[string]*fakeState{"alpha": state})
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-submit", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.Status != requestStatusSucceeded || resp.Event == nil || resp.Event.City != "alpha" {
+		t.Fatalf("response = %+v, want alpha session.submit success", resp)
+	}
+	if len(recorder.filters) != 0 {
+		t.Fatalf("cursorless supervisor request status used full list filters: %#v", recorder.filters)
+	}
+	if len(recorder.tailFilters) != 1 {
+		t.Fatalf("tail filters = %#v, want one bounded tail lookup", recorder.tailFilters)
+	}
+	if got := recorder.tailLimits[0]; got != requestStatusTailScanLimit {
+		t.Fatalf("tail limit = %d, want %d", got, requestStatusTailScanLimit)
+	}
+}
+
 func TestSupervisorCityCreateMapsInitializerErrors(t *testing.T) {
 	cityPath := filepath.Join(t.TempDir(), "mc-city")
 	tests := []struct {
