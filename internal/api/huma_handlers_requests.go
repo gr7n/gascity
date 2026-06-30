@@ -146,16 +146,13 @@ func lookupSupervisorAsyncRequestStatus(mux *events.Multiplexer, requestID, afte
 		Status:    requestStatusPending,
 	}
 
-	evts, err := mux.ListAll(events.Filter{})
+	cursors := events.ParseCursor(strings.TrimSpace(afterCursor))
+	evts, err := mux.ListAfterCursor(cursors, events.Filter{})
 	if err != nil {
 		return result, fmt.Errorf("list supervisor events: %w", err)
 	}
 
-	cursors := events.ParseCursor(strings.TrimSpace(afterCursor))
 	for _, event := range evts {
-		if !taggedEventIsAfterCursor(event, cursors) {
-			continue
-		}
 		candidate, match, err := supervisorRequestStatusFromEvent(event, requestID)
 		if err != nil {
 			log.Printf("api: supervisor request status skip event city=%s type=%s seq=%d: %v", event.City, event.Type, event.Seq, err)
@@ -186,17 +183,6 @@ func supervisorRequestStatusFromEvent(event events.TaggedEvent, requestID string
 		Operation: terminal.operation,
 		Event:     &wire,
 	}, true, nil
-}
-
-func taggedEventIsAfterCursor(event events.TaggedEvent, cursors map[string]uint64) bool {
-	if len(cursors) == 0 {
-		return true
-	}
-	afterSeq, ok := cursors[event.City]
-	if !ok {
-		return true
-	}
-	return event.Seq > afterSeq
 }
 
 type terminalRequestStatus struct {
