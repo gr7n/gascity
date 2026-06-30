@@ -46,6 +46,25 @@ describe("crew empty states", () => {
     expect(document.getElementById("crew-empty")?.textContent).not.toContain("Select a city");
   });
 
+  it("does not request output peeks while listing crew sessions", async () => {
+    const getSpy = vi.spyOn(api, "GET").mockImplementation(async (path: string) => {
+      if (path === "/v0/city/{cityName}/sessions") {
+        return { data: { items: [] } } as never;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    await renderCrew();
+
+    const getCalls = getSpy.mock.calls as Array<[string, unknown?]>;
+    const sessionsCall = getCalls.find(([path]) => path === "/v0/city/{cityName}/sessions");
+    expect(sessionsCall?.[1]).toMatchObject({
+      params: { query: { state: "active" } },
+    });
+    expect((sessionsCall?.[1] as { params?: { query?: Record<string, unknown> } } | undefined)?.params?.query)
+      .not.toHaveProperty("peek");
+  });
+
   it("hides agent role sessions from the crew table while keeping crew rows", async () => {
     vi.spyOn(api, "GET").mockImplementation(async (path: string) => {
       if (path === "/v0/city/{cityName}/sessions") {

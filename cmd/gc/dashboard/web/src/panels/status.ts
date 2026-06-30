@@ -44,7 +44,7 @@ export async function renderStatus(): Promise<void> {
     "sessions",
     city,
     (signal) => api.GET("/v0/city/{cityName}/sessions", {
-      params: { path: { cityName: city }, query: { state: "active", peek: true } },
+      params: { path: { cityName: city }, query: { state: "active" } },
       signal,
     }) as Promise<APIResult<SessionList>>,
   );
