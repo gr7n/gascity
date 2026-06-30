@@ -16,6 +16,7 @@ import {
   consumeInvalidated,
   canFetchCityScopedResources,
   currentCityStatus,
+  invalidate,
   invalidateAll,
   invalidateForEventType,
   isKnownUnavailableCity,
@@ -43,6 +44,8 @@ const CITY_SCOPED_PANEL_IDS = [
   "agent-log-drawer",
 ];
 
+const DEFERRED_BOOT_RESOURCES = new Set<DashboardResource>(["mail", "comms", "admin"]);
+
 async function refreshAll(): Promise<void> {
   if (refreshPaused()) return;
   await refreshVisibleResources();
@@ -57,9 +60,20 @@ export async function flushPendingInvalidations(): Promise<void> {
   await refreshVisibleResources().catch((error) => reportUIError("Catch-up refresh failed", error));
 }
 
-async function refreshAllForced(): Promise<void> {
+async function refreshBootFirstPaint(): Promise<void> {
   invalidateAll();
-  await refreshVisibleResources(true);
+  const dirty = consumeInvalidated(true);
+  const immediate = new Set([...dirty].filter((resource) => !DEFERRED_BOOT_RESOURCES.has(resource)));
+  const deferred = [...dirty].filter((resource) => DEFERRED_BOOT_RESOURCES.has(resource));
+  await refreshResourceSet(immediate);
+  if (deferred.length > 0) {
+    invalidate(...deferred);
+  }
+}
+
+async function refreshDeferredBootResources(): Promise<void> {
+  if (refreshPaused()) return;
+  await refreshVisibleResources().catch((error) => reportUIError("Deferred refresh failed", error));
 }
 
 function wireSSE(): void {
@@ -129,8 +143,9 @@ async function boot(): Promise<void> {
   setPopPauseListener(() => {
     void flushPendingInvalidations();
   });
-  await refreshAllForced();
+  await refreshBootFirstPaint();
   wireSSE();
+  void refreshDeferredBootResources();
   logInfo("dashboard", "Boot complete", { city: cityScope(), href: window.location.href });
 }
 
@@ -233,6 +248,10 @@ async function refreshVisibleResources(force = false): Promise<void> {
   syncCityScopeFromLocation();
 
   const dirty = consumeInvalidated(force);
+  await refreshResourceSet(dirty);
+}
+
+async function refreshResourceSet(dirty: Set<DashboardResource>): Promise<void> {
   if (dirty.size === 0) return;
   if (dirty.has("options")) {
     invalidateOptions();

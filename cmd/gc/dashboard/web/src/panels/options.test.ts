@@ -40,9 +40,6 @@ describe("options cache", () => {
       if (path === "/v0/city/{cityName}/beads") {
         return { data: { items: [] }, error: undefined, request: undefined, response: undefined } as never;
       }
-      if (path === "/v0/city/{cityName}/mail") {
-        return { data: { items: [] }, error: undefined, request: undefined, response: undefined } as never;
-      }
       throw new Error(`unexpected GET ${path}`);
     });
 
@@ -54,6 +51,10 @@ describe("options cache", () => {
     ]);
     expect(getSpy).not.toHaveBeenCalledWith(
       "/v0/city/{cityName}/sessions",
+      expect.anything(),
+    );
+    expect(getSpy).not.toHaveBeenCalledWith(
+      "/v0/city/{cityName}/mail",
       expect.anything(),
     );
   });

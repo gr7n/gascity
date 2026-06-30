@@ -15,6 +15,16 @@ async function waitFor(assertion: () => void | Promise<void>): Promise<void> {
   throw lastError;
 }
 
+function deferred<T = void>(): { promise: Promise<T>; reject: (error: unknown) => void; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, reject, resolve };
+}
+
 function installDOM(): void {
   document.body.innerHTML = `
     <div id="city-tabs"></div>
@@ -232,5 +242,120 @@ describe("dashboard city scope navigation", () => {
       expect(document.getElementById("beads-panel")?.textContent).toBe("loaded selected city");
     });
     expect(resetIssuesNoCity).not.toHaveBeenCalled();
+  });
+
+  it("wires live events before deferred boot panels finish", async () => {
+    const order: string[] = [];
+    const mailDone = deferred();
+    const commsDone = deferred();
+    const adminDone = deferred();
+
+    vi.doMock("./logger", () => ({
+      installDashboardLogging: vi.fn(),
+      logInfo: vi.fn(),
+    }));
+    vi.doMock("./ui", () => ({
+      installPanelAffordances: vi.fn(),
+      popPause: vi.fn(),
+      refreshPaused: vi.fn(() => false),
+      reportUIError: vi.fn(),
+      setPopPauseListener: vi.fn(),
+    }));
+    vi.doMock("./refresh_scheduler", () => ({
+      createRefreshScheduler: vi.fn(() => ({ schedule: vi.fn() })),
+    }));
+    vi.doMock("./modals", () => ({
+      installSharedModals: vi.fn(),
+    }));
+    vi.doMock("./palette", () => ({
+      installCommandPalette: vi.fn(),
+    }));
+    vi.doMock("./panels/cities", () => ({
+      renderCityTabs: vi.fn(async () => {
+        const { setCachedCities } = await import("./state");
+        setCachedCities([{ name: "running-city", phasesCompleted: [], running: true }]);
+      }),
+    }));
+    vi.doMock("./panels/status", () => ({
+      renderStatus: vi.fn(async () => {
+        order.push("status");
+      }),
+    }));
+    vi.doMock("./panels/crew", () => ({
+      closeLogDrawerExternal: vi.fn(),
+      installCrewInteractions: vi.fn(),
+      renderCrew: vi.fn(async () => {
+        order.push("crew");
+      }),
+      resetCrewNoCity: vi.fn(),
+    }));
+    vi.doMock("./panels/issues", () => ({
+      installIssueInteractions: vi.fn(),
+      renderIssues: vi.fn(async () => {
+        order.push("issues");
+      }),
+      resetIssuesNoCity: vi.fn(),
+    }));
+    vi.doMock("./panels/mail", () => ({
+      installMailInteractions: vi.fn(),
+      renderMail: vi.fn(() => {
+        order.push("mail");
+        return mailDone.promise;
+      }),
+      resetMailNoCity: vi.fn(),
+    }));
+    vi.doMock("./panels/convoys", () => ({
+      installConvoyInteractions: vi.fn(),
+      renderConvoys: vi.fn(async () => {
+        order.push("convoys");
+      }),
+      resetConvoysNoCity: vi.fn(),
+    }));
+    vi.doMock("./panels/activity", () => ({
+      eventTypeFromMessage: vi.fn(() => ""),
+      installActivityInteractions: vi.fn(),
+      loadActivityHistory: vi.fn(async () => {
+        order.push("activity");
+      }),
+      resetActivity: vi.fn(),
+      startActivityStream: vi.fn(() => {
+        order.push("sse");
+      }),
+      stopActivityStream: vi.fn(),
+    }));
+    vi.doMock("./panels/comms", () => ({
+      ingestCommsEvent: vi.fn(),
+      renderComms: vi.fn(() => {
+        order.push("comms");
+        return commsDone.promise;
+      }),
+      resetComms: vi.fn(),
+    }));
+    vi.doMock("./panels/admin", () => ({
+      installAdminInteractions: vi.fn(),
+      renderAdminEmptyStates: vi.fn(),
+      renderAdminPanels: vi.fn(() => {
+        order.push("admin");
+        return adminDone.promise;
+      }),
+    }));
+    vi.doMock("./panels/options", () => ({
+      invalidateOptions: vi.fn(),
+    }));
+    vi.doMock("./panels/supervisor", () => ({
+      renderSupervisorOverview: vi.fn(),
+    }));
+
+    await import("./main");
+
+    await waitFor(() => {
+      expect(order).toContain("mail");
+    });
+    expect(order.indexOf("sse")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("sse")).toBeLessThan(order.indexOf("mail"));
+
+    mailDone.resolve();
+    commsDone.resolve();
+    adminDone.resolve();
   });
 });

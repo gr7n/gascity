@@ -1,8 +1,6 @@
-// Options cache: shared across panels. The Go `/api/options`
-// endpoint parallel-fetched rigs + active sessions + open beads +
-// mail with a 30-second cache. The SPA keeps the same shape so
-// autocomplete menus (assignee pickers, rig pickers, reply-to
-// lookups) can share one backing store.
+// Options cache: shared across panels. Keep this cheap: these values back
+// autocomplete menus and first-paint panels, so mail is intentionally not
+// fetched here.
 
 import { api, cityScope } from "../api";
 import { logDebug, logWarn } from "../logger";
@@ -44,7 +42,7 @@ async function fetchOptions(city: string): Promise<Options> {
   const empty: Options = { agents: [], rigs: [], sessions: [], beads: [], mail: [], fetchedAt: Date.now() };
   if (!city) return empty;
 
-  const [configR, rigsR, beadsR, mailR] = await Promise.all([
+  const [configR, rigsR, beadsR] = await Promise.all([
     api.GET("/v0/city/{cityName}/config", {
       params: { path: { cityName: city } },
     }),
@@ -52,7 +50,6 @@ async function fetchOptions(city: string): Promise<Options> {
     api.GET("/v0/city/{cityName}/beads", {
       params: { path: { cityName: city }, query: { status: "open" } },
     }),
-    api.GET("/v0/city/{cityName}/mail", { params: { path: { cityName: city } } }),
   ]);
 
   if (configR.error) {
@@ -76,7 +73,7 @@ async function fetchOptions(city: string): Promise<Options> {
     beads: beadsR.data?.items?.length ?? 0,
     city,
     configAgents: configR.data?.agents?.length ?? 0,
-    mail: mailR.data?.items?.length ?? 0,
+    mail: 0,
     rigs: rigsR.data?.items?.length ?? 0,
   });
 
@@ -88,10 +85,7 @@ async function fetchOptions(city: string): Promise<Options> {
       id: b.id ?? "",
       title: b.title ?? "",
     })),
-    mail: (mailR.data?.items ?? []).map((m) => ({
-      id: m.id ?? "",
-      subject: m.subject ?? "",
-    })),
+    mail: [],
     fetchedAt: Date.now(),
   };
 }
