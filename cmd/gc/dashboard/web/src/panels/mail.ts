@@ -171,7 +171,11 @@ async function openThread(threadID: string): Promise<void> {
     showToast("error", "Thread failed", res.error?.detail ?? "Could not load mail thread");
     return;
   }
-  const messages = res.data.items;
+  const messages = res.data.items.filter((message) => !hasBackgroundParticipant(message));
+  if (messages.length === 0) {
+    showToast("error", "Thread hidden", "This thread only contains internal mail");
+    return;
+  }
   const latest = messages[messages.length - 1] ?? messages[0];
   currentMessage = latest;
   showMailDetail(latest, messages);
@@ -185,6 +189,10 @@ async function openMessage(messageID: string): Promise<void> {
   });
   if (res.error || !res.data) {
     showToast("error", "Message failed", res.error?.detail ?? "Could not load message");
+    return;
+  }
+  if (hasBackgroundParticipant(res.data)) {
+    showToast("error", "Message hidden", "Internal mail is not shown in this dashboard");
     return;
   }
   currentMessage = res.data;
