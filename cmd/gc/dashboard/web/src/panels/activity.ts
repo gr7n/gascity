@@ -13,6 +13,7 @@ import {
   type DashboardEventMessage,
   type SSEHandle,
 } from "../sse";
+import { isBackgroundIdentity } from "../util/background";
 import { eventCategory, eventIcon, eventSummary, extractRig, formatAgentAddress } from "../util/legacy";
 import { relativeTime } from "../util/time";
 
@@ -249,6 +250,7 @@ function toEntryFromRecord(record: DashboardHistoryRecord): ActivityEntry | null
 
 function toActivityEntry(record: DashboardEventRecord, eventID?: string): ActivityEntry | null {
   if (!record.type) return null;
+  if (isBackgroundIdentity(record.actor) || isBackgroundIdentity(record.subject)) return null;
   const scope = recordCity(record) ?? cityScope();
   const seq = typeof record.seq === "number" ? record.seq : 0;
   return {
@@ -268,6 +270,7 @@ function toActivityEntry(record: DashboardEventRecord, eventID?: string): Activi
 function normalizeEntries(nextEntries: ActivityEntry[]): ActivityEntry[] {
   const deduped = new Map<string, ActivityEntry>();
   nextEntries.forEach((entry) => {
+    if (isBackgroundIdentity(entry.actor) || isBackgroundIdentity(entry.subject)) return;
     if (!deduped.has(entry.id)) {
       deduped.set(entry.id, entry);
     }

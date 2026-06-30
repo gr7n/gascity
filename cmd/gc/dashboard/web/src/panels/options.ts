@@ -6,6 +6,7 @@
 
 import { api, cityScope } from "../api";
 import { logDebug, logWarn } from "../logger";
+import { isBackgroundRecord } from "../util/background";
 
 export interface Options {
   agents: string[];
@@ -62,6 +63,7 @@ async function fetchOptions(city: string): Promise<Options> {
   }
 
   const agentOptions = (configR.data?.agents ?? [])
+    .filter((agent) => !isBackgroundRecord(agent))
     .map((agent) => ({
       id: agent.name ?? "",
       label: agent.name ?? "",

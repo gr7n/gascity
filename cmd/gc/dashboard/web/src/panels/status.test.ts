@@ -279,6 +279,57 @@ describe("status panel scope rendering", () => {
     });
   });
 
+  it("does not present the legacy mayor session as the city scope owner", async () => {
+    window.history.pushState({}, "", "/dashboard?city=alpha");
+    const now = new Date().toISOString();
+    apiGet.mockImplementation((path: string) => {
+      if (path.includes("/status")) {
+        return Promise.resolve(ok({
+          agents: { running: 2 },
+          mail: { unread: 0 },
+          work: { in_progress: 1, open: 28 },
+        }));
+      }
+      if (path.includes("/sessions")) {
+        return Promise.resolve(ok({
+          items: [
+            {
+              attached: true,
+              configured_named_session: true,
+              display_name: "Mayor",
+              last_active: now,
+              running: true,
+              session_name: "mayor",
+              template: "mayor",
+            },
+            {
+              attached: false,
+              configured_named_session: true,
+              last_active: now,
+              running: true,
+              session_name: "director",
+              template: "director",
+            },
+          ],
+        }));
+      }
+      if (path.includes("/beads")) return Promise.resolve(ok({ items: [] }));
+      if (path.includes("/convoys")) return Promise.resolve(ok({ items: [] }));
+      return Promise.resolve(ok({}));
+    });
+
+    const { renderStatus } = await import("./status");
+    await renderStatus();
+
+    expect(scopeStats()).toMatchObject({
+      City: "alpha",
+      Session: "director",
+      Terminal: "Detached",
+      State: "Running",
+    });
+    expect(document.getElementById("scope-status")?.textContent).not.toContain("Mayor");
+  });
+
   it("renders all five scope stats when no overseer session exists", async () => {
     window.history.pushState({}, "", "/dashboard?city=alpha");
     apiGet.mockImplementation((path: string) => {

@@ -62,6 +62,37 @@ describe("activity feed ordering", () => {
     expect(document.getElementById("activity-count")?.textContent).toBe("3");
   });
 
+  it("filters background identities from the normal activity feed", async () => {
+    await seedActivity([
+      {
+        actor: "gastown.mayor",
+        category: "agent",
+        id: "mc-city:20",
+        rig: "city",
+        scope: "mc-city",
+        seq: 20,
+        ts: "2026-04-03T10:00:00Z",
+        type: "session.started",
+      },
+      {
+        actor: "director",
+        category: "agent",
+        id: "mc-city:21",
+        rig: "city",
+        scope: "mc-city",
+        seq: 21,
+        ts: "2026-04-03T10:01:00Z",
+        type: "session.started",
+      },
+    ]);
+    renderActivity();
+
+    expect(document.querySelectorAll(".tl-entry")).toHaveLength(1);
+    expect(document.getElementById("activity-count")?.textContent).toBe("1");
+    expect(document.getElementById("activity-feed")?.textContent).toContain("director");
+    expect(document.getElementById("activity-feed")?.textContent).not.toContain("mayor");
+  });
+
   it("computes a city stream cursor from loaded history", () => {
     const cursor = activityStreamCursorFromRecordsForTest([
       { seq: 12, type: "bead.created", actor: "human", ts: "2026-04-01T10:00:00Z" },

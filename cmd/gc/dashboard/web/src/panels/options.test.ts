@@ -18,13 +18,15 @@ describe("options cache", () => {
     syncCityScopeFromLocation();
   });
 
-  it("uses configured agents as compose recipients", async () => {
+  it("uses visible configured agents as compose recipients", async () => {
     const getSpy = vi.spyOn(api, "GET").mockImplementation(async (path: string) => {
       if (path === "/v0/city/{cityName}/config") {
         return {
           data: {
             agents: [
+              { name: "director", suspended: false },
               { name: "mayor", display_name: "The Mayor" },
+              { name: "janitor", suspended: false, visibility: "background" },
             ],
           },
           error: undefined,
@@ -46,9 +48,9 @@ describe("options cache", () => {
 
     const options = await getOptions(true);
 
-    expect(options.agents).toEqual(["mayor"]);
+    expect(options.agents).toEqual(["director"]);
     expect(options.sessions).toEqual([
-      { id: "mayor", label: "mayor", recipient: "mayor" },
+      { id: "director", label: "director", recipient: "director" },
     ]);
     expect(getSpy).not.toHaveBeenCalledWith(
       "/v0/city/{cityName}/sessions",

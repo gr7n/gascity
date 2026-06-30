@@ -1,6 +1,7 @@
 import type { MailRecord } from "../api";
 import { api, cityScope, mutationHeaders } from "../api";
 import { logError, logInfo, logWarn } from "../logger";
+import { hasBackgroundParticipant, isBackgroundIdentity } from "../util/background";
 import { byId, clear, el } from "../util/dom";
 import { formatAgentAddress, formatTimestamp } from "../util/legacy";
 import { relativeTime } from "../util/time";
@@ -46,7 +47,7 @@ export async function renderMail(): Promise<void> {
     return;
   }
 
-  allMessages = [...data.items].sort((a, b) =>
+  allMessages = data.items.filter((message) => !hasBackgroundParticipant(message)).sort((a, b) =>
     (b.created_at ?? "").localeCompare(a.created_at ?? ""),
   );
   byId("mail-count")!.textContent = String(allMessages.length);
@@ -318,7 +319,7 @@ export async function openMailComposer(replyTo?: MailRecord): Promise<void> {
   byId<HTMLTextAreaElement>("compose-body")!.value = "";
   byId<HTMLInputElement>("compose-reply-to")!.value = replyTo?.id ?? "";
   byId("mail-compose-title")!.textContent = replyTo ? "Reply" : "New Message";
-  if (replyTo?.from) {
+  if (replyTo?.from && !isBackgroundIdentity(replyTo.from)) {
     ensureRecipientOption(select, replyTo.from);
     select.value = replyTo.from;
   }
@@ -343,6 +344,11 @@ async function sendCurrentMessage(): Promise<void> {
   if (!to || !subject) {
     showToast("error", "Missing fields", "Recipient and subject are required");
     logWarn("mail", "Send blocked by missing fields", { bodyLength: body.length, city, subject, to });
+    return;
+  }
+  if (isBackgroundIdentity(to)) {
+    showToast("error", "Recipient unavailable", "Choose a visible operator recipient");
+    logWarn("mail", "Send blocked by background recipient", { city, subject, to });
     return;
   }
 

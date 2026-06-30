@@ -114,12 +114,12 @@ describe("command palette action flows", () => {
     window.history.pushState({}, "", "/dashboard?city=mc-city");
     syncCityScopeFromLocation();
     vi.spyOn(options, "getOptions").mockResolvedValue({
-      agents: ["mayor"],
+      agents: ["director"],
       beads: [{ id: "gc-1", title: "Example" }],
       fetchedAt: Date.now(),
       mail: [],
       rigs: ["city"],
-      sessions: [{ id: "mc-vv8", label: "mayor", recipient: "mayor" }],
+      sessions: [{ id: "mc-vv8", label: "director", recipient: "director" }],
     });
   });
 

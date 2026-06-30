@@ -10,7 +10,7 @@ describe("comms extractMail", () => {
         rig: "",
         message: {
           from: "controller",
-          to: "gastown.mayor",
+          to: "gastown.reviewer",
           subject: "Dolt health advisory",
           id: "gc-1",
           created_at: "2026-01-01T00:00:01Z",
@@ -19,11 +19,26 @@ describe("comms extractMail", () => {
     });
     expect(edge).toEqual({
       from: "controller",
-      to: "gastown.mayor",
+      to: "gastown.reviewer",
       subject: "Dolt health advisory",
       id: "gc-1",
       ts: "2026-01-01T00:00:01Z",
     });
+  });
+
+  it("does not expose background participants as normal graph edges", () => {
+    const edge = extractMailForTest({
+      type: "mail.sent",
+      ts: "2026-01-01T00:00:00Z",
+      payload: {
+        message: {
+          from: "controller",
+          to: "gastown.mayor",
+          subject: "Dolt health advisory",
+        },
+      },
+    });
+    expect(edge).toBeNull();
   });
 
   it("accepts mail.replied and falls back to envelope ts when message has no created_at", () => {

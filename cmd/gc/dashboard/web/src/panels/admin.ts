@@ -1,6 +1,7 @@
 import type { BeadRecord, RigRecord, ServiceStatusRecord } from "../api";
 import { api, cityScope, mutationHeaders } from "../api";
 import { promptActionDialog, promptConfirmDialog } from "../modals";
+import { formatOperatorAddress } from "../util/background";
 import { byId, clear, el } from "../util/dom";
 import { formatAgentAddress, formatTimestamp, statusBadgeClass, truncate } from "../util/legacy";
 import { showToast } from "../ui";
@@ -175,7 +176,7 @@ function renderEscalations(items: BeadRecord[] | null): void {
         issue.title ?? issue.id ?? "",
         acked ? el("span", { class: "badge badge-cyan", style: "margin-left: 4px;" }, ["ACK"]) : null,
       ]),
-      el("td", {}, [formatAgentAddress(issue.assignee)]),
+      el("td", {}, [formatAgentAddress(formatOperatorAddress(issue.assignee))]),
       el("td", {}, [formatTimestamp(issue.created_at)]),
       el("td", { class: "escalation-actions" }, [!acked ? ack : null, resolve, reassign]),
     ]));
@@ -216,7 +217,7 @@ function renderAssigned(items: BeadRecord[] | null): void {
     tbody.append(el("tr", {}, [
       el("td", {}, [el("span", { class: "assigned-id" }, [bead.id ?? ""])]),
       el("td", { class: "assigned-title" }, [truncate(bead.title ?? "", 80)]),
-      el("td", { class: "assigned-agent" }, [formatAgentAddress(bead.assignee)]),
+      el("td", { class: "assigned-agent" }, [formatAgentAddress(formatOperatorAddress(bead.assignee))]),
       el("td", { class: "assigned-age" }, [formatTimestamp(bead.created_at)]),
       el("td", {}, [unassign]),
     ]));
@@ -252,7 +253,7 @@ function renderQueues(items: BeadRecord[] | null): void {
       el("td", {}, [queue.title ?? queue.id ?? "queue"]),
       el("td", {}, [queue.id ?? "—"]),
       el("td", {}, [el("span", { class: `badge ${statusBadgeClass(queue.status)}` }, [queue.status ?? "open"])]),
-      el("td", {}, [formatAgentAddress(queue.assignee)]),
+      el("td", {}, [formatAgentAddress(formatOperatorAddress(queue.assignee))]),
       el("td", {}, [formatTimestamp(queue.created_at)]),
     ]));
   });

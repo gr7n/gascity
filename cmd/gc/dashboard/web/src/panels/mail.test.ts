@@ -45,12 +45,12 @@ describe("mail compose flows", () => {
     window.history.pushState({}, "", "/dashboard?city=mc-city");
     syncCityScopeFromLocation();
     vi.spyOn(options, "getOptions").mockResolvedValue({
-      agents: ["mayor"],
+      agents: ["director"],
       beads: [],
       fetchedAt: Date.now(),
       mail: [],
       rigs: ["city"],
-      sessions: [{ id: "mc-vv8", label: "mayor", recipient: "mayor" }],
+      sessions: [{ id: "mc-vv8", label: "director", recipient: "director" }],
     });
   });
 
@@ -74,7 +74,7 @@ describe("mail compose flows", () => {
     expect((document.getElementById("mail-compose") as HTMLElement).style.display).toBe("block");
     expect((document.getElementById("mail-compose-title") as HTMLElement).textContent).toBe("New Message");
     const values = [...(document.getElementById("compose-to") as HTMLSelectElement).options].map((option) => option.value);
-    expect(values).toContain("mayor");
+    expect(values).toContain("director");
     expect(values).not.toContain("mc-vv8");
   });
 
@@ -94,7 +94,7 @@ describe("mail compose flows", () => {
 
     installMailInteractions();
     await openMailComposer();
-    (document.getElementById("compose-to") as HTMLSelectElement).value = "mayor";
+    (document.getElementById("compose-to") as HTMLSelectElement).value = "director";
     (document.getElementById("compose-subject") as HTMLInputElement).value = "hello";
     (document.getElementById("compose-body") as HTMLTextAreaElement).value = "greetings";
 
@@ -105,8 +105,25 @@ describe("mail compose flows", () => {
     expect(api.POST).toHaveBeenCalledWith(
       "/v0/city/{cityName}/mail",
       expect.objectContaining({
-        body: expect.objectContaining({ to: "mayor" }),
+        body: expect.objectContaining({ to: "director" }),
       }),
     );
+  });
+
+  it("does not add a background sender as a reply recipient", async () => {
+    installMailInteractions();
+    await openMailComposer({
+      created_at: "2026-01-01T00:00:00Z",
+      from: "gastown.mayor",
+      id: "mail-1",
+      read: false,
+      subject: "Internal note",
+      to: "director",
+    } as never);
+
+    const values = [...(document.getElementById("compose-to") as HTMLSelectElement).options].map((option) => option.value);
+    expect(values).toContain("director");
+    expect(values).not.toContain("gastown.mayor");
+    expect((document.getElementById("compose-to") as HTMLSelectElement).value).toBe("");
   });
 });

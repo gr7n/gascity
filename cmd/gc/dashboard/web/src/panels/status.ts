@@ -1,6 +1,7 @@
 import { api, cityScope, type DashboardSchema } from "../api";
 import { logWarn } from "../logger";
 import { currentCityStatus, isKnownUnavailableCity } from "../state";
+import { isBackgroundRecord } from "../util/background";
 import { byId, clear, el } from "../util/dom";
 import { ACTIVE_WINDOW_MS, beadPriority, formatTimestamp } from "../util/legacy";
 
@@ -246,9 +247,10 @@ function renderCityScopeBanner(city: string, sessions: SessionSummary[]): void {
   const status = byId("scope-status");
   if (!banner || !badge || !status) return;
 
+  const visibleSessions = sessions.filter((session) => !isBackgroundRecord(session));
   const overseer =
-    sessions.find((s) => s.configured_named_session && !s.rig) ??
-    sessions.find((s) => !s.rig && !s.pool);
+    visibleSessions.find((s) => s.configured_named_session && !s.rig) ??
+    visibleSessions.find((s) => !s.rig && !s.pool);
 
   banner.classList.remove("attached", "detached");
   badge.className = "badge badge-cyan";
