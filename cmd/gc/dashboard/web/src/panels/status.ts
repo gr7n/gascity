@@ -280,7 +280,7 @@ function renderCityScopeBanner(city: string, sessions: SessionSummary[]): void {
   status.append(
     scopeStat("City", city),
     scopeStat("Agent", overseer.template),
-    scopeStat("Activity", overseer.last_active ? formatTimestamp(overseer.last_active) : "Unknown", active ? "active" : "idle"),
+    scopeStat("Activity", overseer.last_active ? formatTimestamp(overseer.last_active) : "No activity", active ? "active" : "idle"),
     scopeStat("Terminal", overseer.attached ? "Attached" : "Detached"),
     scopeStat("State", overseer.running ? "Running" : "Stopped"),
   );
@@ -293,10 +293,10 @@ function renderCityScopeBannerUnavailable(city: string, reason: string): void {
   if (!banner || !badge || !status) return;
   banner.classList.remove("attached", "detached");
   badge.className = "badge badge-muted";
-  badge.textContent = "Unknown";
+  badge.textContent = "Unavailable";
   clear(status);
   status.append(
-    scopeStat("Scope", city),
+    scopeStat("City", city),
     scopeStat("Sessions", reason),
   );
 }
@@ -311,7 +311,7 @@ function renderCityScopeBannerFleet(): void {
   badge.textContent = "Supervisor";
   clear(status);
   status.append(
-    scopeStat("Scope", "Fleet"),
+    scopeStat("Mode", "Fleet"),
     scopeStat("City", "Select one"),
   );
 }

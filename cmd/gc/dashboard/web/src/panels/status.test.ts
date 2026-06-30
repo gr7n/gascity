@@ -11,7 +11,7 @@ function installStatusDOM(): void {
   document.body.innerHTML = `
     <div class="scope-banner" id="scope-banner">
       <div class="scope-info">
-        <span class="scope-title">Selected Scope</span>
+        <span class="scope-title">Selected City</span>
         <span id="scope-badge" class="badge badge-muted">Loading</span>
       </div>
       <div id="scope-status"></div>
@@ -76,7 +76,7 @@ describe("status panel scope rendering", () => {
   it("does not let a stale city status response overwrite supervisor scope", async () => {
     window.history.pushState({}, "", "/dashboard?city=alpha");
     document.getElementById("scope-badge")!.textContent = "Supervisor";
-    document.getElementById("scope-status")!.textContent = "Scope Fleet City Select one";
+    document.getElementById("scope-status")!.textContent = "Mode Fleet City Select one";
 
     const cityStatus = deferred<{ data: unknown }>();
     apiGet.mockImplementation((path: string) => {
@@ -104,7 +104,7 @@ describe("status panel scope rendering", () => {
   it("does not let a stale city session response overwrite supervisor scope", async () => {
     window.history.pushState({}, "", "/dashboard?city=alpha");
     document.getElementById("scope-badge")!.textContent = "Supervisor";
-    document.getElementById("scope-status")!.textContent = "Scope Fleet City Select one";
+    document.getElementById("scope-status")!.textContent = "Mode Fleet City Select one";
 
     const sessions = deferred<{ data: unknown }>();
     apiGet.mockImplementation((path: string) => {

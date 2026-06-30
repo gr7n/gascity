@@ -66,7 +66,7 @@ function renderServices(items: ServiceStatusRecord[] | null, error?: string): vo
   const services = items ?? [];
   count.textContent = String(services.length);
   if (services.length === 0) {
-    body.append(el("div", { class: "empty-state" }, [el("p", {}, ["No workspace services"])]));
+    body.append(el("div", { class: "empty-state" }, [el("p", {}, ["No services registered"])]));
     return;
   }
 

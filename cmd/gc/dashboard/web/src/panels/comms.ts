@@ -75,10 +75,8 @@ function addMessage(e: MailEdge, live: boolean): boolean {
 
 function tier(name: string): number {
   const n = name.toLowerCase();
-  if (n === "human" || n === "controller") return 0;
-  if (n.includes("deacon") || n.includes("boot")) return 2;
-  if (n === "witness") return 3;
-  return 4;
+  if (n === "human" || n === "controller" || n === "operator") return 0;
+  return 1;
 }
 
 function layout(): void {
