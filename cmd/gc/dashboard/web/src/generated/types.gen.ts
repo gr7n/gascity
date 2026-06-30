@@ -3405,6 +3405,25 @@ export type SupervisorRequestPayload = {
     status: number;
 };
 
+export type SupervisorRequestStatus = {
+    /**
+     * Terminal tagged result event when the request has succeeded or failed.
+     */
+    event?: TypedTaggedEventStreamEnvelope;
+    /**
+     * Async operation once known.
+     */
+    operation?: 'city.create' | 'city.unregister' | 'session.create' | 'session.message' | 'session.submit';
+    /**
+     * Async request ID.
+     */
+    request_id: string;
+    /**
+     * Current request state derived from terminal async-result events.
+     */
+    status: 'pending' | 'succeeded' | 'failed';
+};
+
 export type SupervisorShutdownPayload = {
     /**
      * For source=socket_stop, the address reported by the connecting client. Typically empty for unix-socket peers.
@@ -12004,3 +12023,38 @@ export type GetV0ReadinessResponses = {
 };
 
 export type GetV0ReadinessResponse = GetV0ReadinessResponses[keyof GetV0ReadinessResponses];
+
+export type GetV0RequestByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Async request ID returned by a 202 response.
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.
+         */
+        after_cursor?: string;
+    };
+    url: '/v0/request/{id}';
+};
+
+export type GetV0RequestByIdErrors = {
+    /**
+     * Error
+     */
+    default: ErrorModel;
+};
+
+export type GetV0RequestByIdError = GetV0RequestByIdErrors[keyof GetV0RequestByIdErrors];
+
+export type GetV0RequestByIdResponses = {
+    /**
+     * OK
+     */
+    200: SupervisorRequestStatus;
+};
+
+export type GetV0RequestByIdResponse = GetV0RequestByIdResponses[keyof GetV0RequestByIdResponses];

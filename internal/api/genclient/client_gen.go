@@ -237,6 +237,54 @@ func (e SupervisorRequestPayloadRemoteAddrClass) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorRequestStatusOperation.
+const (
+	CityCreate     SupervisorRequestStatusOperation = "city.create"
+	CityUnregister SupervisorRequestStatusOperation = "city.unregister"
+	SessionCreate  SupervisorRequestStatusOperation = "session.create"
+	SessionMessage SupervisorRequestStatusOperation = "session.message"
+	SessionSubmit  SupervisorRequestStatusOperation = "session.submit"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestStatusOperation enum.
+func (e SupervisorRequestStatusOperation) Valid() bool {
+	switch e {
+	case CityCreate:
+		return true
+	case CityUnregister:
+		return true
+	case SessionCreate:
+		return true
+	case SessionMessage:
+		return true
+	case SessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestStatusStatus.
+const (
+	Failed    SupervisorRequestStatusStatus = "failed"
+	Pending   SupervisorRequestStatusStatus = "pending"
+	Succeeded SupervisorRequestStatusStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestStatusStatus enum.
+func (e SupervisorRequestStatusStatus) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Pending:
+		return true
+	case Succeeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorShutdownPayloadMode.
 const (
 	SupervisorShutdownPayloadModeDestructive      SupervisorShutdownPayloadMode = "destructive"
@@ -3314,6 +3362,27 @@ type SupervisorRequestPayloadPhase string
 // SupervisorRequestPayloadRemoteAddrClass Network class of the remote address, not the raw address.
 type SupervisorRequestPayloadRemoteAddrClass string
 
+// SupervisorRequestStatus defines model for SupervisorRequestStatus.
+type SupervisorRequestStatus struct {
+	// Event Discriminated union of supervisor event stream envelopes. Each variant constrains the envelope type and payload schema together and includes the source city.
+	Event *TypedTaggedEventStreamEnvelope `json:"event,omitempty"`
+
+	// Operation Async operation once known.
+	Operation *SupervisorRequestStatusOperation `json:"operation,omitempty"`
+
+	// RequestId Async request ID.
+	RequestId string `json:"request_id"`
+
+	// Status Current request state derived from terminal async-result events.
+	Status SupervisorRequestStatusStatus `json:"status"`
+}
+
+// SupervisorRequestStatusOperation Async operation once known.
+type SupervisorRequestStatusOperation string
+
+// SupervisorRequestStatusStatus Current request state derived from terminal async-result events.
+type SupervisorRequestStatusStatus string
+
 // SupervisorShutdownPayload defines model for SupervisorShutdownPayload.
 type SupervisorShutdownPayload struct {
 	// ClientAddr For source=socket_stop, the address reported by the connecting client. Typically empty for unix-socket peers.
@@ -6255,6 +6324,12 @@ type GetV0ReadinessParams struct {
 
 	// Fresh Force fresh probe, bypassing cache.
 	Fresh *bool `form:"fresh,omitempty" json:"fresh,omitempty"`
+}
+
+// GetV0RequestByIdParams defines parameters for GetV0RequestById.
+type GetV0RequestByIdParams struct {
+	// AfterCursor Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.
+	AfterCursor *string `form:"after_cursor,omitempty" json:"after_cursor,omitempty"`
 }
 
 // PostV0CityJSONRequestBody defines body for PostV0City for application/json ContentType.
@@ -12302,6 +12377,9 @@ type ClientInterface interface {
 
 	// GetV0Readiness request
 	GetV0Readiness(ctx context.Context, params *GetV0ReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetV0RequestById request
+	GetV0RequestById(ctx context.Context, id string, params *GetV0RequestByIdParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -14586,6 +14664,18 @@ func (c *Client) GetV0ProviderReadiness(ctx context.Context, params *GetV0Provid
 
 func (c *Client) GetV0Readiness(ctx context.Context, params *GetV0ReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0ReadinessRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0RequestById(ctx context.Context, id string, params *GetV0RequestByIdParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0RequestByIdRequest(c.Server, id, params)
 	if err != nil {
 		return nil, err
 	}
@@ -24174,6 +24264,62 @@ func NewGetV0ReadinessRequest(server string, params *GetV0ReadinessParams) (*htt
 	return req, nil
 }
 
+// NewGetV0RequestByIdRequest generates requests for GetV0RequestById
+func NewGetV0RequestByIdRequest(server string, id string, params *GetV0RequestByIdParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/request/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.AfterCursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "after_cursor", *params.AfterCursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -24748,6 +24894,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetV0ReadinessWithResponse request
 	GetV0ReadinessWithResponse(ctx context.Context, params *GetV0ReadinessParams, reqEditors ...RequestEditorFn) (*GetV0ReadinessResponse, error)
+
+	// GetV0RequestByIdWithResponse request
+	GetV0RequestByIdWithResponse(ctx context.Context, id string, params *GetV0RequestByIdParams, reqEditors ...RequestEditorFn) (*GetV0RequestByIdResponse, error)
 }
 
 type GetHealthResponse struct {
@@ -28195,6 +28344,29 @@ func (r GetV0ReadinessResponse) StatusCode() int {
 	return 0
 }
 
+type GetV0RequestByIdResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *SupervisorRequestStatus
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0RequestByIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0RequestByIdResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // GetHealthWithResponse request returning *GetHealthResponse
 func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
 	rsp, err := c.GetHealth(ctx, reqEditors...)
@@ -29871,6 +30043,15 @@ func (c *ClientWithResponses) GetV0ReadinessWithResponse(ctx context.Context, pa
 		return nil, err
 	}
 	return ParseGetV0ReadinessResponse(rsp)
+}
+
+// GetV0RequestByIdWithResponse request returning *GetV0RequestByIdResponse
+func (c *ClientWithResponses) GetV0RequestByIdWithResponse(ctx context.Context, id string, params *GetV0RequestByIdParams, reqEditors ...RequestEditorFn) (*GetV0RequestByIdResponse, error) {
+	rsp, err := c.GetV0RequestById(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0RequestByIdResponse(rsp)
 }
 
 // ParseGetHealthResponse parses an HTTP response from a GetHealthWithResponse call
@@ -34771,6 +34952,39 @@ func ParseGetV0ReadinessResponse(rsp *http.Response) (*GetV0ReadinessResponse, e
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ReadinessResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0RequestByIdResponse parses an HTTP response from a GetV0RequestByIdWithResponse call
+func ParseGetV0RequestByIdResponse(rsp *http.Response) (*GetV0RequestByIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0RequestByIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SupervisorRequestStatus
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

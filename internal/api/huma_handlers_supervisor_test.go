@@ -471,6 +471,127 @@ func TestSupervisorCityRequestResultUsesCityTagOnSupervisorStream(t *testing.T) 
 	t.Fatalf("stream did not emit request.result.city.create for request_id req-test; observed event types=%v body=%s", observed, streamRec.Body.String())
 }
 
+func TestSupervisorRequestStatusPending(t *testing.T) {
+	resolver := &fakeCityResolver{
+		cities:             map[string]*fakeState{},
+		supervisorRecorder: events.NewFake(),
+	}
+	sm := NewSupervisorMux(resolver, nil, false, "test", "", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-missing?after_cursor=__supervisor__:0", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.RequestID != "req-missing" || resp.Status != requestStatusPending || resp.Event != nil {
+		t.Fatalf("response = %+v, want pending missing request", resp)
+	}
+}
+
+func TestSupervisorRequestStatusSucceededAfterCursor(t *testing.T) {
+	recorder := events.NewFake()
+	recorder.Record(events.Event{Type: events.SessionWoke, Actor: "seed"})
+	EmitTypedEvent(recorder, events.RequestResultCityCreate, "mc-city", CityCreateSucceededPayload{
+		RequestID: "req-city",
+		Name:      "mc-city",
+		Path:      "/tmp/mc-city",
+	})
+	resolver := &fakeCityResolver{
+		cities:             map[string]*fakeState{},
+		supervisorRecorder: recorder,
+	}
+	sm := NewSupervisorMux(resolver, nil, false, "test", "", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-city?after_cursor=__supervisor__:1", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.Status != requestStatusSucceeded || resp.Operation != RequestOperationCityCreate {
+		t.Fatalf("response = %+v, want city.create succeeded", resp)
+	}
+	if resp.Event == nil || resp.Event.Type != events.RequestResultCityCreate || resp.Event.City != "mc-city" {
+		t.Fatalf("terminal event = %+v, want tagged mc-city create result", resp.Event)
+	}
+}
+
+func TestSupervisorRequestStatusAfterCursorExcludesSeenResult(t *testing.T) {
+	recorder := events.NewFake()
+	EmitTypedEvent(recorder, events.RequestResultCityCreate, "mc-city", CityCreateSucceededPayload{
+		RequestID: "req-city",
+		Name:      "mc-city",
+		Path:      "/tmp/mc-city",
+	})
+	resolver := &fakeCityResolver{
+		cities:             map[string]*fakeState{},
+		supervisorRecorder: recorder,
+	}
+	sm := NewSupervisorMux(resolver, nil, false, "test", "", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-city?after_cursor=__supervisor__:1", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.Status != requestStatusPending || resp.Event != nil {
+		t.Fatalf("response = %+v, want pending because cursor already passed result", resp)
+	}
+}
+
+func TestSupervisorRequestStatusReadsCityProviderResults(t *testing.T) {
+	state := newFakeState(t)
+	state.cityName = "alpha"
+	ep := state.eventProv.(*events.Fake)
+	ep.Record(events.Event{Type: events.SessionWoke, Actor: "seed"})
+	recordPayloadEvent(t, ep, events.RequestResultSessionSubmit, "director", SessionSubmitSucceededPayload{
+		RequestID: "req-submit",
+		SessionID: "director",
+		Queued:    false,
+		Intent:    "default",
+	})
+
+	sm := newTestSupervisorMux(t, map[string]*fakeState{"alpha": state})
+	req := httptest.NewRequest(http.MethodGet, "/v0/request/req-submit?after_cursor=alpha:1", nil)
+	rec := httptest.NewRecorder()
+
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp SupervisorRequestStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.Status != requestStatusSucceeded || resp.Operation != RequestOperationSessionSubmit {
+		t.Fatalf("response = %+v, want session.submit succeeded", resp)
+	}
+	if resp.Event == nil || resp.Event.City != "alpha" || resp.Event.Type != events.RequestResultSessionSubmit {
+		t.Fatalf("terminal event = %+v, want tagged alpha submit result", resp.Event)
+	}
+}
+
 func TestSupervisorCityCreateMapsInitializerErrors(t *testing.T) {
 	cityPath := filepath.Join(t.TempDir(), "mc-city")
 	tests := []struct {

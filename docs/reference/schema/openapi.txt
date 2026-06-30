@@ -7856,6 +7856,44 @@
         ],
         "type": "object"
       },
+      "SupervisorRequestStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelope",
+            "description": "Terminal tagged result event when the request has succeeded or failed."
+          },
+          "operation": {
+            "description": "Async operation once known.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Async request ID.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current request state derived from terminal async-result events.",
+            "enum": [
+              "pending",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "type": "object"
+      },
       "SupervisorShutdownPayload": {
         "additionalProperties": false,
         "properties": {
@@ -27717,6 +27755,66 @@
           }
         },
         "summary": "Get v0 readiness"
+      }
+    },
+    "/v0/request/{id}": {
+      "get": {
+        "operationId": "get-v0-request-by-id",
+        "parameters": [
+          {
+            "description": "Async request ID returned by a 202 response.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Async request ID returned by a 202 response.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.",
+            "explode": false,
+            "in": "query",
+            "name": "after_cursor",
+            "schema": {
+              "description": "Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupervisorRequestStatus"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Get v0 request by ID"
       }
     }
   }

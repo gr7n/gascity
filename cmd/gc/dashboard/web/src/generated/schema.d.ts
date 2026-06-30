@@ -2031,6 +2031,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v0/request/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get v0 request by ID */
+        get: operations["get-v0-request-by-id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4599,6 +4616,22 @@ export interface components {
              * @description HTTP response status code. Start-phase records use 0 before the final response status is known.
              */
             status: number;
+        };
+        SupervisorRequestStatus: {
+            /** @description Terminal tagged result event when the request has succeeded or failed. */
+            event?: components["schemas"]["TypedTaggedEventStreamEnvelope"];
+            /**
+             * @description Async operation once known.
+             * @enum {string}
+             */
+            operation?: "city.create" | "city.unregister" | "session.create" | "session.message" | "session.submit";
+            /** @description Async request ID. */
+            request_id: string;
+            /**
+             * @description Current request state derived from terminal async-result events.
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "failed";
         };
         SupervisorShutdownPayload: {
             /** @description For source=socket_stop, the address reported by the connecting client. Typically empty for unix-socket peers. */
@@ -13495,6 +13528,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-v0-request-by-id": {
+        parameters: {
+            query?: {
+                /** @description Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling. */
+                after_cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Async request ID returned by a 202 response. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupervisorRequestStatus"];
                 };
             };
             /** @description Error */

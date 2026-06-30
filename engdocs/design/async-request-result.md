@@ -285,6 +285,13 @@ frame can poll the durable event log:
 GET /v0/city/{city}/request/{request_id}?after_seq={event_cursor}
 ```
 
+For supervisor/global operations, or when a client only has a
+composite supervisor cursor, use the supervisor-scope fallback:
+
+```http
+GET /v0/request/{request_id}?after_cursor={event_cursor}
+```
+
 The response is:
 
 ```json
@@ -298,10 +305,10 @@ The response is:
 
 `status` becomes `succeeded` or `failed` when a matching terminal
 event is found. This endpoint is a fallback for observability and UI
-recovery; SSE remains the progress channel. City create/unregister
-terminal events live on the supervisor stream and need a supervisor-
-scope request-status endpoint before they have equivalent polling
-coverage.
+recovery; SSE remains the progress channel. The city-scoped response
+returns a `WireEvent`; the supervisor/global response returns a
+`WireTaggedEvent` so clients can see which city/source produced the
+terminal result.
 
 ## Implementation rules
 

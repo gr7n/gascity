@@ -220,6 +220,7 @@ func (sm *SupervisorMux) registerSupervisorRoutes() {
 		op.DefaultStatus = http.StatusAccepted
 	})
 	huma.Get(sm.humaAPI, "/v0/events", sm.humaHandleEventList)
+	huma.Get(sm.humaAPI, "/v0/request/{id}", sm.humaHandleSupervisorRequestStatus)
 
 	registerSSEStringID(sm.humaAPI, huma.Operation{
 		OperationID: "stream-supervisor-events",
