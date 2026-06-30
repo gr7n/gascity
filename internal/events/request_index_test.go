@@ -96,6 +96,45 @@ func TestFileRecorderRequestIndexSkipsMalformedRowsAndDedupesCrashReplay(t *test
 	}
 }
 
+func TestFileRecorderListRequestEventsAfterFreshCursorDoesNotBuildPartialSidecar(t *testing.T) {
+	var stderr bytes.Buffer
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	rec, err := NewFileRecorder(path, &stderr)
+	if err != nil {
+		t.Fatalf("NewFileRecorder: %v", err)
+	}
+	defer rec.Close() //nolint:errcheck // test cleanup
+
+	for i := 0; i < 12; i++ {
+		rec.Record(requestIndexTestEvent(RequestProgress, "req-old"))
+	}
+	cursor := rec.EventsForTest(t)[11].Seq
+	rec.Record(requestIndexTestEvent(RequestProgress, "req-other"))
+	rec.Record(requestIndexTestEvent(RequestResultSessionSubmit, "req-want"))
+
+	got, err := rec.ListRequestEvents("req-want", cursor)
+	if err != nil {
+		t.Fatalf("ListRequestEvents after cursor: %v", err)
+	}
+	if len(got) != 1 || got[0].Type != RequestResultSessionSubmit {
+		t.Fatalf("ListRequestEvents after cursor = %+v, want one submit result", got)
+	}
+	if _, err := os.Stat(requestIndexPath(path)); !os.IsNotExist(err) {
+		t.Fatalf("fresh cursor lookup created request index sidecar: %v", err)
+	}
+
+	historical, err := rec.ListRequestEvents("req-old", 0)
+	if err != nil {
+		t.Fatalf("historical ListRequestEvents: %v", err)
+	}
+	if len(historical) != 12 {
+		t.Fatalf("historical events = %d, want 12", len(historical))
+	}
+	if _, err := os.Stat(requestIndexPath(path)); err != nil {
+		t.Fatalf("historical lookup did not create request index sidecar: %v", err)
+	}
+}
+
 func (r *FileRecorder) EventsForTest(t *testing.T) []Event {
 	t.Helper()
 	events, err := r.List(Filter{})

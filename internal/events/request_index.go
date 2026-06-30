@@ -82,12 +82,31 @@ func lookupRequestEvents(eventPath, requestID string, afterSeq uint64) ([]Event,
 		matches = nil
 		indexedThrough = 0
 	}
+	if afterSeq > indexedThrough {
+		return listRequestEventsAfterSeq(eventPath, requestID, afterSeq)
+	}
 	if indexedThrough < latestSeq {
 		caughtUp, err := appendRequestIndexCatchup(indexPath, eventPath, indexedThrough, latestSeq, requestID, afterSeq)
 		if err != nil {
 			return nil, err
 		}
 		matches = append(matches, caughtUp...)
+	}
+	return dedupeRequestEvents(matches), nil
+}
+
+func listRequestEventsAfterSeq(eventPath, requestID string, afterSeq uint64) ([]Event, error) {
+	evts, err := ReadFilteredAfterSeq(eventPath, Filter{AfterSeq: afterSeq, Types: RequestEventTypes})
+	if err != nil {
+		return nil, fmt.Errorf("reading request events after seq: %w", err)
+	}
+	matches := make([]Event, 0, len(evts))
+	for _, event := range evts {
+		eventRequestID, ok := RequestIDFromEvent(event)
+		if !ok || eventRequestID != requestID {
+			continue
+		}
+		matches = append(matches, event)
 	}
 	return dedupeRequestEvents(matches), nil
 }

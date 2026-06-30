@@ -160,6 +160,118 @@ func ReadFiltered(path string, filter Filter) ([]Event, error) {
 	return result, nil
 }
 
+// ReadFilteredAfterSeq reads events after filter.AfterSeq, optimizing the
+// active append-only log by walking backward from the tail until the cursor
+// boundary. This is useful for fresh async request cursors where scanning a
+// large active events.jsonl from the beginning would add user-visible latency.
+// Filters without AfterSeq, or filters with a positive Limit whose "first N"
+// chronological semantics matter, fall back to ReadFiltered.
+func ReadFilteredAfterSeq(path string, filter Filter) ([]Event, error) {
+	if filter.AfterSeq == 0 || filter.Limit > 0 {
+		return ReadFiltered(path, filter)
+	}
+
+	dir := filepath.Dir(path)
+	archives, err := archiveFilesIn(dir)
+	if err != nil {
+		archives = nil
+	}
+
+	var result []Event
+	for _, info := range archives {
+		if !archiveOverlapsFilter(info, filter) {
+			continue
+		}
+		archivePath := filepath.Join(dir, info.Basename)
+		err := streamArchive(archivePath, filter, func(e Event) bool {
+			if matchesFilter(e, filter) {
+				result = append(result, e)
+			}
+			return true
+		})
+		if err != nil {
+			return result, fmt.Errorf("reading archive %q: %w", info.Basename, err)
+		}
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if len(result) == 0 {
+				return nil, nil
+			}
+			return result, nil
+		}
+		return result, fmt.Errorf("reading events after seq: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only file
+
+	info, err := f.Stat()
+	if err != nil {
+		return result, fmt.Errorf("stat events after seq: %w", err)
+	}
+	active, err := readFilteredAfterSeqFromFile(f, info.Size(), filter)
+	if err != nil {
+		return result, err
+	}
+	return append(result, active...), nil
+}
+
+func readFilteredAfterSeqFromFile(f *os.File, size int64, filter Filter) ([]Event, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+	const chunkSize int64 = 64 * 1024
+	var reversed []Event
+	var pending []byte
+	end := size
+	stop := false
+	for end > 0 && !stop {
+		n := chunkSize
+		if end < n {
+			n = end
+		}
+		start := end - n
+		chunk := make([]byte, n)
+		if _, err := f.ReadAt(chunk, start); err != nil && err != io.EOF {
+			return nil, fmt.Errorf("reading events after seq: %w", err)
+		}
+		data := make([]byte, 0, len(chunk)+len(pending))
+		data = append(data, chunk...)
+		data = append(data, pending...)
+		parts := bytes.Split(data, []byte{'\n'})
+		firstComplete := 0
+		if start > 0 {
+			pending = append(pending[:0], parts[0]...)
+			firstComplete = 1
+		} else {
+			pending = nil
+		}
+		for i := len(parts) - 1; i >= firstComplete; i-- {
+			line := bytes.TrimSuffix(parts[i], []byte{'\r'})
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var e Event
+			if err := json.Unmarshal(line, &e); err != nil {
+				continue
+			}
+			if e.Seq <= filter.AfterSeq {
+				stop = true
+				break
+			}
+			if matchesFilter(e, filter) {
+				reversed = append(reversed, e)
+			}
+		}
+		end = start
+	}
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return reversed, nil
+}
+
 // archiveFilesIn lists canonical events archives in dir, sorted by
 // FirstSeq ascending so callers can read them in chronological order.
 // Files that don't match the canonical name pattern (legacy archives,
