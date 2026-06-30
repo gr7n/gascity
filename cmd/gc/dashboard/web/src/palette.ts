@@ -38,7 +38,7 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
     };
     const readVisibleSessions = async (): Promise<void> => {
       const data = await api.GET("/v0/city/{cityName}/sessions", {
-        params: { path: { cityName: city }, query: { state: "active", peek: true } },
+        params: { path: { cityName: city }, query: { state: "active", limit: 200, lite: true } },
       });
       const filtered = data?.data && Array.isArray(data.data.items)
         ? {
@@ -56,7 +56,7 @@ export function installCommandPalette(deps: { refreshAll: () => Promise<void> })
       { name: "supervisor health", desc: "Show supervisor health JSON", category: "Supervisor", run: () => read("health", api.GET("/health")) },
       { name: "city list", desc: "Show managed cities JSON", category: "Supervisor", run: () => read("cities", api.GET("/v0/cities")) },
       { name: "global events", desc: "Show recent supervisor events JSON", category: "Supervisor", run: () => read("events", api.GET("/v0/events", {
-        params: { query: { since: "1h" } },
+        params: { query: { limit: 100 } },
       })) },
       ...(city ? [
         { name: "new issue", desc: "Open the issue creation modal", category: "Work", run: () => openIssueModal() },

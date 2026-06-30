@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../api";
+import { syncCityScopeFromLocation } from "../state";
 import {
   activityStreamCursorFromRecordsForTest,
+  loadActivityHistory,
   renderActivity,
   seedActivity,
   type ActivityEntry,
@@ -17,7 +20,10 @@ describe("activity feed ordering", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await seedActivity([]);
+    window.history.pushState({}, "", "/dashboard");
+    syncCityScopeFromLocation();
   });
 
   it("dedupes repeated events and keeps newest entries first", async () => {
@@ -111,5 +117,22 @@ describe("activity feed ordering", () => {
     ] as any, "", "alpha:12,beta:8");
 
     expect(cursor).toEqual({ afterCursor: "alpha:12,beta:8" });
+  });
+
+  it("loads supervisor history through a bounded tail instead of a since scan", async () => {
+    window.history.pushState({}, "", "/dashboard");
+    syncCityScopeFromLocation();
+    const getMock = vi.spyOn(api, "GET").mockResolvedValue({
+      data: { items: [], event_cursor: "alpha:12" },
+      error: undefined,
+      request: undefined,
+      response: new Response(),
+    } as unknown as Awaited<ReturnType<typeof api.GET>>);
+
+    await loadActivityHistory();
+
+    expect(getMock).toHaveBeenCalledWith("/v0/events", {
+      params: { query: { limit: 100 } },
+    });
   });
 });

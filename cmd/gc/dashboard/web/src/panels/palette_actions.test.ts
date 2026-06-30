@@ -162,11 +162,31 @@ describe("command palette action flows", () => {
 
     await executePaletteCommand("agent list");
 
+    expect(getMock).toHaveBeenCalledWith("/v0/city/{cityName}/sessions", {
+      params: { path: { cityName: "mc-city" }, query: { state: "active", limit: 200, lite: true } },
+    });
     const output = document.getElementById("output-panel-content")?.textContent ?? "";
     expect(output).toContain("reviewer");
     expect(output).not.toContain("Internal");
     expect(output).not.toContain("mayor");
     expect(output).not.toContain("infra-worker");
+  });
+
+  it("loads global events from a bounded tail in the command palette", async () => {
+    const getMock = vi.spyOn(api, "GET") as unknown as ReturnType<typeof vi.fn>;
+    getMock.mockResolvedValue({
+      data: { items: [], event_cursor: "alpha:42" },
+      error: undefined,
+      request: undefined,
+      response: new Response(),
+    });
+    installCommandPalette({ refreshAll: vi.fn().mockResolvedValue(undefined) });
+
+    await executePaletteCommand("global events");
+
+    expect(getMock).toHaveBeenCalledWith("/v0/events", {
+      params: { query: { limit: 100 } },
+    });
   });
 });
 

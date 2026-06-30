@@ -57,7 +57,7 @@ export async function loadActivityHistory(): Promise<void> {
     records = res.data?.items ?? [];
   } else {
     const res = await api.GET("/v0/events", {
-      params: { query: { since: "1h" } },
+      params: { query: { limit: 100 } },
     });
     records = res.data?.items ?? [];
     supervisorEventCursor = res.data?.event_cursor ?? "";
