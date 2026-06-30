@@ -221,6 +221,9 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Summary:     "Force rotate the city event log",
 	}, (*Server).humaHandleEventRotate)
 
+	// Async request status.
+	cityGet(sm, "/request/{id}", (*Server).humaHandleRequestStatus)
+
 	// Orders.
 	cityGet(sm, "/orders", (*Server).humaHandleOrderList)
 	cityGet(sm, "/orders/check", (*Server).humaHandleOrderCheck)

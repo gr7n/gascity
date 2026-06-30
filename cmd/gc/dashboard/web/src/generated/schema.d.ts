@@ -1475,6 +1475,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v0/city/{cityName}/request/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get v0 city by city name request by ID */
+        get: operations["get-v0-city-by-city-name-request-by-id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v0/city/{cityName}/rig/{name}": {
         parameters: {
             query?: never;
@@ -3820,6 +3837,22 @@ export interface components {
             operation: "city.create" | "city.unregister" | "session.create" | "session.message" | "session.submit";
             /** @description Correlation ID from the 202 response. */
             request_id: string;
+        };
+        RequestStatus: {
+            /** @description Terminal result event when the request has succeeded or failed. */
+            event?: components["schemas"]["TypedEventStreamEnvelope"];
+            /**
+             * @description Async operation once known.
+             * @enum {string}
+             */
+            operation?: "city.create" | "city.unregister" | "session.create" | "session.message" | "session.submit";
+            /** @description Async request ID. */
+            request_id: string;
+            /**
+             * @description Current request state derived from terminal async-result events.
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "failed";
         };
         RigActionBody: {
             /** @description Action that was performed. */
@@ -11823,6 +11856,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-v0-city-by-city-name-request-by-id": {
+        parameters: {
+            query?: {
+                /** @description Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling. */
+                after_seq?: string;
+            };
+            header?: never;
+            path: {
+                /** @description City name. */
+                cityName: string;
+                /** @description Async request ID returned by a 202 response. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "X-GC-Cache-Age-S"?: number;
+                    "X-GC-Index"?: number;
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestStatus"];
                 };
             };
             /** @description Error */

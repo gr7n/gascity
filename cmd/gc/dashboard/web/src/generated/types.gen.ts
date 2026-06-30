@@ -2386,6 +2386,25 @@ export type RequestFailedPayload = {
     request_id: string;
 };
 
+export type RequestStatus = {
+    /**
+     * Terminal result event when the request has succeeded or failed.
+     */
+    event?: TypedEventStreamEnvelope;
+    /**
+     * Async operation once known.
+     */
+    operation?: 'city.create' | 'city.unregister' | 'session.create' | 'session.message' | 'session.submit';
+    /**
+     * Async request ID.
+     */
+    request_id: string;
+    /**
+     * Current request state derived from terminal async-result events.
+     */
+    status: 'pending' | 'succeeded' | 'failed';
+};
+
 export type RigActionBody = {
     /**
      * Action that was performed.
@@ -10366,6 +10385,45 @@ export type GetV0CityByCityNameReadinessResponses = {
 };
 
 export type GetV0CityByCityNameReadinessResponse = GetV0CityByCityNameReadinessResponses[keyof GetV0CityByCityNameReadinessResponses];
+
+export type GetV0CityByCityNameRequestByIdData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+        /**
+         * Async request ID returned by a 202 response.
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.
+         */
+        after_seq?: string;
+    };
+    url: '/v0/city/{cityName}/request/{id}';
+};
+
+export type GetV0CityByCityNameRequestByIdErrors = {
+    /**
+     * Error
+     */
+    default: ErrorModel;
+};
+
+export type GetV0CityByCityNameRequestByIdError = GetV0CityByCityNameRequestByIdErrors[keyof GetV0CityByCityNameRequestByIdErrors];
+
+export type GetV0CityByCityNameRequestByIdResponses = {
+    /**
+     * OK
+     */
+    200: RequestStatus;
+};
+
+export type GetV0CityByCityNameRequestByIdResponse = GetV0CityByCityNameRequestByIdResponses[keyof GetV0CityByCityNameRequestByIdResponses];
 
 export type DeleteV0CityByCityNameRigByNameData = {
     body?: never;

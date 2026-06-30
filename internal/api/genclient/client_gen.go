@@ -101,25 +101,73 @@ func (e EventRotateArchiveCompressionStatus) Valid() bool {
 
 // Defines values for RequestFailedPayloadOperation.
 const (
-	CityCreate     RequestFailedPayloadOperation = "city.create"
-	CityUnregister RequestFailedPayloadOperation = "city.unregister"
-	SessionCreate  RequestFailedPayloadOperation = "session.create"
-	SessionMessage RequestFailedPayloadOperation = "session.message"
-	SessionSubmit  RequestFailedPayloadOperation = "session.submit"
+	RequestFailedPayloadOperationCityCreate     RequestFailedPayloadOperation = "city.create"
+	RequestFailedPayloadOperationCityUnregister RequestFailedPayloadOperation = "city.unregister"
+	RequestFailedPayloadOperationSessionCreate  RequestFailedPayloadOperation = "session.create"
+	RequestFailedPayloadOperationSessionMessage RequestFailedPayloadOperation = "session.message"
+	RequestFailedPayloadOperationSessionSubmit  RequestFailedPayloadOperation = "session.submit"
 )
 
 // Valid indicates whether the value is a known member of the RequestFailedPayloadOperation enum.
 func (e RequestFailedPayloadOperation) Valid() bool {
 	switch e {
-	case CityCreate:
+	case RequestFailedPayloadOperationCityCreate:
 		return true
-	case CityUnregister:
+	case RequestFailedPayloadOperationCityUnregister:
 		return true
-	case SessionCreate:
+	case RequestFailedPayloadOperationSessionCreate:
 		return true
-	case SessionMessage:
+	case RequestFailedPayloadOperationSessionMessage:
 		return true
-	case SessionSubmit:
+	case RequestFailedPayloadOperationSessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestStatusOperation.
+const (
+	RequestStatusOperationCityCreate     RequestStatusOperation = "city.create"
+	RequestStatusOperationCityUnregister RequestStatusOperation = "city.unregister"
+	RequestStatusOperationSessionCreate  RequestStatusOperation = "session.create"
+	RequestStatusOperationSessionMessage RequestStatusOperation = "session.message"
+	RequestStatusOperationSessionSubmit  RequestStatusOperation = "session.submit"
+)
+
+// Valid indicates whether the value is a known member of the RequestStatusOperation enum.
+func (e RequestStatusOperation) Valid() bool {
+	switch e {
+	case RequestStatusOperationCityCreate:
+		return true
+	case RequestStatusOperationCityUnregister:
+		return true
+	case RequestStatusOperationSessionCreate:
+		return true
+	case RequestStatusOperationSessionMessage:
+		return true
+	case RequestStatusOperationSessionSubmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestStatusStatus.
+const (
+	RequestStatusStatusFailed    RequestStatusStatus = "failed"
+	RequestStatusStatusPending   RequestStatusStatus = "pending"
+	RequestStatusStatusSucceeded RequestStatusStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the RequestStatusStatus enum.
+func (e RequestStatusStatus) Valid() bool {
+	switch e {
+	case RequestStatusStatusFailed:
+		return true
+	case RequestStatusStatusPending:
+		return true
+	case RequestStatusStatusSucceeded:
 		return true
 	default:
 		return false
@@ -149,16 +197,16 @@ func (e SubmitIntent) Valid() bool {
 
 // Defines values for SupervisorRequestPayloadPhase.
 const (
-	SupervisorRequestPayloadPhaseComplete SupervisorRequestPayloadPhase = "complete"
-	SupervisorRequestPayloadPhaseStart    SupervisorRequestPayloadPhase = "start"
+	Complete SupervisorRequestPayloadPhase = "complete"
+	Start    SupervisorRequestPayloadPhase = "start"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorRequestPayloadPhase enum.
 func (e SupervisorRequestPayloadPhase) Valid() bool {
 	switch e {
-	case SupervisorRequestPayloadPhaseComplete:
+	case Complete:
 		return true
-	case SupervisorRequestPayloadPhaseStart:
+	case Start:
 		return true
 	default:
 		return false
@@ -2425,6 +2473,27 @@ type RequestFailedPayload struct {
 
 // RequestFailedPayloadOperation Which operation failed.
 type RequestFailedPayloadOperation string
+
+// RequestStatus defines model for RequestStatus.
+type RequestStatus struct {
+	// Event Discriminated union of city event stream envelopes. Each variant constrains the envelope type and payload schema together.
+	Event *TypedEventStreamEnvelope `json:"event,omitempty"`
+
+	// Operation Async operation once known.
+	Operation *RequestStatusOperation `json:"operation,omitempty"`
+
+	// RequestId Async request ID.
+	RequestId string `json:"request_id"`
+
+	// Status Current request state derived from terminal async-result events.
+	Status RequestStatusStatus `json:"status"`
+}
+
+// RequestStatusOperation Async operation once known.
+type RequestStatusOperation string
+
+// RequestStatusStatus Current request state derived from terminal async-result events.
+type RequestStatusStatus string
 
 // RigActionBody defines model for RigActionBody.
 type RigActionBody struct {
@@ -5916,6 +5985,12 @@ type GetV0CityByCityNameReadinessParams struct {
 
 	// Fresh Force fresh probe, bypassing cache.
 	Fresh *bool `form:"fresh,omitempty" json:"fresh,omitempty"`
+}
+
+// GetV0CityByCityNameRequestByIdParams defines parameters for GetV0CityByCityNameRequestById.
+type GetV0CityByCityNameRequestByIdParams struct {
+	// AfterSeq Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.
+	AfterSeq *string `form:"after_seq,omitempty" json:"after_seq,omitempty"`
 }
 
 // DeleteV0CityByCityNameRigByNameParams defines parameters for DeleteV0CityByCityNameRigByName.
@@ -12094,6 +12169,9 @@ type ClientInterface interface {
 	// GetV0CityByCityNameReadiness request
 	GetV0CityByCityNameReadiness(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetV0CityByCityNameRequestById request
+	GetV0CityByCityNameRequestById(ctx context.Context, cityName string, id string, params *GetV0CityByCityNameRequestByIdParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameRigByName request
 	DeleteV0CityByCityNameRigByName(ctx context.Context, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -13932,6 +14010,18 @@ func (c *Client) GetV0CityByCityNameProvidersPublic(ctx context.Context, cityNam
 
 func (c *Client) GetV0CityByCityNameReadiness(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0CityByCityNameReadinessRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0CityByCityNameRequestById(ctx context.Context, cityName string, id string, params *GetV0CityByCityNameRequestByIdParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameRequestByIdRequest(c.Server, cityName, id, params)
 	if err != nil {
 		return nil, err
 	}
@@ -21553,6 +21643,69 @@ func NewGetV0CityByCityNameReadinessRequest(server string, cityName string, para
 	return req, nil
 }
 
+// NewGetV0CityByCityNameRequestByIdRequest generates requests for GetV0CityByCityNameRequestById
+func NewGetV0CityByCityNameRequestByIdRequest(server string, cityName string, id string, params *GetV0CityByCityNameRequestByIdParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/request/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.AfterSeq != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "after_seq", *params.AfterSeq, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameRigByNameRequest generates requests for DeleteV0CityByCityNameRigByName
 func NewDeleteV0CityByCityNameRigByNameRequest(server string, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams) (*http.Request, error) {
 	var err error
@@ -24462,6 +24615,9 @@ type ClientWithResponsesInterface interface {
 	// GetV0CityByCityNameReadinessWithResponse request
 	GetV0CityByCityNameReadinessWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameReadinessResponse, error)
 
+	// GetV0CityByCityNameRequestByIdWithResponse request
+	GetV0CityByCityNameRequestByIdWithResponse(ctx context.Context, cityName string, id string, params *GetV0CityByCityNameRequestByIdParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameRequestByIdResponse, error)
+
 	// DeleteV0CityByCityNameRigByNameWithResponse request
 	DeleteV0CityByCityNameRigByNameWithResponse(ctx context.Context, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameRigByNameResponse, error)
 
@@ -27167,6 +27323,29 @@ func (r GetV0CityByCityNameReadinessResponse) StatusCode() int {
 	return 0
 }
 
+type GetV0CityByCityNameRequestByIdResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *RequestStatus
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameRequestByIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameRequestByIdResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DeleteV0CityByCityNameRigByNameResponse struct {
 	Body                          []byte
 	HTTPResponse                  *http.Response
@@ -29270,6 +29449,15 @@ func (c *ClientWithResponses) GetV0CityByCityNameReadinessWithResponse(ctx conte
 		return nil, err
 	}
 	return ParseGetV0CityByCityNameReadinessResponse(rsp)
+}
+
+// GetV0CityByCityNameRequestByIdWithResponse request returning *GetV0CityByCityNameRequestByIdResponse
+func (c *ClientWithResponses) GetV0CityByCityNameRequestByIdWithResponse(ctx context.Context, cityName string, id string, params *GetV0CityByCityNameRequestByIdParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameRequestByIdResponse, error) {
+	rsp, err := c.GetV0CityByCityNameRequestById(ctx, cityName, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameRequestByIdResponse(rsp)
 }
 
 // DeleteV0CityByCityNameRigByNameWithResponse request returning *DeleteV0CityByCityNameRigByNameResponse
@@ -33343,6 +33531,39 @@ func ParseGetV0CityByCityNameReadinessResponse(rsp *http.Response) (*GetV0CityBy
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ReadinessResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0CityByCityNameRequestByIdResponse parses an HTTP response from a GetV0CityByCityNameRequestByIdWithResponse call
+func ParseGetV0CityByCityNameRequestByIdResponse(rsp *http.Response) (*GetV0CityByCityNameRequestByIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameRequestByIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RequestStatus
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

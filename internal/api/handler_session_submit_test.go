@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
@@ -50,6 +51,54 @@ func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	}
 	if success.Intent != string(session.SubmitIntentDefault) {
 		t.Fatalf("intent = %q, want %q", success.Intent, session.SubmitIntentDefault)
+	}
+}
+
+func TestHandleSessionSubmitResultCanBePolledByRequestID(t *testing.T) {
+	fs := newSessionFakeState(t)
+	h := newTestCityHandler(t, fs)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Poll Me")
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, rec.Body)
+	if accepted.EventCursor == "" {
+		t.Fatal("missing event_cursor")
+	}
+
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success == nil {
+		t.Fatalf("session submit failed: %s: %s", failure.ErrorCode, failure.ErrorMessage)
+	}
+
+	statusReq := httptest.NewRequest(
+		http.MethodGet,
+		cityURL(fs, "/request/")+accepted.RequestID+"?after_seq="+accepted.EventCursor,
+		nil,
+	)
+	statusRec := httptest.NewRecorder()
+	h.ServeHTTP(statusRec, statusReq)
+
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d; body: %s", statusRec.Code, http.StatusOK, statusRec.Body.String())
+	}
+	var status RequestStatus
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode request status: %v", err)
+	}
+	if status.RequestID != accepted.RequestID || status.Status != requestStatusSucceeded {
+		t.Fatalf("status = %#v, want succeeded for %s", status, accepted.RequestID)
+	}
+	if status.Operation != RequestOperationSessionSubmit {
+		t.Fatalf("operation = %q, want %q", status.Operation, RequestOperationSessionSubmit)
+	}
+	if status.Event == nil || status.Event.Type != events.RequestResultSessionSubmit {
+		t.Fatalf("event = %#v, want session submit result", status.Event)
 	}
 }
 

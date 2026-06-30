@@ -5887,6 +5887,44 @@
         ],
         "type": "object"
       },
+      "RequestStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelope",
+            "description": "Terminal result event when the request has succeeded or failed."
+          },
+          "operation": {
+            "description": "Async operation once known.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Async request ID.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current request state derived from terminal async-result events.",
+            "enum": [
+              "pending",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "type": "object"
+      },
       "RigActionBody": {
         "additionalProperties": false,
         "properties": {
@@ -24340,6 +24378,93 @@
           }
         },
         "summary": "Get v0 city by city name readiness"
+      }
+    },
+    "/v0/city/{cityName}/request/{id}": {
+      "get": {
+        "operationId": "get-v0-city-by-city-name-request-by-id",
+        "parameters": [
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Async request ID returned by a 202 response.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Async request ID returned by a 202 response.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.",
+            "explode": false,
+            "in": "query",
+            "name": "after_seq",
+            "schema": {
+              "description": "Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestStatus"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "X-GC-Index": {
+                "schema": {
+                  "description": "Latest event sequence number.",
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Get v0 city by city name request by ID"
       }
     },
     "/v0/city/{cityName}/rig/{name}": {
