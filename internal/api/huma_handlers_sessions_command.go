@@ -27,7 +27,7 @@ import (
 
 var (
 	sessionSubmitAsyncTimeout       = 30 * time.Second
-	sessionMessageAsyncTimeout      = sessionMessageTimeout
+	sessionMessageAsyncTimeout      = sessionSubmitAsyncTimeout
 	sessionCreateCommandableTimeout = 5 * time.Minute
 )
 

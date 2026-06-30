@@ -4825,6 +4825,11 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	t.Cleanup(func() {
 		sessionMessageAsyncTimeout = prevTimeout
 	})
+	prevClientTimeout := sessionMessageTimeout
+	sessionMessageTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		sessionMessageTimeout = prevClientTimeout
+	})
 
 	srv := New(&stateWithSessionProvider{fakeState: fs, provider: blocker})
 	h := newTestCityHandlerWith(t, fs, srv)
@@ -4844,7 +4849,11 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	case <-time.After(testEventTimeout):
 		t.Fatal("provider nudge was not reached")
 	}
+	startedWaiting := time.Now()
 	success, failure := waitForSessionMessageResult(t, fs.eventProv, accepted.RequestID)
+	if elapsed := time.Since(startedWaiting); elapsed >= time.Second {
+		t.Fatalf("bounded message failure took %s, want under 1s with async timeout %s and client timeout %s", elapsed, sessionMessageAsyncTimeout, sessionMessageTimeout)
+	}
 	if success != nil {
 		t.Fatalf("unexpected success: %+v", success)
 	}
@@ -4857,14 +4866,17 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 }
 
 func TestSessionMessageAsyncTimeoutIsOperatorBounded(t *testing.T) {
-	if sessionMessageAsyncTimeout != sessionMessageTimeout {
-		t.Fatalf("sessionMessageAsyncTimeout = %s, want client timeout %s", sessionMessageAsyncTimeout, sessionMessageTimeout)
+	if sessionMessageAsyncTimeout != sessionSubmitAsyncTimeout {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want submit timeout %s", sessionMessageAsyncTimeout, sessionSubmitAsyncTimeout)
 	}
 	if sessionMessageTimeout != defaultSessionMessageTimeout {
 		t.Fatalf("sessionMessageTimeout = %s, want default %s", sessionMessageTimeout, defaultSessionMessageTimeout)
 	}
-	if sessionMessageAsyncTimeout > 45*time.Second {
-		t.Fatalf("sessionMessageAsyncTimeout = %s, want an operator-bounded wait", sessionMessageAsyncTimeout)
+	if sessionMessageAsyncTimeout >= sessionMessageTimeout {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want shorter than client timeout %s", sessionMessageAsyncTimeout, sessionMessageTimeout)
+	}
+	if sessionMessageAsyncTimeout <= 0 || sessionMessageAsyncTimeout > 30*time.Second {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want <= 30s", sessionMessageAsyncTimeout)
 	}
 }
 
