@@ -26,7 +26,7 @@ import (
 // to isolate mutation logic from reads and streaming.
 
 var (
-	sessionSubmitAsyncTimeout       = sessionMessageTimeout
+	sessionSubmitAsyncTimeout       = 30 * time.Second
 	sessionMessageAsyncTimeout      = sessionMessageTimeout
 	sessionCreateCommandableTimeout = 5 * time.Minute
 )

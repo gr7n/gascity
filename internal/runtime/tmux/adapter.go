@@ -479,6 +479,15 @@ func (p *Provider) DismissKnownDialogs(ctx context.Context, name string, timeout
 // multi-pane resolution, retry with backoff, and SIGWINCH wake.
 // Best-effort: returns nil if the session doesn't exist.
 func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
+	return p.NudgeWithContext(context.Background(), name, content)
+}
+
+// NudgeWithContext sends a message through the default tmux nudge path while
+// honoring caller cancellation during the optional idle wait.
+func (p *Provider) NudgeWithContext(ctx context.Context, name string, content []runtime.ContentBlock) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Wait for the agent to be idle before sending, unless disabled.
 	// This prevents interrupting active tool calls — the prompt is visible
 	// in scrollback during inter-tool-call gaps, so immediate send-keys
@@ -487,7 +496,12 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 		// Best-effort wait — if it fails (session gone, timeout), proceed
 		// with the nudge anyway. The message may arrive during active work,
 		// but Claude's cooperative queue will handle it at the next turn.
-		_ = p.tm.WaitForIdle(context.Background(), name, idleTimeout)
+		if err := p.tm.WaitForIdle(ctx, name, idleTimeout); err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return p.NudgeNow(name, content)
 }

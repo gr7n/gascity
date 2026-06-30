@@ -282,9 +282,12 @@ func waitForRequestProgressStage(t *testing.T, prov events.Provider, requestID, 
 	return nil
 }
 
-func TestSessionSubmitAsyncTimeoutMatchesClientTimeout(t *testing.T) {
-	if sessionSubmitAsyncTimeout != sessionMessageTimeout {
-		t.Fatalf("sessionSubmitAsyncTimeout = %s, want client timeout %s", sessionSubmitAsyncTimeout, sessionMessageTimeout)
+func TestSessionSubmitAsyncTimeoutIsOperatorBounded(t *testing.T) {
+	if sessionSubmitAsyncTimeout <= 0 || sessionSubmitAsyncTimeout > 30*time.Second {
+		t.Fatalf("sessionSubmitAsyncTimeout = %s, want <= 30s", sessionSubmitAsyncTimeout)
+	}
+	if sessionSubmitAsyncTimeout >= sessionMessageTimeout {
+		t.Fatalf("sessionSubmitAsyncTimeout = %s, want shorter than client timeout %s", sessionSubmitAsyncTimeout, sessionMessageTimeout)
 	}
 }
 

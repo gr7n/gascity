@@ -1532,6 +1532,49 @@ func TestRuntimeHandleNudgeImmediateUsesImmediateProvider(t *testing.T) {
 	}
 }
 
+type runtimeHandleContextNudgeProvider struct {
+	*runtime.Fake
+	calls []string
+}
+
+func (p *runtimeHandleContextNudgeProvider) NudgeWithContext(ctx context.Context, name string, content []runtime.ContentBlock) error {
+	p.calls = append(p.calls, name+":"+runtime.FlattenText(content))
+	return ctx.Err()
+}
+
+func TestRuntimeHandleDefaultMessageAndNudgeUseContextNudge(t *testing.T) {
+	sp := &runtimeHandleContextNudgeProvider{Fake: runtime.NewFake()}
+	if err := sp.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	handle, err := NewRuntimeHandle(RuntimeHandleConfig{
+		Provider:     sp,
+		SessionName:  "legacy-worker",
+		ProviderName: "claude",
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeHandle: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := handle.Message(ctx, MessageRequest{Text: "hello"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Message err = %v, want context canceled", err)
+	}
+	if _, err := handle.Nudge(ctx, NudgeRequest{Text: "still there?"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Nudge err = %v, want context canceled", err)
+	}
+	if len(sp.calls) != 2 {
+		t.Fatalf("context nudge calls = %#v, want 2 calls", sp.calls)
+	}
+	for _, call := range sp.Calls {
+		if call.Method == "Nudge" {
+			t.Fatalf("runtime calls = %#v, want default path through NudgeWithContext", sp.Calls)
+		}
+	}
+}
+
 func TestRuntimeHandleNudgeWaitIdleClaudeWrapsReminder(t *testing.T) {
 	sp := runtime.NewFake()
 	if err := sp.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
