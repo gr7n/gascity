@@ -918,7 +918,7 @@ func (p *Provider) rpcCallOnce(method string, params map[string]interface{}, req
 			continue
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(bridgeWSTimeout))
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {

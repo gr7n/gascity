@@ -976,6 +976,42 @@ func TestRPCSnapshot_FallsBackToWSURLFileWhenEnvStale(t *testing.T) {
 	}
 }
 
+func TestRPCSnapshotSilentBridgeUsesShortReadDeadline(t *testing.T) {
+	oldDefaults := defaultWSURLCandidates
+	defaultWSURLCandidates = nil
+	t.Cleanup(func() {
+		defaultWSURLCandidates = oldDefaults
+	})
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _, _ = conn.ReadMessage()
+		time.Sleep(bridgeWSTimeout + 2*time.Second)
+	}))
+	defer server.Close()
+
+	t.Setenv("T3_WS_URL", "ws"+strings.TrimPrefix(server.URL, "http"))
+	p := &Provider{
+		watchers:     make(map[string]context.CancelFunc),
+		recentStarts: make(map[string]time.Time),
+	}
+
+	started := time.Now()
+	_, err := p.rpcSnapshot()
+	if err == nil {
+		t.Fatal("rpcSnapshot error = nil, want timeout")
+	}
+	if elapsed := time.Since(started); elapsed > bridgeConnectRetryWindow+bridgeWSTimeout+3*time.Second {
+		t.Fatalf("rpcSnapshot elapsed = %s, want bounded by bridge timeout/retry window", elapsed)
+	}
+}
+
 func TestStart_TransientBridgeFailureReturnsInitializing(t *testing.T) {
 	oldDefaults := defaultWSURLCandidates
 	defaultWSURLCandidates = nil
