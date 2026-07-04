@@ -641,6 +641,56 @@ func (s *countCaptureStore) Count(_ context.Context, query beads.ListQuery, excl
 	return 4, s.countErr
 }
 
+type depBatchCaptureStore struct {
+	beads.Store
+	depBatchCalls int
+	gotIDs        []string
+}
+
+func (s *depBatchCaptureStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	s.depBatchCalls++
+	s.gotIDs = append([]string(nil), ids...)
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	return nil, fmt.Errorf("inner store does not support DepListBatch")
+}
+
+func TestBeadPolicyStorePreservesDepListBatch(t *testing.T) {
+	inner := &depBatchCaptureStore{Store: beads.NewMemStore()}
+	dependsOn, err := inner.Create(beads.Bead{Title: "depends on"})
+	if err != nil {
+		t.Fatalf("Create(dependsOn): %v", err)
+	}
+	issue, err := inner.Create(beads.Bead{Title: "issue"})
+	if err != nil {
+		t.Fatalf("Create(issue): %v", err)
+	}
+	if err := inner.DepAdd(issue.ID, dependsOn.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd: %v", err)
+	}
+	store := wrapStoreWithBeadPolicies(inner, &config.City{})
+
+	batch, ok := store.(beads.DepBatchLister)
+	if !ok {
+		t.Fatal("policy store does not implement beads.DepBatchLister")
+	}
+	depsByID, err := batch.DepListBatch([]string{issue.ID, dependsOn.ID})
+	if err != nil {
+		t.Fatalf("DepListBatch: %v", err)
+	}
+	if inner.depBatchCalls != 1 {
+		t.Fatalf("inner DepListBatch calls = %d, want 1", inner.depBatchCalls)
+	}
+	if len(inner.gotIDs) != 2 || inner.gotIDs[0] != issue.ID || inner.gotIDs[1] != dependsOn.ID {
+		t.Fatalf("inner got IDs = %v, want [%s %s]", inner.gotIDs, issue.ID, dependsOn.ID)
+	}
+	deps := depsByID[issue.ID]
+	if len(deps) != 1 || deps[0].IssueID != issue.ID || deps[0].DependsOnID != dependsOn.ID || deps[0].Type != "blocks" {
+		t.Fatalf("deps[%s] = %v, want %s -> %s", issue.ID, deps, issue.ID, dependsOn.ID)
+	}
+}
+
 func TestBeadPolicyStoreCountExpandsReadTier(t *testing.T) {
 	inner := &countCaptureStore{Store: beads.NewMemStore()}
 	store := wrapStoreWithBeadPolicies(inner, &config.City{})

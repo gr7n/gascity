@@ -133,6 +133,12 @@ func StoreSupportsAtomicTx(store Store) bool {
 	return ok && a.AtomicTx()
 }
 
+// DepBatchLister is an optional read capability for stores that can fetch
+// "down" dependency lists for multiple beads in one backing operation.
+type DepBatchLister interface {
+	DepListBatch(ids []string) (map[string][]Dep, error)
+}
+
 // Tx is the write surface available inside a Store.Tx callback.
 // Keep this interface limited to methods needed by current transactional
 // write pairs; do not add Store methods speculatively.
