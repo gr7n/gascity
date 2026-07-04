@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
@@ -319,20 +320,36 @@ func TestOrderDispatchCooldownDue(t *testing.T) {
 		t.Fatal("expected tracking bead to be created")
 	}
 	found := false
+	trackingID := ""
 	for _, b := range all {
 		for _, l := range b.Labels {
 			if l == "order-run:test-order" {
 				found = true
 			}
 		}
+		if strings.HasPrefix(b.Title, "order:") {
+			trackingID = b.ID
+		}
 	}
 	if !found {
 		t.Error("tracking bead missing order-run:test-order label")
+	}
+	if trackingID == "" {
+		t.Fatal("tracking bead ID not found")
 	}
 
 	work := workBeadByOrderLabel(t, store, "order-run:test-order")
 	if !slicesContain(work.Labels, "order-run:test-order") {
 		t.Errorf("work bead missing order-run:test-order label, got %v", work.Labels)
+	}
+	if got := work.Metadata[beadmeta.OrderNameMetadataKey]; got != "test-order" {
+		t.Errorf("gc.order_name = %q, want test-order", got)
+	}
+	if got := work.Metadata[beadmeta.OrderScopedNameMetadataKey]; got != "test-order" {
+		t.Errorf("gc.order_scoped_name = %q, want test-order", got)
+	}
+	if got := work.Metadata[beadmeta.OrderTrackingBeadIDMetadataKey]; got != trackingID {
+		t.Errorf("gc.order_tracking_bead_id = %q, want tracking bead %q", got, trackingID)
 	}
 	if work.Metadata["gc.routed_to"] != "worker" {
 		t.Errorf("gc.routed_to = %q, want %q", work.Metadata["gc.routed_to"], "worker")
