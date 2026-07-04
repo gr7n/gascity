@@ -9,21 +9,23 @@ import "testing"
 // here must come with a data-migration story.
 func TestPinnedKindValues(t *testing.T) {
 	pinned := map[string]string{
-		KindRetry:            "retry",
-		KindRalph:            "ralph",
-		KindCheck:            "check",
-		KindRetryEval:        "retry-eval",
-		KindFanout:           "fanout",
-		KindDrain:            "drain",
-		KindScopeCheck:       "scope-check",
-		KindWorkflowFinalize: "workflow-finalize",
-		KindScope:            "scope",
-		KindCleanup:          "cleanup",
-		KindRun:              "run",
-		KindRetryRun:         "retry-run",
-		KindWorkflow:         "workflow",
-		KindWisp:             "wisp",
-		KindSpec:             "spec",
+		KindRetry:                "retry",
+		KindRalph:                "ralph",
+		KindCheck:                "check",
+		KindRetryEval:            "retry-eval",
+		KindReviewQuorumPlan:     "review-quorum-plan",
+		KindReviewQuorumFinalize: "review-quorum-finalize",
+		KindFanout:               "fanout",
+		KindDrain:                "drain",
+		KindScopeCheck:           "scope-check",
+		KindWorkflowFinalize:     "workflow-finalize",
+		KindScope:                "scope",
+		KindCleanup:              "cleanup",
+		KindRun:                  "run",
+		KindRetryRun:             "retry-run",
+		KindWorkflow:             "workflow",
+		KindWisp:                 "wisp",
+		KindSpec:                 "spec",
 	}
 	for got, want := range pinned {
 		if got != want {

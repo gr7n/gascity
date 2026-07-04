@@ -198,7 +198,7 @@ func assertStoreDep(t *testing.T, store beads.Store, issueID, dependsOnID, depTy
 	t.Fatalf("dependencies for %s = %+v, want %s dependency on %s", issueID, deps, depType, dependsOnID)
 }
 
-func TestBuildRecipeApplyPlanReviewQuorumSubstitutesSynthesisTarget(t *testing.T) {
+func TestBuildRecipeApplyPlanReviewQuorumUsesFinalizerControl(t *testing.T) {
 	formulatest.EnableV2ForTest(t)
 
 	cwd, err := os.Getwd()
@@ -217,13 +217,14 @@ func TestBuildRecipeApplyPlanReviewQuorumSubstitutesSynthesisTarget(t *testing.T
 		"lane_two_provider": "provider-b",
 		"lane_two_model":    "model-b",
 		"lane_two_target":   "target-b",
-		"synthesis_target":  "custom-review-synthesis",
 	})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
 
 	plan, _, _, err := buildRecipeApplyPlan(recipe, Options{Vars: map[string]string{
+		"subject":           "PR-123",
+		"base_ref":          "origin/main",
 		"lane_one_id":       "primary",
 		"lane_one_provider": "provider-a",
 		"lane_one_model":    "model-a",
@@ -232,7 +233,6 @@ func TestBuildRecipeApplyPlanReviewQuorumSubstitutesSynthesisTarget(t *testing.T
 		"lane_two_provider": "provider-b",
 		"lane_two_model":    "model-b",
 		"lane_two_target":   "target-b",
-		"synthesis_target":  "custom-review-synthesis",
 	}})
 	if err != nil {
 		t.Fatalf("buildRecipeApplyPlan: %v", err)
@@ -247,8 +247,17 @@ func TestBuildRecipeApplyPlanReviewQuorumSubstitutesSynthesisTarget(t *testing.T
 	if synthesisNode == nil {
 		t.Fatal("synthesis node missing")
 	}
-	if got := synthesisNode.Metadata["gc.run_target"]; got != "custom-review-synthesis" {
-		t.Fatalf("synthesis gc.run_target = %q, want custom-review-synthesis", got)
+	if got := synthesisNode.Metadata["gc.kind"]; got != "review-quorum-finalize" {
+		t.Fatalf("synthesis gc.kind = %q, want review-quorum-finalize", got)
+	}
+	if got := synthesisNode.Metadata["gc.run_target"]; got != "" {
+		t.Fatalf("synthesis gc.run_target = %q, want empty code-owned control", got)
+	}
+	if got := synthesisNode.Metadata["gc.review_quorum_subject"]; got != "PR-123" {
+		t.Fatalf("synthesis gc.review_quorum_subject = %q, want PR-123", got)
+	}
+	if got := synthesisNode.Metadata["gc.review_quorum_base_ref"]; got != "origin/main" {
+		t.Fatalf("synthesis gc.review_quorum_base_ref = %q, want origin/main", got)
 	}
 	wantNodes := map[string]map[string]string{
 		"mol-review-quorum.review-lane-one.attempt.1": {

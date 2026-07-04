@@ -14,14 +14,16 @@ package beadmeta
 // (ControlKinds is authoritative; every routing predicate derives from it).
 const (
 	// Control-bead kinds processed by the control dispatcher.
-	KindRetry            = "retry"
-	KindRalph            = "ralph"
-	KindCheck            = "check"
-	KindRetryEval        = "retry-eval"
-	KindFanout           = "fanout"
-	KindDrain            = "drain"
-	KindScopeCheck       = "scope-check"
-	KindWorkflowFinalize = "workflow-finalize"
+	KindRetry                = "retry"
+	KindRalph                = "ralph"
+	KindCheck                = "check"
+	KindRetryEval            = "retry-eval"
+	KindReviewQuorumPlan     = "review-quorum-plan"
+	KindReviewQuorumFinalize = "review-quorum-finalize"
+	KindFanout               = "fanout"
+	KindDrain                = "drain"
+	KindScopeCheck           = "scope-check"
+	KindWorkflowFinalize     = "workflow-finalize"
 
 	// Structural graph-node kinds: compiled into graphs, never dispatched as
 	// control beads (the dispatch switch hard-errors on them).

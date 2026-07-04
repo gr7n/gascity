@@ -1201,29 +1201,20 @@ func TestCompileReviewQuorumCoreFormula(t *testing.T) {
 			continue
 		}
 		synthesisPrompts++
-		for _, required := range []string{
-			"subject",
-			"base_ref",
-			"lanes",
-			"verdict",
-			"summary",
-			"findings_count",
-			"findings",
-			"evidence",
-			"usage",
-			"read_only_enforcement",
-			"mutations_delta",
-			"failure_class",
-			"failure_reason",
-			"lane=<lane_id> reason=<stable_reason>",
-		} {
+		if step.Retry != nil {
+			t.Fatalf("%s retry = %+v, want code-owned control without retry wrapper", step.ID, step.Retry)
+		}
+		if got := step.Metadata["gc.kind"]; got != "review-quorum-finalize" {
+			t.Fatalf("%s gc.kind = %q, want review-quorum-finalize", step.ID, got)
+		}
+		for _, required := range []string{"{{subject}}", "{{base_ref}}", "review-quorum.summary.v1", "internal/reviewquorum.Finalize"} {
 			if !strings.Contains(step.Description, required) {
-				t.Fatalf("%s description missing synthesis contract key %q", step.ID, required)
+				t.Fatalf("%s description missing code-owned finalizer detail %q", step.ID, required)
 			}
 		}
 	}
 	if synthesisPrompts != 1 {
-		t.Fatalf("synthesis prompt count = %d, want 1", synthesisPrompts)
+		t.Fatalf("synthesis control count = %d, want 1", synthesisPrompts)
 	}
 	for _, name := range []string{
 		"lane_one_id",
@@ -1234,11 +1225,13 @@ func TestCompileReviewQuorumCoreFormula(t *testing.T) {
 		"lane_two_provider",
 		"lane_two_model",
 		"lane_two_target",
-		"synthesis_target",
 	} {
 		if !parsed.Vars[name].Required {
 			t.Fatalf("%s required = false, want true", name)
 		}
+	}
+	if parsed.Vars["synthesis_target"].Required {
+		t.Fatal("synthesis_target required = true, want deprecated optional var")
 	}
 
 	recipe, err := Compile(context.Background(), "mol-review-quorum", []string{searchDir}, map[string]string{
@@ -1251,7 +1244,6 @@ func TestCompileReviewQuorumCoreFormula(t *testing.T) {
 		"lane_two_provider": "provider-b",
 		"lane_two_model":    "model-b",
 		"lane_two_target":   "target-b",
-		"synthesis_target":  "custom-review-synthesis",
 	})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -1302,13 +1294,103 @@ func TestCompileReviewQuorumCoreFormula(t *testing.T) {
 	if got := synthesis.Metadata["gc.output_json_schema"]; got != "review-quorum.summary.v1" {
 		t.Fatalf("synthesis gc.output_json_schema = %q, want review-quorum.summary.v1", got)
 	}
-	if got := synthesis.Metadata["gc.run_target"]; got != "{{synthesis_target}}" {
-		t.Fatalf("synthesis gc.run_target = %q, want {{synthesis_target}}", got)
+	if got := synthesis.Metadata["gc.kind"]; got != "review-quorum-finalize" {
+		t.Fatalf("synthesis gc.kind = %q, want review-quorum-finalize", got)
+	}
+	if got := synthesis.Metadata["gc.run_target"]; got != "" {
+		t.Fatalf("synthesis gc.run_target = %q, want empty code-owned control", got)
+	}
+	if got := synthesis.Metadata["gc.review_quorum_subject"]; got != "{{subject}}" {
+		t.Fatalf("synthesis gc.review_quorum_subject = %q, want {{subject}}", got)
+	}
+	if got := synthesis.Metadata["gc.review_quorum_base_ref"]; got != "{{base_ref}}" {
+		t.Fatalf("synthesis gc.review_quorum_base_ref = %q, want {{base_ref}}", got)
 	}
 	for _, dep := range []string{"mol-review-quorum.review-lane-one", "mol-review-quorum.review-lane-two"} {
 		if !hasRecipeDep(recipe.Deps, synthesis.ID, dep, "blocks") {
 			t.Fatalf("synthesis missing blocks dep on %s", dep)
 		}
+	}
+}
+
+func TestCompileReviewQuorumDynamicFormula(t *testing.T) {
+	enableV2ForTest(t)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoRoot := filepath.Clean(filepath.Join(cwd, "..", ".."))
+	searchDir := filepath.Join(repoRoot, "internal", "bootstrap", "packs", "core", "formulas")
+	lanesJSON := `[{"id":"primary","provider":"opencode","model":"kimi-k2.6","target":"reviewer-a","focus":"general review"},{"id":"secondary","provider":"opencode","model":"deepseek-v4-pro","target":"reviewer-b","focus":"regression review"}]`
+
+	recipe, err := Compile(context.Background(), "mol-review-quorum-dynamic", []string{searchDir}, map[string]string{
+		"subject":    "PR-123",
+		"lanes_json": lanesJSON,
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	planner := recipe.StepByID("mol-review-quorum-dynamic.plan-review-lanes")
+	if planner == nil {
+		t.Fatal("planner step missing")
+	}
+	if got := planner.Metadata["gc.kind"]; got != "review-quorum-plan" {
+		t.Fatalf("planner gc.kind = %q, want review-quorum-plan", got)
+	}
+	if got := planner.Metadata["gc.review_quorum_lanes_json"]; got != "{{lanes_json}}" {
+		t.Fatalf("planner lanes json = %q, want {{lanes_json}}", got)
+	}
+
+	fanout := recipe.StepByID("mol-review-quorum-dynamic.plan-review-lanes-fanout")
+	if fanout == nil {
+		t.Fatal("planner fanout step missing")
+	}
+	if got := fanout.Metadata["gc.kind"]; got != "fanout" {
+		t.Fatalf("fanout gc.kind = %q, want fanout", got)
+	}
+	if got := fanout.Metadata["gc.for_each"]; got != "output.lanes" {
+		t.Fatalf("fanout gc.for_each = %q, want output.lanes", got)
+	}
+	if got := fanout.Metadata["gc.bond"]; got != "" {
+		t.Fatalf("fanout gc.bond = %q, want empty inline template fanout", got)
+	}
+	if got := fanout.Metadata["gc.bond_vars"]; got != "" {
+		t.Fatalf("fanout gc.bond_vars = %q, want empty inline template fanout", got)
+	}
+	var inlineTemplate []*Step
+	if err := json.Unmarshal([]byte(fanout.Metadata["gc.fanout_template"]), &inlineTemplate); err != nil {
+		t.Fatalf("fanout gc.fanout_template invalid JSON: %v", err)
+	}
+	if len(inlineTemplate) != 1 {
+		t.Fatalf("inline template len = %d, want 1", len(inlineTemplate))
+	}
+	if got := inlineTemplate[0].ID; got != "{target}.review-{item.id}" {
+		t.Fatalf("inline template id = %q, want {target}.review-{item.id}", got)
+	}
+	if inlineTemplate[0].Retry == nil || inlineTemplate[0].Retry.OnExhausted != "soft_fail" {
+		t.Fatalf("inline template retry = %+v, want soft_fail retry", inlineTemplate[0].Retry)
+	}
+	if got := inlineTemplate[0].Metadata["gc.run_target"]; got != "{item.target}" {
+		t.Fatalf("inline template gc.run_target = %q, want {item.target}", got)
+	}
+
+	finalizer := recipe.StepByID("mol-review-quorum-dynamic.finalize-review-quorum")
+	if finalizer == nil {
+		t.Fatal("dynamic finalizer step missing")
+	}
+	if got := finalizer.Metadata["gc.kind"]; got != "review-quorum-finalize" {
+		t.Fatalf("finalizer gc.kind = %q, want review-quorum-finalize", got)
+	}
+	if got := finalizer.Metadata["gc.review_quorum_lanes_source"]; got != "plan-review-lanes" {
+		t.Fatalf("finalizer lanes source = %q, want plan-review-lanes", got)
+	}
+	if !hasRecipeDep(recipe.Deps, finalizer.ID, planner.ID, "blocks") {
+		t.Fatalf("finalizer missing blocks dep on planner")
+	}
+	if !hasRecipeDep(recipe.Deps, finalizer.ID, planner.ID, "waits-for") {
+		t.Fatalf("finalizer missing waits-for dep on planner")
 	}
 }
 

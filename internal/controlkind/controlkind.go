@@ -11,20 +11,22 @@ import (
 
 // Known gc.kind values used by the control catalog.
 const (
-	Check            = beadmeta.KindCheck
-	Cleanup          = beadmeta.KindCleanup
-	Drain            = beadmeta.KindDrain
-	Fanout           = beadmeta.KindFanout
-	Ralph            = beadmeta.KindRalph
-	Retry            = beadmeta.KindRetry
-	RetryEval        = beadmeta.KindRetryEval
-	RetryRun         = beadmeta.KindRetryRun
-	Run              = beadmeta.KindRun
-	Scope            = beadmeta.KindScope
-	ScopeCheck       = beadmeta.KindScopeCheck
-	Spec             = beadmeta.KindSpec
-	Workflow         = beadmeta.KindWorkflow
-	WorkflowFinalize = beadmeta.KindWorkflowFinalize
+	Check                = beadmeta.KindCheck
+	Cleanup              = beadmeta.KindCleanup
+	Drain                = beadmeta.KindDrain
+	Fanout               = beadmeta.KindFanout
+	Ralph                = beadmeta.KindRalph
+	Retry                = beadmeta.KindRetry
+	RetryEval            = beadmeta.KindRetryEval
+	ReviewQuorumFinalize = beadmeta.KindReviewQuorumFinalize
+	ReviewQuorumPlan     = beadmeta.KindReviewQuorumPlan
+	RetryRun             = beadmeta.KindRetryRun
+	Run                  = beadmeta.KindRun
+	Scope                = beadmeta.KindScope
+	ScopeCheck           = beadmeta.KindScopeCheck
+	Spec                 = beadmeta.KindSpec
+	Workflow             = beadmeta.KindWorkflow
+	WorkflowFinalize     = beadmeta.KindWorkflowFinalize
 )
 
 // GraphRouteMode describes how a graph step should route dependency context.
@@ -104,22 +106,21 @@ var (
 // functions stay in their owning packages, but graph/runtime semantics live
 // here so formulas, routing, dispatch, and lint-style checks share one source.
 var specs = map[string]KindSpec{
-	Check:     {flags: scopedGraphControl | detachedGraphStep, Runtime: fragmentRuntime, GraphRouteMode: GraphRouteMergeDeps},
-	Cleanup:   {flags: requiresGraphContract},
-	Drain:     {flags: baseControl | requiresGraphContract | scopeCheckExempt | ralphOutputExempt},
-	Fanout:    {flags: baseControl | dynamicScopeControl | scopeCheckExempt | ralphOutputExempt, Runtime: fragmentRuntime, GraphRouteMode: GraphRouteControlFor},
-	Ralph:     {flags: detachedGraphControl | ralphOutputExempt, Runtime: retryRuntime},
-	Retry:     {flags: detachedGraphControl, Runtime: retryRuntime},
-	RetryEval: {flags: detachedGraphControl, Runtime: retryEvalRuntime, GraphRouteMode: GraphRouteRetryEvalSubject},
-	RetryRun:  {flags: requiresGraphContract | detachedGraphStep},
-	Run:       {flags: requiresGraphContract | detachedGraphStep},
-	Scope:     {flags: workflowTopology | requiresGraphContract | scopeCheckExempt | ralphOutputExempt},
-	ScopeCheck: {
-		flags:          scopedGraphControl,
-		GraphRouteMode: GraphRouteControlFor,
-	},
-	Spec:     {flags: workflowTopology | scopeCheckExempt | ralphOutputExempt},
-	Workflow: {flags: workflowTopology | latestAttemptCandidateExempt},
+	Check:                {flags: scopedGraphControl | detachedGraphStep, Runtime: fragmentRuntime, GraphRouteMode: GraphRouteMergeDeps},
+	Cleanup:              {flags: requiresGraphContract},
+	Drain:                {flags: baseControl | requiresGraphContract | scopeCheckExempt | ralphOutputExempt},
+	Fanout:               {flags: baseControl | dynamicScopeControl | scopeCheckExempt | ralphOutputExempt, Runtime: fragmentRuntime, GraphRouteMode: GraphRouteControlFor},
+	Ralph:                {flags: detachedGraphControl | ralphOutputExempt, Runtime: retryRuntime},
+	Retry:                {flags: detachedGraphControl, Runtime: retryRuntime},
+	RetryEval:            {flags: detachedGraphControl, Runtime: retryEvalRuntime, GraphRouteMode: GraphRouteRetryEvalSubject},
+	ReviewQuorumFinalize: {flags: scopedGraphControl},
+	ReviewQuorumPlan:     {flags: scopedGraphControl},
+	RetryRun:             {flags: requiresGraphContract | detachedGraphStep},
+	Run:                  {flags: requiresGraphContract | detachedGraphStep},
+	Scope:                {flags: workflowTopology | requiresGraphContract | scopeCheckExempt | ralphOutputExempt},
+	ScopeCheck:           {flags: scopedGraphControl, GraphRouteMode: GraphRouteControlFor},
+	Spec:                 {flags: workflowTopology | scopeCheckExempt | ralphOutputExempt},
+	Workflow:             {flags: workflowTopology | latestAttemptCandidateExempt},
 	WorkflowFinalize: {
 		flags:                         scopedGraphControl,
 		Runtime:                       workflowFinalizeRuntime,
