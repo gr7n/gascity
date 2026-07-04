@@ -757,6 +757,14 @@ type LoopSpec struct {
 //	    polecat_name: "{item.name}"
 //	    rig: "{item.rig}"
 //	  parallel: true
+//
+// Inline one-off fanout templates can use template instead of bond:
+//
+//	on_complete:
+//	  for_each: output.members
+//	  template:
+//	    - id: "{target}.review-{item.name}"
+//	      title: "Review {item.name}"
 type OnCompleteSpec struct {
 	// ForEach is the path to the iterable collection in step output.
 	// Format: "output.<field>" or "output.<field>.<nested>"
@@ -766,6 +774,11 @@ type OnCompleteSpec struct {
 	// Bond is the formula to instantiate for each item.
 	// A new molecule is created for each element in the ForEach collection.
 	Bond string `json:"bond,omitempty"`
+
+	// Template is an inline expansion template to instantiate for each item.
+	// It is mutually exclusive with Bond and is intended for one-off fanouts
+	// whose fragment is clearer next to the producer step.
+	Template []*Step `json:"template,omitempty" toml:"template,omitempty"`
 
 	// Vars are variable bindings for each iteration.
 	// Supports placeholders:
@@ -1455,12 +1468,21 @@ func validateChildDependsOn(children []*Step, idLocations map[string]string, err
 
 // validateOnComplete validates an OnCompleteSpec.
 func validateOnComplete(oc *OnCompleteSpec, errs *[]string, prefix string) {
-	// Check that for_each and bond are both present or both absent
-	if oc.ForEach != "" && oc.Bond == "" {
-		*errs = append(*errs, fmt.Sprintf("%s.on_complete: bond is required when for_each is set", prefix))
+	hasBond := strings.TrimSpace(oc.Bond) != ""
+	hasTemplate := len(oc.Template) > 0
+
+	// Check that for_each and a fanout fragment source are both present.
+	if oc.ForEach != "" && !hasBond && !hasTemplate {
+		*errs = append(*errs, fmt.Sprintf("%s.on_complete: bond or template is required when for_each is set", prefix))
 	}
-	if oc.ForEach == "" && oc.Bond != "" {
+	if oc.ForEach == "" && hasBond {
 		*errs = append(*errs, fmt.Sprintf("%s.on_complete: for_each is required when bond is set", prefix))
+	}
+	if oc.ForEach == "" && hasTemplate {
+		*errs = append(*errs, fmt.Sprintf("%s.on_complete: for_each is required when template is set", prefix))
+	}
+	if hasBond && hasTemplate {
+		*errs = append(*errs, fmt.Sprintf("%s.on_complete: bond and template are mutually exclusive", prefix))
 	}
 
 	// Validate for_each path format

@@ -76,22 +76,23 @@ The reviewer lane identity and runtime binding are intentionally configured in
 one obvious place: formula vars. `lane_one_id`, `lane_one_provider`,
 `lane_one_model`, `lane_one_target`, `lane_two_id`, `lane_two_provider`,
 `lane_two_model`, and `lane_two_target` are required when the formula is
-instantiated. The synthesis dispatch target is configured separately through
-`synthesis_target`. Each reviewer lane has `[steps.retry] max_attempts = 3` and
-`on_exhausted = "soft_fail"` so transient provider exhaustion degrades quorum
-coverage instead of failing the whole formula. The synthesis step is hard-fail
-because it is responsible for persisting the final durable state.
+instantiated. `synthesis_target` is retained as a deprecated compatibility
+variable; synthesis is no longer dispatched to an agent. Each reviewer lane has
+`[steps.retry] max_attempts = 3` and `on_exhausted = "soft_fail"` so transient
+provider exhaustion degrades quorum coverage instead of failing the whole
+formula.
 
 Reviewer output is structured for future automation. Lanes must write
 `lane_id`, `provider`, `model`, `verdict`, `summary`, `findings_count`,
 `findings`, `evidence`, `usage`, `read_only_enforcement`, `mutations_delta`,
 `failure_class`, and `failure_reason`; synthesis preserves lane provenance and
 writes a
-`review-quorum.summary.v1` output. `internal/reviewquorum` defines the durable
-Go contract and finalizer, but the current formula synthesis step is
-agent-executed and does not call `reviewquorum.Finalize` directly. Future
-`dx-review summarize` compatibility can consume that state, but `dx-review` is
-not the lifecycle owner.
+`review-quorum.summary.v1` output. The review quorum finalizer control reads
+lane retry controls, converts soft-failed transient controls without JSON into
+blocked transient lane outputs, calls `reviewquorum.Finalize`, and closes with
+`gc.outcome=pass` once the canonical summary is written. Future `dx-review
+summarize` compatibility can consume that state, but `dx-review` is not the
+lifecycle owner.
 The summary `findings_count` is deduplicated, top-level `mutations_delta` is
 reserved for synthesis-created changes, and reviewer mutation deltas stay under
 the corresponding lane. Go finalizer lane failures use
@@ -102,6 +103,12 @@ Read-only enforcement is defined as a mutation baseline delta. A reviewer must
 record the workspace state before review with `git status --porcelain=v1 -z`
 and compare after review against that baseline; pre-existing tracked changes and
 untracked files do not count as reviewer-created mutations.
+
+`internal/bootstrap/packs/core/formulas/mol-review-quorum-dynamic.toml` is the
+lane-driven variant. It accepts `lanes_json`, validates it with
+`gc.kind=review-quorum-plan`, uses `on_complete` fanout to expand one inline
+retry-wrapped reviewer template per lane spec, and reuses the same finalizer
+control for N expected lane IDs.
 
 ### Resolution
 

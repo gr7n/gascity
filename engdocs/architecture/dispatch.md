@@ -55,8 +55,10 @@ expanded to their open children before routing.
 - **Review Quorum Formula**: `mol-review-quorum` is a core pack
   compiler-v2 formula that dispatches exactly two read-only reviewer
   lanes using formula-supplied lane IDs, providers, models, and targets,
-  and then routes a synthesis step. Dispatch treats it like any other
-  formula-backed wisp; it does not give
+  and then finalizes through `gc.kind=review-quorum-finalize`.
+  `mol-review-quorum-dynamic` adds a `gc.kind=review-quorum-plan`
+  planner and `on_complete` fanout for user-supplied lane configs.
+  Dispatch treats these like any other formula-backed wisp; it does not give
   `dx-review` lifecycle ownership.
 
 ## Architecture
@@ -396,14 +398,18 @@ formulas override system formulas by name.
 
 `mol-review-quorum` is provided by the core pack formula layer. Its reviewer
 lane IDs, providers, models, and dispatch targets are all supplied through
-formula vars; the synthesis target is configured separately with
-`synthesis_target`. Each reviewer lane is expected to produce durable structured
-output with verdict, findings, evidence, usage, failure classification, and
-read-only mutation-baseline delta.
-The synthesis step writes the combined `review-quorum.summary.v1` state for
-future consumers such as `dx-review summarize`. The `internal/reviewquorum`
-Go finalizer defines the durable contract but is not invoked by formula
-synthesis yet.
+formula vars; `synthesis_target` is retained only as a deprecated compatibility
+variable. Each reviewer lane is expected to produce durable structured output
+with verdict, findings, evidence, usage, failure classification, and read-only
+mutation-baseline delta.
+The `gc.kind=review-quorum-finalize` control writes the combined
+`review-quorum.summary.v1` state for future consumers such as `dx-review
+summarize` by calling `internal/reviewquorum.Finalize`.
+
+`mol-review-quorum-dynamic` validates `lanes_json` with
+`gc.kind=review-quorum-plan`, fans out an inline retry-wrapped reviewer
+template once per lane config item, and reuses the same finalizer for N expected
+lane IDs.
 
 Read-only mutation checks are baseline-relative. Dispatch and review consumers
 must compare reviewer after-state to the reviewer-recorded before baseline, not
