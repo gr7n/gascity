@@ -85,6 +85,8 @@ func TestDoltliteCountMatchesList(t *testing.T) {
 		{name: "by assignee", query: ListQuery{Assignee: "rig/worker"}},
 		{name: "by no-history assignee", query: ListQuery{Assignee: "rig/nohistory-worker"}},
 		{name: "by label", query: ListQuery{Label: "tier-test"}},
+		{name: "by label prefix", query: ListQuery{LabelPrefix: "order-run:"}},
+		{name: "by label prefix include closed", query: ListQuery{LabelPrefix: "order-run:", IncludeClosed: true}},
 		{name: "exclude session", query: ListQuery{AllowScan: true, IncludeClosed: true}, exclude: []string{"session"}},
 		{name: "exclude session+task", query: ListQuery{AllowScan: true, IncludeClosed: true}, exclude: []string{"session", "task"}},
 	}

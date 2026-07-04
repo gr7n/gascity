@@ -331,6 +331,8 @@ func buildOrderRunFeedItems(state State, requestedScopeKind, requestedScopeRef s
 			continue
 		}
 
+		var runTimes map[string]time.Time
+		runTimesLoaded := false
 		for _, bead := range results {
 			scopedName := orderTrackingScopedName(bead)
 			if scopedName == "" {
@@ -341,7 +343,11 @@ func buildOrderRunFeedItems(state State, requestedScopeKind, requestedScopeRef s
 				continue
 			}
 
-			updatedAt := orderTrackingUpdatedAt(info.store, bead, scopedName)
+			if !runTimesLoaded {
+				runTimes = latestOrderRunTimes(info.store, info.ref)
+				runTimesLoaded = true
+			}
+			updatedAt := orderTrackingUpdatedAt(bead, scopedName, runTimes)
 			orderDef, ok := orderByScopedName[scopedName]
 			title := orderTrackingTitle(scopedName, orderDef, ok)
 			target := orderTrackingTarget(orderDef, ok, bead)
@@ -376,29 +382,48 @@ func buildOrderRunFeedItems(state State, requestedScopeKind, requestedScopeRef s
 	}, nil
 }
 
-func orderTrackingUpdatedAt(store beads.Store, tracking beads.Bead, scopedName string) time.Time {
-	updatedAt := tracking.CreatedAt
-	if store == nil || strings.TrimSpace(scopedName) == "" {
-		return updatedAt
+// latestOrderRunTimes returns the newest active order-run bead time per
+// scoped order name from a single label-prefix scan. The feed previously
+// resolved this with one Limit-1 List per tracked order, which fanned out
+// into a store query per order on every rebuild. A scan failure degrades
+// the same way the per-order lookups did: the feed falls back to each
+// tracking bead's CreatedAt.
+func latestOrderRunTimes(store beads.Store, storeRef string) map[string]time.Time {
+	if store == nil {
+		return nil
 	}
-
 	runs, err := store.List(beads.ListQuery{
-		Label:    "order-run:" + scopedName,
-		Limit:    1,
-		Sort:     beads.SortCreatedDesc,
-		TierMode: beads.TierBoth,
+		LabelPrefix: "order-run:",
+		TierMode:    beads.TierBoth,
 	})
 	if err != nil && len(runs) == 0 {
-		orderFeedLogf("api: order feed update lookup failed for %s bead %s: %v", scopedName, tracking.ID, err)
-		return updatedAt
+		orderFeedLogf("api: order feed run scan failed for %s: %v", storeRef, err)
+		return nil
 	}
 	if err != nil {
-		orderFeedLogf("api: order feed update lookup partially failed for %s bead %s: %v", scopedName, tracking.ID, err)
+		orderFeedLogf("api: order feed run scan partially failed for %s: %v", storeRef, err)
 	}
-	if len(runs) > 0 && runs[0].CreatedAt.After(updatedAt) {
-		updatedAt = runs[0].CreatedAt
+	latest := make(map[string]time.Time, len(runs))
+	for _, run := range runs {
+		for _, label := range run.Labels {
+			scopedName, ok := strings.CutPrefix(label, "order-run:")
+			if !ok || strings.TrimSpace(scopedName) == "" {
+				continue
+			}
+			scopedName = strings.TrimSpace(scopedName)
+			if run.CreatedAt.After(latest[scopedName]) {
+				latest[scopedName] = run.CreatedAt
+			}
+		}
 	}
-	return updatedAt
+	return latest
+}
+
+func orderTrackingUpdatedAt(tracking beads.Bead, scopedName string, runTimes map[string]time.Time) time.Time {
+	if t, ok := runTimes[scopedName]; ok && t.After(tracking.CreatedAt) {
+		return t
+	}
+	return tracking.CreatedAt
 }
 
 func workflowProjectionScope(info workflowStoreInfo, root beads.Bead, cityScopeRef, requestedScopeKind, requestedScopeRef string) (string, string) {

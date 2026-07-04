@@ -2159,7 +2159,7 @@ func (s *BdStore) listViaBDList(query ListQuery) ([]Bead, error) {
 			args = append(args, "--metadata-field", k+"="+serverQuery.Metadata[k])
 		}
 	}
-	if query.SkipLabels && serverQuery.Label == "" && s.listSkipLabelsEnabled {
+	if query.SkipLabels && serverQuery.Label == "" && serverQuery.LabelPrefix == "" && s.listSkipLabelsEnabled {
 		args = append(args, "--skip-labels")
 	}
 
@@ -2195,6 +2195,11 @@ func bdListRequiresClientLimit(query, serverQuery ListQuery, clientFilteredAssig
 		return true
 	}
 	if len(serverQuery.Metadata) > 0 || !serverQuery.CreatedBefore.IsZero() || !serverQuery.UpdatedBefore.IsZero() {
+		return true
+	}
+	// bd list has no label-prefix flag, so the prefix filter runs client-side
+	// and a server-side limit could cut matching rows.
+	if serverQuery.LabelPrefix != "" {
 		return true
 	}
 	return false
@@ -2242,6 +2247,11 @@ func (s *BdStore) listEphemeral(query ListQuery) ([]Bead, error) {
 	serverQuery, clientFilteredAssignees := bdServerQueryForAssignees(query)
 	clauses := []string{"ephemeral=true"}
 	serverFilteredOnly := !clientFilteredAssignees
+	if serverQuery.LabelPrefix != "" {
+		// bd query has no label-prefix operator; applyListQuery filters the
+		// candidates, so the limit must apply after that client-side pass.
+		serverFilteredOnly = false
+	}
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "label", serverQuery.Label)
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "status", serverQuery.Status)
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "type", serverQuery.Type)
