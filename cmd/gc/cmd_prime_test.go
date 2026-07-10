@@ -724,6 +724,47 @@ func TestDoPrimeManual_MissingCityKeepsDefaultFallback(t *testing.T) {
 	}
 }
 
+func TestDoPrimeStrict_DeterministicControlDispatcherIsSilent(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "test-city"
+
+[[agent]]
+name = "control-dispatcher"
+start_command = "gc convoy control --serve control-dispatcher"
+prompt_mode = "none"
+prompt_template = "prompts/must-not-be-read.md"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GC_CITY", cityDir)
+	var stdout, stderr bytes.Buffer
+	receipt := session.PromptReceipt{Version: "stale", SHA: "stale"}
+	code := doPrimeWithHookFormatAndReceipt(
+		[]string{"control-dispatcher"},
+		&stdout,
+		&stderr,
+		false,
+		"",
+		true,
+		&receipt,
+	)
+	if code != 0 {
+		t.Fatalf("doPrimeWithHookFormatAndReceipt() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no model prompt for deterministic control dispatcher", stdout.String())
+	}
+	if receipt.Version != "" || receipt.SHA != "" {
+		t.Fatalf("receipt = %+v, want empty receipt for deterministic control dispatcher", receipt)
+	}
+}
+
 func TestDoPrimeWithHookFormat_UnboundCityDoesNotInferWorker(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)

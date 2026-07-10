@@ -297,6 +297,12 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 			if isAgentEffectivelySuspended(cfg, &a) {
 				continue
 			}
+			// Deterministic control dispatchers are subprocess workers, not model
+			// sessions. Their prompt_template is intentionally irrelevant, just as
+			// it is on the managed startup path in resolveTemplate.
+			if suppressStartupPromptForAgent(&a) {
+				continue
+			}
 			if a.PromptTemplate == "" {
 				continue
 			}
@@ -322,6 +328,13 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 
 	for _, a := range resolvedAgents {
 		if isAgentEffectivelySuspended(cfg, &a) {
+			return 0
+		}
+		if suppressStartupPromptForAgent(&a) {
+			// Keep `gc prime` aligned with managed startup: this identity runs
+			// `gc convoy control --serve` directly and must never acquire the
+			// graph-worker, pool-worker, or generic model persona.
+			setPrimePromptReceipt(receiptOut, "", "")
 			return 0
 		}
 		if resolved, rErr := config.ResolveProvider(&a, &cfg.Workspace, cfg.Providers, exec.LookPath); rErr == nil && hookMode {
