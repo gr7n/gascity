@@ -324,6 +324,91 @@ func TestStart_ReusedThreadDoesNotInjectStartupTurns(t *testing.T) {
 	}
 }
 
+func TestNudgeDispatchesTurnStartForBoundSession(t *testing.T) {
+	server := newT3BridgeTestServer(t, map[string]interface{}{
+		"projects": []interface{}{
+			map[string]interface{}{
+				"id":            "project-1",
+				"workspaceRoot": "/tmp/director",
+			},
+		},
+		"threads": []interface{}{
+			map[string]interface{}{
+				"id":        "thread-1",
+				"projectId": "project-1",
+				"customMetadata": map[string]interface{}{
+					"gc.agent":           "director",
+					"gc.sessionName":     "director",
+					"gc.startupTemplate": "director",
+					"gc.startupWorkDir":  "/tmp/director",
+					"gc.runtimeProvider": "codex",
+					"gc.startupModel":    "gpt-5.4",
+				},
+				"session": map[string]interface{}{
+					"status": "ready",
+				},
+			},
+		},
+	})
+	defer server.Close()
+
+	t.Setenv("T3_WS_URL", server.wsURL())
+	p := &Provider{
+		watchers:     make(map[string]context.CancelFunc),
+		recentStarts: make(map[string]time.Time),
+	}
+
+	if err := p.Nudge("director", runtime.TextContent("hello")); err != nil {
+		t.Fatalf("Nudge error = %v, want nil", err)
+	}
+	if got := server.commandTypes(); len(got) != 1 || got[0] != "thread.turn.start" {
+		t.Fatalf("commands = %v, want one thread.turn.start", got)
+	}
+}
+
+func TestNudgeMissingThreadBindingFailsClosed(t *testing.T) {
+	server := newT3BridgeTestServer(t, map[string]interface{}{
+		"projects": []interface{}{},
+		"threads":  []interface{}{},
+	})
+	defer server.Close()
+
+	t.Setenv("T3_WS_URL", server.wsURL())
+	p := &Provider{
+		watchers:     make(map[string]context.CancelFunc),
+		recentStarts: make(map[string]time.Time),
+	}
+
+	err := p.Nudge("director", runtime.TextContent("hello"))
+	if !errors.Is(err, runtime.ErrSessionNotFound) {
+		t.Fatalf("Nudge error = %v, want ErrSessionNotFound", err)
+	}
+	if got := server.commandTypes(); len(got) != 0 {
+		t.Fatalf("commands = %v, want none", got)
+	}
+}
+
+func TestNudgeTransientBridgeFailureFailsClosed(t *testing.T) {
+	oldDefaults := defaultWSURLCandidates
+	defaultWSURLCandidates = nil
+	t.Cleanup(func() {
+		defaultWSURLCandidates = oldDefaults
+	})
+
+	t.Setenv("T3_HOME", t.TempDir())
+	t.Setenv("T3_WS_URL", "ws://127.0.0.1:1/ws")
+
+	p := &Provider{
+		watchers:     make(map[string]context.CancelFunc),
+		recentStarts: make(map[string]time.Time),
+	}
+
+	err := p.Nudge("director", runtime.TextContent("hello"))
+	if !errors.Is(err, runtime.ErrSessionInitializing) {
+		t.Fatalf("Nudge error = %v, want ErrSessionInitializing", err)
+	}
+}
+
 func TestBuildThreadEnv_DropsStartupEnvelopeAndDoltliteServerEnv(t *testing.T) {
 	env := buildThreadEnv(map[string]string{
 		"GC_STARTUP_ENVELOPE":      `{"runtime":{"provider":"claudeAgent","model":"claude-sonnet-4-6"}}`,
@@ -888,6 +973,42 @@ func TestRPCSnapshot_FallsBackToWSURLFileWhenEnvStale(t *testing.T) {
 
 	if _, err := p.rpcSnapshot(); err != nil {
 		t.Fatalf("rpcSnapshot fallback: %v", err)
+	}
+}
+
+func TestRPCSnapshotSilentBridgeUsesShortReadDeadline(t *testing.T) {
+	oldDefaults := defaultWSURLCandidates
+	defaultWSURLCandidates = nil
+	t.Cleanup(func() {
+		defaultWSURLCandidates = oldDefaults
+	})
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _, _ = conn.ReadMessage()
+		time.Sleep(bridgeWSTimeout + 2*time.Second)
+	}))
+	defer server.Close()
+
+	t.Setenv("T3_WS_URL", "ws"+strings.TrimPrefix(server.URL, "http"))
+	p := &Provider{
+		watchers:     make(map[string]context.CancelFunc),
+		recentStarts: make(map[string]time.Time),
+	}
+
+	started := time.Now()
+	_, err := p.rpcSnapshot()
+	if err == nil {
+		t.Fatal("rpcSnapshot error = nil, want timeout")
+	}
+	if elapsed := time.Since(started); elapsed > bridgeConnectRetryWindow+bridgeWSTimeout+3*time.Second {
+		t.Fatalf("rpcSnapshot elapsed = %s, want bounded by bridge timeout/retry window", elapsed)
 	}
 }
 

@@ -1,15 +1,20 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
 const (
-	namedSessionMetadataKey      = session.NamedSessionMetadataKey
-	namedSessionIdentityMetadata = session.NamedSessionIdentityMetadata
-	namedSessionModeMetadata     = session.NamedSessionModeMetadata
+	namedSessionMetadataKey           = session.NamedSessionMetadataKey
+	namedSessionIdentityMetadata      = session.NamedSessionIdentityMetadata
+	namedSessionModeMetadata          = session.NamedSessionModeMetadata
+	namedSessionOperatorVisibilityKey = session.NamedSessionOperatorVisibilityMetadata
+	namedSessionOperatorVisibleKey    = session.NamedSessionOperatorVisibleMetadata
+	namedSessionChatVisibleKey        = session.NamedSessionChatVisibleMetadata
 )
 
 type namedSessionSpec = session.NamedSessionSpec
@@ -28,6 +33,17 @@ func findNamedSessionSpec(cfg *config.City, cityName, identity string) (namedSes
 
 func namedSessionBackingTemplate(spec namedSessionSpec) string {
 	return session.NamedSessionBackingTemplate(spec)
+}
+
+func namedSessionOperatorVisibilityForTemplateParams(tp TemplateParams) (string, bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(tp.ConfiguredNamedOperatorVisibility)) {
+	case config.NamedSessionOperatorVisibilityBackground:
+		return config.NamedSessionOperatorVisibilityBackground, false, false
+	case config.NamedSessionOperatorVisibilityInternal:
+		return config.NamedSessionOperatorVisibilityInternal, false, false
+	default:
+		return config.NamedSessionOperatorVisibilityOperator, true, true
+	}
 }
 
 func resolveNamedSessionSpecForConfigTarget(cfg *config.City, cityName, target, rigContext string) (namedSessionSpec, bool, error) {

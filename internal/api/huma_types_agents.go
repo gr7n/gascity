@@ -28,6 +28,7 @@ type AgentListInput struct {
 	Rig     string `query:"rig" required:"false" doc:"Filter by rig name."`
 	Running string `query:"running" required:"false" enum:"true,false" doc:"Filter by running state. Omit to return all agents."`
 	Peek    bool   `query:"peek" required:"false" doc:"Include last output preview."`
+	Lite    bool   `query:"lite" required:"false" doc:"Use cached session read-model state instead of live provider probes for low-cost dashboard polls."`
 }
 
 // AgentGetInput is the Huma input for GET /v0/city/{cityName}/agent/{base}.

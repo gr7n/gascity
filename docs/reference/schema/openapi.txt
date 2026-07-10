@@ -2358,6 +2358,9 @@
             "$ref": "#/components/schemas/RequestFailedPayload"
           },
           {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          {
             "$ref": "#/components/schemas/RotatedPayload"
           },
           {
@@ -6212,6 +6215,11 @@
       "RequestFailedPayload": {
         "additionalProperties": false,
         "properties": {
+          "elapsed_ms": {
+            "description": "Elapsed milliseconds since the async request was accepted, if known.",
+            "format": "int64",
+            "type": "integer"
+          },
           "error_code": {
             "description": "Machine-readable error code.",
             "type": "string"
@@ -6234,6 +6242,17 @@
           "request_id": {
             "description": "Correlation ID from the 202 response.",
             "type": "string"
+          },
+          "stage": {
+            "description": "Async stage active when the failure was emitted, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -6241,6 +6260,110 @@
           "operation",
           "error_code",
           "error_message"
+        ],
+        "type": "object"
+      },
+      "RequestProgressPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "elapsed_ms": {
+            "description": "Elapsed milliseconds since the async request was accepted.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "operation": {
+            "description": "Async operation reporting progress.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Correlation ID from the 202 response.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Resolved session ID once known.",
+            "type": "string"
+          },
+          "session_target": {
+            "description": "Original session target from the request, when applicable.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Current async request stage.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "operation",
+          "stage",
+          "elapsed_ms"
+        ],
+        "type": "object"
+      },
+      "RequestStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelope",
+            "description": "Terminal result event when the request has succeeded or failed."
+          },
+          "operation": {
+            "description": "Async operation once known.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelope",
+            "description": "Latest non-terminal progress event for this request, if one was observed."
+          },
+          "request_id": {
+            "description": "Async request ID.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Latest async request progress stage, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "description": "Current request state derived from terminal async-result events.",
+            "enum": [
+              "pending",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
         ],
         "type": "object"
       },
@@ -6979,6 +7102,9 @@
           "attached": {
             "type": "boolean"
           },
+          "chat_visible": {
+            "type": "boolean"
+          },
           "configured_named_session": {
             "type": "boolean"
           },
@@ -7019,6 +7145,12 @@
           },
           "model": {
             "type": "string"
+          },
+          "operator_visibility": {
+            "type": "string"
+          },
+          "operator_visible": {
+            "type": "boolean"
           },
           "options": {
             "additionalProperties": {
@@ -7728,6 +7860,10 @@
       "StatusNamedSessionDetail": {
         "additionalProperties": false,
         "properties": {
+          "chat_visible": {
+            "description": "Whether this named session should be offered as a direct human chat target.",
+            "type": "boolean"
+          },
           "identity": {
             "description": "Qualified named-session identity.",
             "type": "string"
@@ -7735,6 +7871,14 @@
           "mode": {
             "description": "Named-session mode (on-demand, always, etc.).",
             "type": "string"
+          },
+          "operator_visibility": {
+            "description": "Operator-facing visibility: operator, background, or internal.",
+            "type": "string"
+          },
+          "operator_visible": {
+            "description": "Whether operator UIs should show this named session as an ordinary human-facing lane.",
+            "type": "boolean"
           },
           "status": {
             "description": "Lifecycle status string (materialized, reserved-unmaterialized, etc.).",
@@ -7744,7 +7888,10 @@
         "required": [
           "identity",
           "status",
-          "mode"
+          "mode",
+          "operator_visibility",
+          "operator_visible",
+          "chat_visible"
         ],
         "type": "object"
       },
@@ -8213,6 +8360,59 @@
         ],
         "type": "object"
       },
+      "SupervisorRequestStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelope",
+            "description": "Terminal tagged result event when the request has succeeded or failed."
+          },
+          "operation": {
+            "description": "Async operation once known.",
+            "enum": [
+              "city.create",
+              "city.unregister",
+              "session.create",
+              "session.message",
+              "session.submit"
+            ],
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelope",
+            "description": "Latest non-terminal tagged progress event for this request, if one was observed."
+          },
+          "request_id": {
+            "description": "Async request ID.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Latest async request progress stage, if known.",
+            "enum": [
+              "resolving",
+              "materializing",
+              "delivering",
+              "submitted",
+              "timeout"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "description": "Current request state derived from terminal async-result events.",
+            "enum": [
+              "pending",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "type": "object"
+      },
       "SupervisorShutdownPayload": {
         "additionalProperties": false,
         "properties": {
@@ -8411,6 +8611,7 @@
             "project.identity.stamped": "#/components/schemas/TypedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedEventStreamEnvelopeRequestFailed",
+            "request.progress": "#/components/schemas/TypedEventStreamEnvelopeRequestProgress",
             "request.result.city.create": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityCreate",
             "request.result.city.unregister": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityUnregister",
             "request.result.session.create": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionCreate",
@@ -8580,6 +8781,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestProgress"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestResultCityCreate"
@@ -9558,6 +9762,7 @@
                 "controller.stopped",
                 "city.suspended",
                 "city.resumed",
+                "request.progress",
                 "request.result.city.create",
                 "request.result.city.unregister",
                 "request.result.session.create",
@@ -11143,6 +11348,57 @@
         "title": "TypedEventStreamEnvelope request.failed",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeRequestProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "request.progress",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope request.progress",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeRequestResultCityCreate": {
         "additionalProperties": false,
         "properties": {
@@ -12621,6 +12877,7 @@
             "project.identity.stamped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestFailed",
+            "request.progress": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestProgress",
             "request.result.city.create": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityCreate",
             "request.result.city.unregister": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityUnregister",
             "request.result.session.create": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionCreate",
@@ -12790,6 +13047,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestProgress"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultCityCreate"
@@ -13835,6 +14095,7 @@
                 "controller.stopped",
                 "city.suspended",
                 "city.resumed",
+                "request.progress",
                 "request.result.city.create",
                 "request.result.city.unregister",
                 "request.result.session.create",
@@ -15539,6 +15800,61 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope request.failed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRequestProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RequestProgressPayload"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "request.progress",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope request.progress",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeRequestResultCityCreate": {
@@ -19969,6 +20285,16 @@
             "name": "peek",
             "schema": {
               "description": "Include last output preview.",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+            "explode": false,
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
               "type": "boolean"
             }
           }
@@ -34474,6 +34800,93 @@
         "summary": "Get v0 city by city name readiness"
       }
     },
+    "/v0/city/{cityName}/request/{id}": {
+      "get": {
+        "operationId": "get-v0-city-by-city-name-request-by-id",
+        "parameters": [
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Async request ID returned by a 202 response.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Async request ID returned by a 202 response.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.",
+            "explode": false,
+            "in": "query",
+            "name": "after_seq",
+            "schema": {
+              "description": "Only inspect city events after this sequence. Pass the event_cursor from the 202 response for efficient polling.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestStatus"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "X-GC-Index": {
+                "schema": {
+                  "description": "Latest event sequence number.",
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Get v0 city by city name request by ID"
+      }
+    },
     "/v0/city/{cityName}/rig/{name}": {
       "delete": {
         "operationId": "delete-v0-city-by-city-name-rig-by-name",
@@ -35129,6 +35542,16 @@
             "name": "git",
             "schema": {
               "description": "Include git status.",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+            "explode": false,
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
               "type": "boolean"
             }
           }
@@ -38769,6 +39192,16 @@
               "description": "Include last output preview.",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+            "explode": false,
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "description": "Use cached session read-model state instead of live provider probes for low-cost dashboard polls.",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -40029,6 +40462,66 @@
           }
         },
         "summary": "Get v0 readiness"
+      }
+    },
+    "/v0/request/{id}": {
+      "get": {
+        "operationId": "get-v0-request-by-id",
+        "parameters": [
+          {
+            "description": "Async request ID returned by a 202 response.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Async request ID returned by a 202 response.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.",
+            "explode": false,
+            "in": "query",
+            "name": "after_cursor",
+            "schema": {
+              "description": "Only inspect supervisor/global events after this composite cursor. Pass the event_cursor from the 202 response for efficient polling.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupervisorRequestStatus"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Get v0 request by ID"
       }
     }
   }

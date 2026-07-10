@@ -67,6 +67,15 @@ type sessionResponse struct {
 	// ConfiguredNamedSession marks canonical singleton sessions materialized from
 	// [[named_session]] configuration.
 	ConfiguredNamedSession bool `json:"configured_named_session,omitempty"`
+	// OperatorVisibility is the configured operator-facing visibility for a
+	// named session. Empty on ordinary sessions.
+	OperatorVisibility string `json:"operator_visibility,omitempty"`
+	// OperatorVisible reports whether operator UIs should show this named
+	// session as an ordinary human-facing lane. Nil on ordinary sessions.
+	OperatorVisible *bool `json:"operator_visible,omitempty"`
+	// ChatVisible reports whether this named session should be offered as a
+	// direct human chat target. Nil on ordinary sessions.
+	ChatVisible *bool `json:"chat_visible,omitempty"`
 
 	// Options contains the effective per-session option overrides from
 	// template_overrides bead metadata (e.g., {"permission_mode":"unrestricted"}).
@@ -186,6 +195,7 @@ func sessionResponseWithReason(info session.Info, pr session.PersistedResponse, 
 	}
 	r.Reason = session.LifecycleDisplayReasonWithLiveness(pr.Status, pr.Metadata, time.Now().UTC(), info.SessionName, isRunning)
 	r.ConfiguredNamedSession = strings.TrimSpace(pr.Metadata[apiNamedSessionMetadataKey]) == "true"
+	applyNamedSessionOperatorProjection(&r, pr, cfg)
 	r.SubmissionCapabilities = session.SubmissionCapabilitiesForMetadata(pr.Metadata, hasDeferredQueue)
 	// Expose only real_world_app_* prefixed metadata keys to API consumers.
 	// Internal fields (session_key, command, work_dir, etc.) are redacted.
@@ -202,6 +212,68 @@ func persistedResponseForBead(b *beads.Bead) session.PersistedResponse {
 		return session.PersistedResponse{}
 	}
 	return session.PersistedResponseFromBead(*b)
+}
+
+func applyNamedSessionOperatorProjection(r *sessionResponse, pr session.PersistedResponse, cfg *config.City) {
+	if r == nil || !r.ConfiguredNamedSession {
+		return
+	}
+	visibility := strings.ToLower(strings.TrimSpace(pr.Metadata[apiNamedSessionOperatorVisibilityKey]))
+	operatorVisible, chatVisible := operatorVisibilityBooleans(visibility)
+
+	identity := strings.TrimSpace(pr.Metadata[apiNamedSessionIdentityKey])
+	if cfg != nil && identity != "" {
+		if named := config.FindNamedSession(cfg, identity); named != nil {
+			visibility = named.OperatorVisibilityOrDefault()
+			operatorVisible = named.OperatorVisible()
+			chatVisible = named.ChatVisible()
+		}
+	}
+	visibility = normalizeNamedSessionOperatorVisibility(visibility)
+	if raw := strings.TrimSpace(pr.Metadata[apiNamedSessionOperatorVisibleKey]); raw != "" {
+		operatorVisible = parseBoolMetadata(raw, operatorVisible)
+	}
+	if raw := strings.TrimSpace(pr.Metadata[apiNamedSessionChatVisibleKey]); raw != "" {
+		chatVisible = parseBoolMetadata(raw, chatVisible)
+	}
+	r.OperatorVisibility = visibility
+	r.OperatorVisible = boolPtr(operatorVisible)
+	r.ChatVisible = boolPtr(chatVisible)
+}
+
+func normalizeNamedSessionOperatorVisibility(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case config.NamedSessionOperatorVisibilityBackground:
+		return config.NamedSessionOperatorVisibilityBackground
+	case config.NamedSessionOperatorVisibilityInternal:
+		return config.NamedSessionOperatorVisibilityInternal
+	default:
+		return config.NamedSessionOperatorVisibilityOperator
+	}
+}
+
+func operatorVisibilityBooleans(visibility string) (bool, bool) {
+	switch normalizeNamedSessionOperatorVisibility(visibility) {
+	case config.NamedSessionOperatorVisibilityBackground, config.NamedSessionOperatorVisibilityInternal:
+		return false, false
+	default:
+		return true, true
+	}
+}
+
+func parseBoolMetadata(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 // filterMetadataAllowedKeys lists non-real_world_app_ metadata keys that are safe to expose.
@@ -259,15 +331,23 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	stateFilter := q.Get("state")
 	templateFilter := q.Get("template")
-	wantPeek := q.Get("peek") == "true"
+	lite := sessionLiteQuery(q.Get("lite")) || strings.EqualFold(strings.TrimSpace(q.Get("fresh")), "false")
+	wantPeek := q.Get("peek") == "true" && !lite
 
 	all, partialErrors, err := sessionReadModelRows(store.Store)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	listResult := catalog.ListFullFromBeads(all, stateFilter, templateFilter)
+	var listResult *worker.SessionListResult
+	if lite {
+		listResult = catalog.ListLiteFromBeads(all, stateFilter, templateFilter)
+	} else {
+		listResult = catalog.ListFullFromBeads(all, stateFilter, templateFilter)
+	}
 	sessions := listResult.Sessions
+	pp := parsePagination(r, maxPaginationLimit)
+	pageSessions, total, nextCursor := pageForResponse(sessions, pp)
 
 	// Build bead index for reason enrichment.
 	beadIndex := make(map[string]*beads.Bead)
@@ -275,32 +355,32 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		beadIndex[listResult.Beads[i].ID] = &listResult.Beads[i]
 	}
 
-	items := make([]sessionResponse, len(sessions))
+	items := make([]sessionResponse, len(pageSessions))
 	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
-	for i, sess := range sessions {
-		items[i] = sessionResponseWithReason(sess, persistedResponseForBead(beadIndex[sess.ID]), cfg, s.state.SessionProvider(), hasDeferredQueue)
-		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+	provider := s.state.SessionProvider()
+	if lite {
+		provider = nil
+	}
+	for i, sess := range pageSessions {
+		items[i] = sessionResponseWithReason(sess, persistedResponseForBead(beadIndex[sess.ID]), cfg, provider, hasDeferredQueue)
+		if !lite {
+			s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		} else {
+			items[i].Running = sess.State == session.StateActive && !sess.Closed
+		}
 	}
 
-	pp := parsePagination(r, maxPaginationLimit)
 	if !pp.IsPaging {
-		if pp.Limit < len(items) {
-			items = items[:pp.Limit]
-		}
 		writeJSON(w, http.StatusOK, listResponse{
 			Items:         items,
-			Total:         len(items),
+			Total:         total,
 			Partial:       len(partialErrors) > 0,
 			PartialErrors: partialErrors,
 		})
 		return
 	}
-	page, total, nextCursor := paginate(items, pp)
-	if page == nil {
-		page = []sessionResponse{}
-	}
 	writeJSON(w, http.StatusOK, listResponse{
-		Items:         page,
+		Items:         items,
 		Total:         total,
 		NextCursor:    nextCursor,
 		Partial:       len(partialErrors) > 0,

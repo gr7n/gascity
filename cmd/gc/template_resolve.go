@@ -73,6 +73,15 @@ type TemplateParams struct {
 	ConfiguredNamedIdentity string
 	// ConfiguredNamedMode records the controller mode for canonical named sessions.
 	ConfiguredNamedMode string
+	// ConfiguredNamedOperatorVisibility records how operator-facing UIs should
+	// present this configured named session.
+	ConfiguredNamedOperatorVisibility string
+	// ConfiguredNamedOperatorVisible records whether operator UIs should show
+	// this configured named session as a normal human-facing lane.
+	ConfiguredNamedOperatorVisible bool
+	// ConfiguredNamedChatVisible records whether this configured named session
+	// should be offered as a direct human chat target.
+	ConfiguredNamedChatVisible bool
 	// FPExtra carries additional fingerprint data (pool config, etc.).
 	FPExtra map[string]string
 	// ResolvedProvider is the resolved provider spec (for ACP routing, etc.).

@@ -69,6 +69,88 @@ func TestStart_RoutesToRemote(t *testing.T) {
 	}
 }
 
+func TestStart_RoutesToRemoteFromStartupConfig(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := NewWithStartMatcher(local, remote, isRemote, func(name string, cfg runtime.Config) bool {
+		return strings.Contains(name, "polecat") || cfg.Env["GC_TEMPLATE"] == "k8s-canary"
+	})
+
+	const name = "s-gr-7sgzx"
+	if err := h.Start(context.Background(), name, runtime.Config{
+		Env: map[string]string{"GC_TEMPLATE": "k8s-canary"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if local.IsRunning(name) {
+		t.Error("local should not have session")
+	}
+	if !remote.IsRunning(name) {
+		t.Error("expected remote to have session")
+	}
+
+	if _, err := h.Peek(name, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", name) != 0 {
+		t.Fatal("Peek routed to local for config-routed remote session")
+	}
+	if remote.CountCalls("Peek", name) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", name))
+	}
+}
+
+func TestStop_ForgetsConfigRoutedRemoteName(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := NewWithStartMatcher(local, remote, isRemote, func(_ string, cfg runtime.Config) bool {
+		return cfg.Env["GC_TEMPLATE"] == "k8s-canary"
+	})
+
+	const name = "s-gr-7sgzx"
+	if err := h.Start(context.Background(), name, runtime.Config{
+		Env: map[string]string{"GC_TEMPLATE": "k8s-canary"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Stop(name); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := h.Start(context.Background(), name, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if !local.IsRunning(name) {
+		t.Error("expected local to have reused opaque session name")
+	}
+	if remote.IsRunning(name) {
+		t.Error("remote should not have reused opaque session name")
+	}
+}
+
+func TestRouteRemote_SeedsOpaqueNameForLaterOperations(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := New(local, remote, isRemote)
+	const name = "s-gr-7sgzx"
+	if err := remote.Start(context.Background(), name, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.RouteRemote(name)
+	if _, err := h.Peek(name, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", name) != 0 {
+		t.Fatal("Peek routed to local for durable remote route")
+	}
+	if remote.CountCalls("Peek", name) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", name))
+	}
+	if err := h.Stop(name); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if remote.CountCalls("Stop", name) != 1 {
+		t.Fatalf("remote Stop calls = %d, want 1", remote.CountCalls("Stop", name))
+	}
+}
+
 func TestListRunning_MergesBothBackends(t *testing.T) {
 	local, remote := runtime.NewFake(), runtime.NewFake()
 	h := New(local, remote, isRemote)

@@ -237,6 +237,9 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed},
 	}, (*Server).humaHandleEventRotate)
 
+	// Async request status.
+	cityGet(sm, "/request/{id}", (*Server).humaHandleRequestStatus)
+
 	// Orders.
 	cityGet(sm, "/orders", (*Server).humaHandleOrderList, errorStatuses(http.StatusNotFound))
 	cityGet(sm, "/orders/check", (*Server).humaHandleOrderCheck, errorStatuses(http.StatusNotFound))

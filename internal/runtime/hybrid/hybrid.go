@@ -4,6 +4,7 @@ package hybrid
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -12,9 +13,13 @@ import (
 // Provider routes session operations to a local or remote provider
 // based on a name-matching function.
 type Provider struct {
-	local    runtime.Provider
-	remote   runtime.Provider
-	isRemote func(name string) bool
+	local         runtime.Provider
+	remote        runtime.Provider
+	isRemote      func(name string) bool
+	isRemoteStart func(name string, cfg runtime.Config) bool
+
+	mu         sync.RWMutex
+	remoteName map[string]struct{}
 }
 
 var (
@@ -29,24 +34,104 @@ var (
 // New creates a hybrid provider. isRemote returns true for sessions
 // that should be managed by the remote provider.
 func New(local, remote runtime.Provider, isRemote func(string) bool) *Provider {
-	return &Provider{local: local, remote: remote, isRemote: isRemote}
+	return NewWithStartMatcher(local, remote, isRemote, func(name string, _ runtime.Config) bool {
+		return isRemote != nil && isRemote(name)
+	})
+}
+
+// NewWithStartMatcher creates a hybrid provider that can use startup config
+// as additional routing evidence. The name matcher is still used for operations
+// that do not carry startup config.
+func NewWithStartMatcher(local, remote runtime.Provider, isRemote func(string) bool, isRemoteStart func(string, runtime.Config) bool) *Provider {
+	if isRemote == nil {
+		isRemote = func(string) bool { return false }
+	}
+	if isRemoteStart == nil {
+		isRemoteStart = func(name string, _ runtime.Config) bool { return isRemote(name) }
+	}
+	return &Provider{
+		local:         local,
+		remote:        remote,
+		isRemote:      isRemote,
+		isRemoteStart: isRemoteStart,
+		remoteName:    make(map[string]struct{}),
+	}
 }
 
 func (p *Provider) route(name string) runtime.Provider {
-	if p.isRemote(name) {
+	if p.isKnownRemote(name) || p.isRemote(name) {
 		return p.remote
 	}
 	return p.local
 }
 
+func (p *Provider) routeStart(name string, cfg runtime.Config) (runtime.Provider, bool) {
+	if p.isKnownRemote(name) || p.isRemoteStart(name, cfg) {
+		return p.remote, true
+	}
+	return p.local, false
+}
+
+func (p *Provider) isKnownRemote(name string) bool {
+	if name == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.remoteName[name]
+	return ok
+}
+
+func (p *Provider) rememberRemote(name string) {
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.remoteName[name] = struct{}{}
+}
+
+// RouteRemote marks name as remote-routed using durable evidence gathered
+// outside the runtime provider, such as a session bead snapshot.
+func (p *Provider) RouteRemote(name string) {
+	p.rememberRemote(name)
+}
+
+func (p *Provider) forgetRemote(name string) {
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.remoteName, name)
+}
+
+// UnrouteRemote removes a durable remote route for name.
+func (p *Provider) UnrouteRemote(name string) {
+	p.forgetRemote(name)
+}
+
 // Start delegates to the routed backend.
 func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) error {
-	return p.route(name).Start(ctx, name, cfg)
+	backend, remote := p.routeStart(name, cfg)
+	if err := backend.Start(ctx, name, cfg); err != nil {
+		return err
+	}
+	if remote {
+		p.rememberRemote(name)
+	} else {
+		p.forgetRemote(name)
+	}
+	return nil
 }
 
 // Stop delegates to the routed backend.
 func (p *Provider) Stop(name string) error {
-	return p.route(name).Stop(name)
+	if err := p.route(name).Stop(name); err != nil {
+		return err
+	}
+	p.forgetRemote(name)
+	return nil
 }
 
 // Interrupt delegates to the routed backend.
@@ -87,6 +172,16 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 // Nudge delegates to the routed backend.
 func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	return p.route(name).Nudge(name, content)
+}
+
+// NudgeWithContext delegates to routed backends that can honor caller
+// cancellation during their default nudge path.
+func (p *Provider) NudgeWithContext(ctx context.Context, name string, content []runtime.ContentBlock) error {
+	routed := p.route(name)
+	if np, ok := routed.(runtime.ContextNudgeProvider); ok {
+		return np.NudgeWithContext(ctx, name, content)
+	}
+	return routed.Nudge(name, content)
 }
 
 // WaitForIdle delegates to the routed backend when it supports explicit

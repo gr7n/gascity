@@ -15,15 +15,27 @@ const (
 	NamedSessionIdentityMetadata = "configured_named_identity"
 	// NamedSessionModeMetadata records the configured named session mode on a bead.
 	NamedSessionModeMetadata = "configured_named_mode"
+	// NamedSessionOperatorVisibilityMetadata records the configured
+	// operator-facing visibility for this named session.
+	NamedSessionOperatorVisibilityMetadata = "configured_named_operator_visibility"
+	// NamedSessionOperatorVisibleMetadata records whether operator UIs should
+	// present this named session as a normal human-facing lane.
+	NamedSessionOperatorVisibleMetadata = "configured_named_operator_visible"
+	// NamedSessionChatVisibleMetadata records whether this named session should
+	// be offered as a direct human chat target.
+	NamedSessionChatVisibleMetadata = "configured_named_chat_visible"
 )
 
 // NamedSessionSpec is the resolved runtime view of a configured named session.
 type NamedSessionSpec struct {
-	Named       *config.NamedSession
-	Agent       *config.Agent
-	Identity    string
-	SessionName string
-	Mode        string
+	Named              *config.NamedSession
+	Agent              *config.Agent
+	Identity           string
+	SessionName        string
+	Mode               string
+	OperatorVisibility string
+	OperatorVisible    bool
+	ChatVisible        bool
 }
 
 // NormalizeNamedSessionTarget trims whitespace and trailing separators from a named session target.
@@ -57,11 +69,14 @@ func FindNamedSessionSpec(cfg *config.City, cityName, identity string) (NamedSes
 		return NamedSessionSpec{}, false
 	}
 	return NamedSessionSpec{
-		Named:       named,
-		Agent:       agentCfg,
-		Identity:    identity,
-		SessionName: config.NamedSessionRuntimeName(cityName, cfg.Workspace, identity),
-		Mode:        named.ModeOrDefault(),
+		Named:              named,
+		Agent:              agentCfg,
+		Identity:           identity,
+		SessionName:        config.NamedSessionRuntimeName(cityName, cfg.Workspace, identity),
+		Mode:               named.ModeOrDefault(),
+		OperatorVisibility: named.OperatorVisibilityOrDefault(),
+		OperatorVisible:    named.OperatorVisible(),
+		ChatVisible:        named.ChatVisible(),
 	}, true
 }
 

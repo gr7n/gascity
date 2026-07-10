@@ -45,3 +45,20 @@ func (s *Server) resolveAgentCreateContext(template, alias string) (agentCreateC
 		WorkDir:      workDir,
 	}, nil
 }
+
+func alwaysNamedSessionCreateConflict(cfg *config.City, target string) (string, bool) {
+	named := config.FindNamedSession(cfg, strings.TrimSpace(target))
+	if named == nil || named.ModeOrDefault() != "always" {
+		return "", false
+	}
+	identity := named.QualifiedName()
+	if identity == "" {
+		identity = strings.TrimSpace(target)
+	}
+	return fmt.Sprintf(
+		"agent %q is an always-on named session; use POST /v0/session/%s/messages or /v0/session/%s/submit instead of POST /v0/sessions",
+		strings.TrimSpace(target),
+		identity,
+		identity,
+	), true
+}

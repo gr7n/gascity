@@ -173,6 +173,78 @@ func (m *Multiplexer) ListAll(filter Filter) ([]TaggedEvent, error) {
 	return all, nil
 }
 
+// ListAfterCursor returns events from all cities after their per-city cursor
+// positions. Cities absent from cursors are listed from the beginning.
+func (m *Multiplexer) ListAfterCursor(cursors map[string]uint64, filter Filter) ([]TaggedEvent, error) {
+	providers := m.snapshot()
+	var all []TaggedEvent
+	timeout := m.providerOperationTimeout()
+	results, timedOut := collectProviderCallResults(providers, timeout, func(city string, p Provider) ([]Event, error) {
+		providerFilter := filter
+		providerFilter.Limit = 0
+		providerFilter.AfterSeq = cursors[city]
+		return p.List(providerFilter)
+	})
+	for _, city := range timedOut {
+		log.Printf("events: list after cursor timed out for city %q after %s", city, timeout)
+	}
+	for _, result := range results {
+		if result.err != nil {
+			continue // best-effort: skip cities with errors
+		}
+		for _, e := range result.value {
+			all = append(all, TaggedEvent{Event: e, City: result.city})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return taggedEventLess(all[i], all[j])
+	})
+	if filter.Limit > 0 && len(all) > filter.Limit {
+		all = all[:filter.Limit]
+	}
+	return all, nil
+}
+
+// ListRequestEventsAfterCursor returns request-correlated events from all
+// cities after their per-city cursor positions. Providers with a request index
+// can use it; other providers fall back to normal filtered listing.
+func (m *Multiplexer) ListRequestEventsAfterCursor(requestID string, cursors map[string]uint64, filter Filter) ([]TaggedEvent, error) {
+	providers := m.snapshot()
+	var all []TaggedEvent
+	timeout := m.providerOperationTimeout()
+	results, timedOut := collectProviderCallResults(providers, timeout, func(city string, p Provider) ([]Event, error) {
+		afterSeq := cursors[city]
+		if requestLookup, ok := p.(RequestEventProvider); ok {
+			evts, err := requestLookup.ListRequestEvents(requestID, afterSeq)
+			if err == nil {
+				return evts, nil
+			}
+		}
+		providerFilter := filter
+		providerFilter.Limit = 0
+		providerFilter.AfterSeq = afterSeq
+		return p.List(providerFilter)
+	})
+	for _, city := range timedOut {
+		log.Printf("events: list request events after cursor timed out for city %q after %s", city, timeout)
+	}
+	for _, result := range results {
+		if result.err != nil {
+			continue // best-effort: skip cities with errors
+		}
+		for _, e := range result.value {
+			all = append(all, TaggedEvent{Event: e, City: result.city})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return taggedEventLess(all[i], all[j])
+	})
+	if filter.Limit > 0 && len(all) > filter.Limit {
+		all = all[:filter.Limit]
+	}
+	return all, nil
+}
+
 // ListTail returns the trailing matching events across all cities. It asks
 // tail-capable providers for only their local tail, then trims the merged
 // result to the requested global limit.

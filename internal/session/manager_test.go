@@ -26,6 +26,21 @@ type noImmediateProvider struct {
 	runtime.Provider
 }
 
+type blockingContextNudgeProvider struct {
+	*runtime.Fake
+	entered chan struct{}
+}
+
+func (p *blockingContextNudgeProvider) NudgeWithContext(ctx context.Context, _ string, _ []runtime.ContentBlock) error {
+	select {
+	case <-p.entered:
+	default:
+		close(p.entered)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 type providerWithoutProcessScanner struct {
 	runtime.Provider
 }
@@ -3321,6 +3336,44 @@ func TestSendImmediateFallsBackToDefaultNudge(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("calls = %#v, want fallback Nudge hello", fake.Calls)
+	}
+}
+
+func TestSendDefaultNudgeHonorsContextCancellation(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := &blockingContextNudgeProvider{
+		Fake:    runtime.NewFake(),
+		entered: make(chan struct{}),
+	}
+	mgr := NewManagerWithOptions(store, sp)
+
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		Template:  "helper",
+		Command:   "claude",
+		WorkDir:   "/tmp",
+		Provider:  "claude",
+		Resume:    ProviderResume{},
+		Hints:     runtime.Config{},
+		ExtraMeta: map[string]string{"session_origin": "manual"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = mgr.Send(ctx, info.ID, "hello", "claude --resume "+info.SessionKey, runtime.Config{WorkDir: "/tmp"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Send err = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Send elapsed %s, want context-bounded nudge", elapsed)
+	}
+	select {
+	case <-sp.entered:
+	default:
+		t.Fatal("NudgeWithContext was not used")
 	}
 }
 

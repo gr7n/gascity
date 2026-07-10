@@ -517,15 +517,26 @@ func (p *Provider) DismissKnownDialogs(ctx context.Context, name string, timeout
 // multi-pane resolution, retry with backoff, and SIGWINCH wake.
 // Best-effort: returns nil if the session doesn't exist.
 func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
+	return p.NudgeWithContext(context.Background(), name, content)
+}
+
+// NudgeWithContext sends a message through the default tmux nudge path while
+// honoring caller cancellation during the optional idle wait.
+func (p *Provider) NudgeWithContext(ctx context.Context, name string, content []runtime.ContentBlock) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Wait for the agent to be idle before sending, unless disabled.
 	// This prevents interrupting active tool calls — the prompt is visible
 	// in scrollback during inter-tool-call gaps, so immediate send-keys
 	// would inject text mid-execution. See upstream dfd945e9/6bc898ce.
 	if idleTimeout := p.tm.cfg.NudgeIdleTimeout; idleTimeout > 0 {
-		// Best-effort wait — if it fails (session gone, timeout), proceed
-		// with the nudge anyway. The message may arrive during active work,
-		// but Claude's cooperative queue will handle it at the next turn.
-		if err := p.tm.WaitForIdle(context.Background(), name, idleTimeout); err != nil {
+		// A normal idle timeout stays best-effort, but caller cancellation is
+		// authoritative and must bound API delivery waits.
+		if err := p.tm.WaitForIdle(ctx, name, idleTimeout); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			// Not idle within the window. A mid-session Codex/GPT model-switch
 			// modal ("approaching rate limits — switch model?") blocks input and
 			// would otherwise hang the session; dismiss it (keep current model,
@@ -533,6 +544,9 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 			// so this never disturbs a genuinely busy pane.
 			p.tm.DismissModelSwitchModalIfPresent(name)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return p.NudgeNow(name, content)
 }

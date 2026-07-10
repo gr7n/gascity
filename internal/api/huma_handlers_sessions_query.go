@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/api/apierr"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -32,24 +33,14 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 	if err != nil {
 		return nil, apierr.Internal.Msg(err.Error())
 	}
-	listResult := mgr.ListFullFromBeads(all, input.State, input.Template)
+	var listResult *session.ListResult
+	if input.Lite {
+		listResult = mgr.ListLiteFromBeads(all, input.State, input.Template)
+	} else {
+		listResult = mgr.ListFullFromBeads(all, input.State, input.Template)
+	}
 	sessions := listResult.Sessions
 
-	// Build bead index for reason enrichment.
-	beadIndex := make(map[string]*beads.Bead)
-	for i := range listResult.Beads {
-		beadIndex[listResult.Beads[i].ID] = &listResult.Beads[i]
-	}
-
-	wantPeek := input.Peek
-	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
-	items := make([]sessionResponse, len(sessions))
-	for i, sess := range sessions {
-		items[i] = sessionResponseWithReason(sess, persistedResponseForBead(beadIndex[sess.ID]), cfg, s.state.SessionProvider(), hasDeferredQueue)
-		s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
-	}
-
-	// Pagination support.
 	limit := maxPaginationLimit
 	if input.Limit > 0 {
 		limit = input.Limit
@@ -57,20 +48,36 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 			limit = maxPaginationLimit
 		}
 	}
-
 	pp := pageParams{
 		Offset:   decodeCursor(input.Cursor),
 		Limit:    limit,
 		IsPaging: input.cursorPresent,
 	}
+	pageSessions, total, nextCursor := pageForResponse(sessions, pp)
+
+	// Build bead index for reason enrichment.
+	beadIndex := make(map[string]*beads.Bead)
+	for i := range listResult.Beads {
+		beadIndex[listResult.Beads[i].ID] = &listResult.Beads[i]
+	}
+
+	wantPeek := input.Peek && !input.Lite
+	hasDeferredQueue := strings.TrimSpace(s.state.CityPath()) != ""
+	provider := s.state.SessionProvider()
+	if input.Lite {
+		provider = nil
+	}
+	items := make([]sessionResponse, len(pageSessions))
+	for i, sess := range pageSessions {
+		items[i] = sessionResponseWithReason(sess, persistedResponseForBead(beadIndex[sess.ID]), cfg, provider, hasDeferredQueue)
+		if !input.Lite {
+			s.enrichSessionResponse(&items[i], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0)
+		} else {
+			items[i].Running = sess.State == session.StateActive && !sess.Closed
+		}
+	}
 
 	if !pp.IsPaging {
-		// No pagination cursor — capture the full match count BEFORE truncating
-		// so clients can tell how many items exist vs. how many fit the page.
-		total := len(items)
-		if pp.Limit < len(items) {
-			items = items[:pp.Limit]
-		}
 		return &ListOutput[sessionResponse]{
 			Index:     s.latestIndex(),
 			CacheAgeS: cacheAgeSeconds(store.Store),
@@ -83,15 +90,11 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 		}, nil
 	}
 
-	page, total, nextCursor := paginate(items, pp)
-	if page == nil {
-		page = []sessionResponse{}
-	}
 	return &ListOutput[sessionResponse]{
 		Index:     s.latestIndex(),
 		CacheAgeS: cacheAgeSeconds(store.Store),
 		Body: ListBody[sessionResponse]{
-			Items:         page,
+			Items:         items,
 			Total:         total,
 			NextCursor:    nextCursor,
 			Partial:       len(partialErrors) > 0,
@@ -435,6 +438,16 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 		return nil, humaResolveError(err)
 	}
 
+	index := s.latestIndex()
+	bucket := responseCacheTimeBucket(time.Now())
+	cacheKey := "session-agents?city=" + input.CityName + "&path:id=" + id
+	if body, ok := cachedResponseAs[sessionAgentListResponse](s, cacheKey, bucket); ok {
+		return &IndexOutput[sessionAgentListResponse]{
+			Index: index,
+			Body:  body,
+		}, nil
+	}
+
 	mgr := s.sessionManager(store.Store)
 	logPath, err := mgr.TranscriptPath(id, s.sessionLogPaths())
 	if err != nil {
@@ -442,7 +455,7 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 	}
 	if logPath == "" {
 		return &IndexOutput[sessionAgentListResponse]{
-			Index: s.latestIndex(),
+			Index: index,
 			Body:  sessionAgentListResponse{Agents: []sessionlog.AgentMapping{}},
 		}, nil
 	}
@@ -455,9 +468,11 @@ func (s *Server) humaHandleSessionAgentList(_ context.Context, input *SessionIDI
 	if mappings == nil {
 		mappings = []sessionlog.AgentMapping{}
 	}
+	body := sessionAgentListResponse{Agents: mappings}
+	s.storeResponse(cacheKey, bucket, body)
 	return &IndexOutput[sessionAgentListResponse]{
-		Index: s.latestIndex(),
-		Body:  sessionAgentListResponse{Agents: mappings},
+		Index: index,
+		Body:  body,
 	}, nil
 }
 

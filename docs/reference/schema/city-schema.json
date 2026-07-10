@@ -1893,7 +1893,12 @@
         },
         "operator_visibility": {
           "type": "string",
-          "description": "OperatorVisibility is optional operator-facing metadata for grouping\nnamed sessions in dashboards. Core scheduling treats it as advisory."
+          "enum": [
+            "operator",
+            "background",
+            "internal"
+          ],
+          "description": "OperatorVisibility controls whether operator-facing UIs should present\nthis named session as a direct conversation target. Empty defaults to\n\"operator\"; \"background\" and \"internal\" remain runtime lanes but should\nnot appear as primary human chat targets."
         }
       },
       "additionalProperties": false,

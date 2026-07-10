@@ -52,6 +52,13 @@ func TestRequestIDFromPayloadCoversAsyncPayloads(t *testing.T) {
 			want: "req-session-submit",
 		},
 		{
+			name: "request progress",
+			payload: RequestProgressPayload{
+				RequestID: "req-progress",
+			},
+			want: "req-progress",
+		},
+		{
 			name: "request failed",
 			payload: RequestFailedPayload{
 				RequestID: "req-failed",
@@ -135,6 +142,32 @@ func TestEmitRequestFailedRecordsTypedPayload(t *testing.T) {
 	if payload.RequestID != "req-1" || payload.Operation != RequestOperationCityCreate ||
 		payload.ErrorCode != "bad_dir" || payload.ErrorMessage != "directory is invalid" {
 		t.Fatalf("payload = %#v, want city.create failure for req-1", payload)
+	}
+}
+
+func TestEmitRequestProgressRecordsTypedPayload(t *testing.T) {
+	rec := events.NewFake()
+
+	EmitRequestProgress(rec, "req-1", RequestOperationSessionSubmit, RequestStageDelivering, "director", "director", "s-gc-1", 42)
+
+	if len(rec.Events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(rec.Events))
+	}
+	ev := rec.Events[0]
+	if ev.Type != events.RequestProgress {
+		t.Fatalf("event type = %q, want %q", ev.Type, events.RequestProgress)
+	}
+	if ev.Subject != "director" || ev.Actor != "api" {
+		t.Fatalf("event = %#v, want api/director request.progress", ev)
+	}
+	var payload RequestProgressPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.RequestID != "req-1" || payload.Operation != RequestOperationSessionSubmit ||
+		payload.Stage != RequestStageDelivering || payload.SessionTarget != "director" ||
+		payload.SessionID != "s-gc-1" || payload.ElapsedMs != 42 {
+		t.Fatalf("payload = %#v, want session.submit delivering progress", payload)
 	}
 }
 

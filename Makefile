@@ -315,11 +315,15 @@ TEST_ENV = env -i \
 ## cache input hashes over local working files.
 ## Wrapped in $(TEST_ENV) — see comment above for why.
 test: test-fsys-darwin-compile
-	$(TEST_ENV) GC_FAST_UNIT=1 scripts/go-test-observable test -- -p=4 -count=1 -timeout 15m ./...
+	$(TEST_ENV) GC_FAST_UNIT=1 scripts/go-test-observable test -- -p=4 -count=1 -timeout 15m $(UNIT_FAST_PKGS)
 
-# MAC_UNIT_PKGS excludes cmd/gc from the Mac unit sweep; cmd/gc runs
-# sharded via the mac-cmd-gc-process CI matrix job instead.
-MAC_UNIT_PKGS = $(shell go list ./... | grep -v '/cmd/gc$$')
+# UNIT_FAST_PKGS excludes packages whose tests intentionally exercise heavy
+# process/script behavior outside the fast unit loop.
+UNIT_FAST_PKGS = $(shell go list ./... | grep -v -e '/cmd/gc$$' -e '/examples/bd/dolt$$')
+
+# MAC_UNIT_PKGS mirrors the fast non-cmd/gc package sweep; cmd/gc runs sharded
+# via the mac-cmd-gc-process CI matrix job instead.
+MAC_UNIT_PKGS = $(UNIT_FAST_PKGS)
 
 ## test-mac: Mac unit sweep with cmd/gc excluded; cmd/gc covered by the Mac sharded job.
 test-mac: test-fsys-darwin-compile
@@ -567,7 +571,8 @@ check-docs:
 #   session/tmux: integration-test-only, not meaningful for unit coverage
 #   beadstest: conformance helper, runs under internal/beads coverage
 # cmd/gc excluded: it runs sharded below in test-cover to stay under per-package timeout
-UNIT_COVER_PKGS_NONCMDGC = $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v -e /session/tmux -e /beadstest -e '/cmd/gc$$')
+# examples/bd/dolt excluded: maintenance-script coverage is a heavier explicit package run
+UNIT_COVER_PKGS_NONCMDGC = $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v -e /session/tmux -e /beadstest -e '/cmd/gc$$' -e '/examples/bd/dolt$$')
 
 ## test-cover: run fast unit-test coverage without the integration-tagged package sweep.
 ## cmd/gc is sharded CMD_GC_COVER_TOTAL (default 6) ways via test-go-test-shard so each

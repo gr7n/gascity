@@ -2081,6 +2081,82 @@ func TestHandleSessionListPeek(t *testing.T) {
 	}
 }
 
+func TestHandleSessionListPaginatesBeforePeekEnrichment(t *testing.T) {
+	fs := newSessionFakeState(t)
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	first := createTestSession(t, fs.cityBeadStore, fs.sp, "First Peek Session")
+	second := createTestSession(t, fs.cityBeadStore, fs.sp, "Second Peek Session")
+	third := createTestSession(t, fs.cityBeadStore, fs.sp, "Third Peek Session")
+	fs.sp.SetPeekOutput(first.SessionName, "first output")
+	fs.sp.SetPeekOutput(second.SessionName, "second output")
+	fs.sp.SetPeekOutput(third.SessionName, "third output")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", cityURL(fs, "/sessions?limit=1&peek=true"), nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Items []sessionResponse `json:"items"`
+		Total int               `json:"total"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].LastOutput == "" {
+		t.Fatal("last_output = empty, want returned page to be enriched")
+	}
+	if resp.Total != 3 {
+		t.Fatalf("total = %d, want 3", resp.Total)
+	}
+
+	peekCalls := 0
+	for _, call := range fs.sp.SnapshotCalls() {
+		if call.Method == "Peek" {
+			peekCalls++
+		}
+	}
+	if peekCalls != 1 {
+		t.Fatalf("Peek calls = %d, want 1 for returned page only", peekCalls)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("GET", cityURL(fs, "/sessions?cursor=")+encodeCursor(1)+"&limit=1&peek=true", nil)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cursor status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode cursor response: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("cursor items = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].LastOutput == "" {
+		t.Fatal("cursor last_output = empty, want returned page to be enriched")
+	}
+	if resp.Total != 3 {
+		t.Fatalf("cursor total = %d, want 3", resp.Total)
+	}
+
+	peekCalls = 0
+	for _, call := range fs.sp.SnapshotCalls() {
+		if call.Method == "Peek" {
+			peekCalls++
+		}
+	}
+	if peekCalls != 2 {
+		t.Fatalf("Peek calls after cursor page = %d, want 2 total for two returned pages", peekCalls)
+	}
+}
+
 func TestHandleSessionCreate(t *testing.T) {
 	fs := newSessionFakeState(t)
 	srv := New(fs)
@@ -2604,6 +2680,75 @@ func TestHandleSessionCreateAsyncAcceptsInlineMessage(t *testing.T) {
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+}
+
+func TestHandleSessionCreateRejectsAlwaysNamedSessionTarget(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = []config.Agent{{
+		Name:              "director",
+		Provider:          "test-agent",
+		MaxActiveSessions: intPtr(1),
+	}}
+	fs.cfg.NamedSessions = []config.NamedSession{{
+		Template: "director",
+		Mode:     "always",
+	}}
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	req := newPostRequest(cityURL(fs, "/sessions"), strings.NewReader(`{"kind":"agent","name":"director","async":true,"message":"hi"}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "named_session_target") || !strings.Contains(w.Body.String(), "/v0/session/director/messages") {
+		t.Fatalf("body = %q, want named-session guidance", w.Body.String())
+	}
+	items, err := fs.cityBeadStore.ListByLabel(session.LabelSession, 0)
+	if err != nil {
+		t.Fatalf("ListByLabel: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("session bead count = %d, want 0", len(items))
+	}
+}
+
+func TestHumaHandleSessionCreateRejectsAlwaysNamedSessionTarget(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = []config.Agent{{
+		Name:              "director",
+		Provider:          "test-agent",
+		MaxActiveSessions: intPtr(1),
+	}}
+	fs.cfg.NamedSessions = []config.NamedSession{{
+		Template: "director",
+		Mode:     "always",
+	}}
+	srv := New(fs)
+
+	_, err := srv.humaHandleSessionCreate(context.Background(), &SessionCreateInput{
+		Body: sessionCreateBody{
+			Kind:    "agent",
+			Name:    "director",
+			Async:   true,
+			Message: "hi",
+		},
+	})
+	if err == nil {
+		t.Fatal("humaHandleSessionCreate() error = nil, want named-session conflict")
+	}
+	if !strings.Contains(err.Error(), "named_session_target") || !strings.Contains(err.Error(), "/v0/session/director/messages") {
+		t.Fatalf("humaHandleSessionCreate() error = %v, want named-session guidance", err)
+	}
+	items, listErr := fs.cityBeadStore.ListByLabel(session.LabelSession, 0)
+	if listErr != nil {
+		t.Fatalf("ListByLabel: %v", listErr)
+	}
+	if len(items) != 0 {
+		t.Fatalf("session bead count = %d, want 0", len(items))
 	}
 }
 
@@ -4605,6 +4750,25 @@ func TestHandleSessionMessageQueuesSuspendedSessionMessage(t *testing.T) {
 	}
 }
 
+func TestHandleSessionMessageRejectsWhenEventsUnavailable(t *testing.T) {
+	fs := newSessionFakeState(t)
+	h := newTestCityHandler(t, fs)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Message Me")
+	fs.eventProv = nil
+
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/messages", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("message status = %d, want %d; body: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no_event_provider") {
+		t.Fatalf("body = %s, want no_event_provider detail", rec.Body.String())
+	}
+}
+
 func TestHandleSessionMessageMaterializesNamedSessionAsync(t *testing.T) {
 	fs := newSessionFakeState(t)
 	srv := New(fs)
@@ -4652,6 +4816,11 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	t.Cleanup(func() {
 		sessionMessageAsyncTimeout = prevTimeout
 	})
+	prevClientTimeout := sessionMessageTimeout
+	sessionMessageTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		sessionMessageTimeout = prevClientTimeout
+	})
 
 	srv := New(&stateWithSessionProvider{fakeState: fs, provider: blocker})
 	h := newTestCityHandlerWith(t, fs, srv)
@@ -4671,7 +4840,11 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	case <-time.After(testEventTimeout):
 		t.Fatal("provider nudge was not reached")
 	}
+	startedWaiting := time.Now()
 	success, failure := waitForSessionMessageResult(t, fs.eventProv, accepted.RequestID)
+	if elapsed := time.Since(startedWaiting); elapsed >= time.Second {
+		t.Fatalf("bounded message failure took %s, want under 1s with async timeout %s and client timeout %s", elapsed, sessionMessageAsyncTimeout, sessionMessageTimeout)
+	}
 	if success != nil {
 		t.Fatalf("unexpected success: %+v", success)
 	}
@@ -4683,9 +4856,18 @@ func TestHandleSessionMessageEmitsFailureWhenProviderNudgeHangs(t *testing.T) {
 	}
 }
 
-func TestSessionMessageAsyncTimeoutMatchesClientTimeout(t *testing.T) {
-	if sessionMessageAsyncTimeout != sessionMessageTimeout {
-		t.Fatalf("sessionMessageAsyncTimeout = %s, want client timeout %s", sessionMessageAsyncTimeout, sessionMessageTimeout)
+func TestSessionMessageAsyncTimeoutIsOperatorBounded(t *testing.T) {
+	if sessionMessageAsyncTimeout != sessionSubmitAsyncTimeout {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want submit timeout %s", sessionMessageAsyncTimeout, sessionSubmitAsyncTimeout)
+	}
+	if sessionMessageTimeout != defaultSessionMessageTimeout {
+		t.Fatalf("sessionMessageTimeout = %s, want default %s", sessionMessageTimeout, defaultSessionMessageTimeout)
+	}
+	if sessionMessageAsyncTimeout >= sessionMessageTimeout {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want shorter than client timeout %s", sessionMessageAsyncTimeout, sessionMessageTimeout)
+	}
+	if sessionMessageAsyncTimeout <= 0 || sessionMessageAsyncTimeout > 30*time.Second {
+		t.Fatalf("sessionMessageAsyncTimeout = %s, want <= 30s", sessionMessageAsyncTimeout)
 	}
 }
 
@@ -4814,8 +4996,9 @@ func TestResolveSessionIDMaterializingNamedWithContext_RollsBackCanceledCreate(t
 	}
 }
 
-func TestHandleSessionGetIncludesConfiguredNamedSessionFlag(t *testing.T) {
+func TestHandleSessionGetIncludesConfiguredNamedSessionOperatorVisibility(t *testing.T) {
 	fs := newSessionFakeState(t)
+	fs.cfg.NamedSessions[0].OperatorVisibility = config.NamedSessionOperatorVisibilityBackground
 	srv := New(fs)
 	h := newTestCityHandlerWith(t, fs, srv)
 	_ = h
@@ -4846,6 +5029,34 @@ func TestHandleSessionGetIncludesConfiguredNamedSessionFlag(t *testing.T) {
 	}
 	if !resp.ConfiguredNamedSession {
 		t.Fatal("ConfiguredNamedSession = false, want true")
+	}
+	if resp.OperatorVisibility != config.NamedSessionOperatorVisibilityBackground {
+		t.Fatalf("OperatorVisibility = %q, want background", resp.OperatorVisibility)
+	}
+	if resp.OperatorVisible == nil {
+		t.Fatal("OperatorVisible = nil, want false pointer")
+	}
+	if *resp.OperatorVisible {
+		t.Fatal("OperatorVisible = true, want false")
+	}
+	if resp.ChatVisible == nil {
+		t.Fatal("ChatVisible = nil, want false pointer")
+	}
+	if *resp.ChatVisible {
+		t.Fatal("ChatVisible = true, want false")
+	}
+	b, err := fs.cityBeadStore.Get(id)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", id, err)
+	}
+	if got := b.Metadata[apiNamedSessionOperatorVisibilityKey]; got != config.NamedSessionOperatorVisibilityBackground {
+		t.Fatalf("metadata operator_visibility = %q, want background", got)
+	}
+	if got := b.Metadata[apiNamedSessionOperatorVisibleKey]; got != "false" {
+		t.Fatalf("metadata operator_visible = %q, want false", got)
+	}
+	if got := b.Metadata[apiNamedSessionChatVisibleKey]; got != "false" {
+		t.Fatalf("metadata chat_visible = %q, want false", got)
 	}
 }
 

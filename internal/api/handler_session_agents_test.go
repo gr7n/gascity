@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/sessionlog"
@@ -41,9 +43,21 @@ func writeSessionAgentTranscriptFixture(t *testing.T, searchBase, workDir string
 		t.Fatalf("write parent transcript: %v", err)
 	}
 
-	agentPath := filepath.Join(subagentsDir, "agent-helper.jsonl")
+	writeSessionAgentTranscriptFile(t, searchBase, workDir, info, "helper", "toolu_123")
+}
+
+func writeSessionAgentTranscriptFile(t *testing.T, searchBase, workDir string, info session.Info, agentID, parentToolUseID string) {
+	t.Helper()
+
+	slugDir := filepath.Join(searchBase, sessionlog.ProjectSlug(workDir))
+	subagentsDir := filepath.Join(slugDir, info.SessionKey, "subagents")
+	if err := os.MkdirAll(subagentsDir, 0o755); err != nil {
+		t.Fatalf("mkdir subagents: %v", err)
+	}
+
+	agentPath := filepath.Join(subagentsDir, "agent-"+agentID+".jsonl")
 	agentContent := strings.Join([]string{
-		`{"uuid":"a1","type":"system","parentToolUseId":"toolu_123"}`,
+		`{"uuid":"a1","type":"system","parentToolUseId":"` + parentToolUseID + `"}`,
 		`{"uuid":"a2","parentUuid":"a1","type":"assistant","message":{"role":"assistant","content":"working"}}`,
 		`{"uuid":"a3","parentUuid":"a2","type":"result","message":{"role":"result"}}`,
 	}, "\n") + "\n"
@@ -96,6 +110,62 @@ func TestHandleSessionAgentList(t *testing.T) {
 	if resp.Agents[0].ParentToolUseID != "toolu_123" {
 		t.Fatalf("Agents[0].ParentToolUseID = %q, want toolu_123", resp.Agents[0].ParentToolUseID)
 	}
+}
+
+func TestHumaHandleSessionAgentListCachesAcrossIndexChanges(t *testing.T) {
+	oldTTL := timeBucketResponseCacheTTL
+	timeBucketResponseCacheTTL = time.Hour
+	t.Cleanup(func() { timeBucketResponseCacheTTL = oldTTL })
+
+	fs := newSessionFakeState(t)
+	srv := New(fs)
+
+	searchBase := t.TempDir()
+	srv.sessionLogSearchPaths = []string{searchBase}
+
+	workDir := filepath.Join(t.TempDir(), "claude-project")
+	info := createTranscriptBackedSession(t, fs.cityBeadStore, fs.sp, workDir)
+	writeSessionAgentTranscriptFixture(t, searchBase, workDir, info)
+
+	h := newTestCityHandlerWith(t, fs, srv)
+	req := httptest.NewRequest(http.MethodGet, cityURL(fs, "/session/"+info.ID+"/agents"), nil)
+
+	first := readSessionAgentListResponse(t, h, req)
+	if len(first.Agents) != 1 {
+		t.Fatalf("len(first.Agents) = %d, want 1", len(first.Agents))
+	}
+
+	writeSessionAgentTranscriptFile(t, searchBase, workDir, info, "later", "toolu_456")
+	fs.eventProv.Record(events.Event{Type: events.SessionWoke, Actor: "gc"})
+
+	second := readSessionAgentListResponse(t, h, req)
+	if len(second.Agents) != 1 {
+		t.Fatalf("len(second.Agents) = %d, want cached 1 across index change", len(second.Agents))
+	}
+	if second.Agents[0].AgentID != "helper" {
+		t.Fatalf("second.Agents[0].AgentID = %q, want helper", second.Agents[0].AgentID)
+	}
+
+	timeBucketResponseCacheTTL = time.Nanosecond
+	third := readSessionAgentListResponse(t, h, req)
+	if len(third.Agents) != 2 {
+		t.Fatalf("len(third.Agents) = %d, want 2 after cache bucket expiry", len(third.Agents))
+	}
+}
+
+func readSessionAgentListResponse(t *testing.T, h http.Handler, req *http.Request) sessionAgentListTestResponse {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req.Clone(req.Context()))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp sessionAgentListTestResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return resp
 }
 
 func TestHandleSessionAgentGet(t *testing.T) {

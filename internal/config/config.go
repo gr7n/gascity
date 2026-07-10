@@ -459,9 +459,11 @@ type NamedSession struct {
 	// Note: mode="always" is independent of min_active_sessions; both produce
 	// sessions, and gc doctor reports accidental duplicate-pool combinations.
 	Mode string `toml:"mode,omitempty" jsonschema:"enum=on_demand,enum=always"`
-	// OperatorVisibility is optional operator-facing metadata for grouping
-	// named sessions in dashboards. Core scheduling treats it as advisory.
-	OperatorVisibility string `toml:"operator_visibility,omitempty"`
+	// OperatorVisibility controls whether operator-facing UIs should present
+	// this named session as a direct conversation target. Empty defaults to
+	// "operator"; "background" and "internal" remain runtime lanes but should
+	// not appear as primary human chat targets.
+	OperatorVisibility string `toml:"operator_visibility,omitempty" jsonschema:"enum=operator,enum=background,enum=internal"`
 	// SourceDir is the directory where this named session's config was
 	// defined. Set during pack/fragment loading; empty for inline config.
 	// Runtime-only — not persisted to TOML or JSON.
@@ -523,6 +525,45 @@ func (s *NamedSession) ModeOrDefault() string {
 		return "on_demand"
 	}
 	return s.Mode
+}
+
+const (
+	// NamedSessionOperatorVisibilityOperator marks a named session as a normal
+	// human-facing operator lane.
+	NamedSessionOperatorVisibilityOperator = "operator"
+	// NamedSessionOperatorVisibilityBackground marks a named session as a
+	// background lane hidden from ordinary operator chat surfaces.
+	NamedSessionOperatorVisibilityBackground = "background"
+	// NamedSessionOperatorVisibilityInternal marks a named session as an
+	// internal lane hidden from ordinary operator chat surfaces.
+	NamedSessionOperatorVisibilityInternal = "internal"
+)
+
+// OperatorVisibilityOrDefault returns the normalized operator visibility.
+func (s *NamedSession) OperatorVisibilityOrDefault() string {
+	if s == nil {
+		return NamedSessionOperatorVisibilityOperator
+	}
+	switch strings.ToLower(strings.TrimSpace(s.OperatorVisibility)) {
+	case NamedSessionOperatorVisibilityBackground:
+		return NamedSessionOperatorVisibilityBackground
+	case NamedSessionOperatorVisibilityInternal:
+		return NamedSessionOperatorVisibilityInternal
+	default:
+		return NamedSessionOperatorVisibilityOperator
+	}
+}
+
+// OperatorVisible reports whether operator UIs should show this session as an
+// ordinary human-facing lane.
+func (s *NamedSession) OperatorVisible() bool {
+	return s.OperatorVisibilityOrDefault() == NamedSessionOperatorVisibilityOperator
+}
+
+// ChatVisible reports whether this named session should be offered as a direct
+// chat target in human-facing UIs.
+func (s *NamedSession) ChatVisible() bool {
+	return s.OperatorVisible()
 }
 
 // ExpandGenericRigNamedSessions stamps inline scope="rig" named sessions that
@@ -3882,6 +3923,12 @@ func validateNamedSessions(cfg *City, requireBackingTemplate bool) (warnings []s
 			// valid
 		default:
 			return nil, fmt.Errorf("named_session %q: mode must be \"on_demand\", \"always\", or empty, got %q", s.QualifiedName(), s.Mode)
+		}
+		switch strings.ToLower(strings.TrimSpace(s.OperatorVisibility)) {
+		case "", NamedSessionOperatorVisibilityOperator, NamedSessionOperatorVisibilityBackground, NamedSessionOperatorVisibilityInternal:
+			// valid
+		default:
+			return nil, fmt.Errorf("named_session %q: operator_visibility must be \"operator\", \"background\", \"internal\", or empty, got %q", s.QualifiedName(), s.OperatorVisibility)
 		}
 		key := sessionKey{dir: s.Dir, identity: s.IdentityName()}
 		if seen[key] {

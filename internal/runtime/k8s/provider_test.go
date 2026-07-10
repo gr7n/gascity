@@ -436,6 +436,82 @@ func TestNudge(t *testing.T) {
 	}
 }
 
+func TestNudgeWakesPaneAndRetriesEnter(t *testing.T) {
+	oldDebounce := k8sNudgeSubmitDebounce
+	oldRetry := k8sNudgeEnterRetryDelay
+	k8sNudgeSubmitDebounce = 0
+	k8sNudgeEnterRetryDelay = 0
+	t.Cleanup(func() {
+		k8sNudgeSubmitDebounce = oldDebounce
+		k8sNudgeEnterRetryDelay = oldRetry
+	})
+
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+
+	enterAttempts := 0
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 5 && cmd[0] == "tmux" && cmd[1] == "send-keys" && cmd[4] == "Enter" {
+			enterAttempts++
+			if enterAttempts == 1 {
+				return "", errors.New("transient enter failure")
+			}
+		}
+		return "", nil
+	}
+
+	if err := p.Nudge("gc-test-agent", runtime.TextContent("hello world")); err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	if enterAttempts != 2 {
+		t.Fatalf("Enter attempts = %d, want 2", enterAttempts)
+	}
+
+	var wakeDown, wakeUp int
+	for _, c := range fake.calls {
+		if c.method != "execInPod" || len(c.cmd) < 6 || c.cmd[0] != "tmux" || c.cmd[1] != "resize-pane" {
+			continue
+		}
+		switch c.cmd[5] {
+		case "-1":
+			wakeDown++
+		case "+1":
+			wakeUp++
+		}
+	}
+	if wakeDown == 0 || wakeUp == 0 {
+		t.Fatalf("wake resize calls down=%d up=%d, want both", wakeDown, wakeUp)
+	}
+}
+
+func TestNudgeSurfacesTextInjectionError(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 6 && cmd[0] == "tmux" && cmd[1] == "send-keys" && cmd[4] == "-l" {
+			return "", errors.New("literal send failed")
+		}
+		return "", nil
+	}
+
+	err := p.Nudge("gc-test-agent", runtime.TextContent("hello world"))
+	if err == nil || !strings.Contains(err.Error(), "literal send failed") {
+		t.Fatalf("Nudge error = %v, want literal send failure", err)
+	}
+}
+
+func TestNudgeMissingPodReportsSessionNotFound(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+
+	err := p.Nudge("missing-agent", runtime.TextContent("hello"))
+	if !errors.Is(err, runtime.ErrSessionNotFound) {
+		t.Fatalf("Nudge missing error = %v, want runtime.ErrSessionNotFound", err)
+	}
+}
+
 func TestSendKeys(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)

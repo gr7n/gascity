@@ -60,6 +60,12 @@ func (c *SessionCatalog) ListFullFromBeads(all []beads.Bead, stateFilter, templa
 	return c.manager.ListFullFromBeads(all, stateFilter, templateFilter)
 }
 
+// ListLiteFromBeads expands a bead set into session listing results without
+// live provider probes.
+func (c *SessionCatalog) ListLiteFromBeads(all []beads.Bead, stateFilter, templateFilter string) *SessionListResult {
+	return c.manager.ListLiteFromBeads(all, stateFilter, templateFilter)
+}
+
 // SubmissionCapabilities reports whether the session can accept submit-style input.
 func (c *SessionCatalog) SubmissionCapabilities(id string) (SessionSubmissionCapabilities, error) {
 	return c.manager.SubmissionCapabilities(id)

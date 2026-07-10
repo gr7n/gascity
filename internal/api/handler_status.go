@@ -150,8 +150,13 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 		if rigName != "" {
 			scope = "rig"
 		}
-		expanded := expandAgent(a, cityName, sessTmpl, sp)
-		expanded = appendUnlimitedPoolSessionBeads(expanded, a, cityName, sessTmpl, sessionSnapshot)
+		var expanded []expandedAgent
+		if lite {
+			expanded = expandAgentFromSessionSnapshot(a, cityName, sessTmpl, sessionSnapshot)
+		} else {
+			expanded = expandAgent(a, cityName, sessTmpl, sp)
+			expanded = appendUnlimitedPoolSessionBeads(expanded, a, cityName, sessTmpl, sessionSnapshot)
+		}
 		isPool := len(expanded) > 1 || a.SupportsInstanceExpansion()
 		groupName := a.QualifiedName()
 		scaleLabelEmitted := false
@@ -162,7 +167,12 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 			}
 			sessName := agentSessionName(cityName, ea.qualifiedName, sessTmpl)
 			info, hasInfo := sessionSnapshot.bySessionName[sessName]
-			running := statusProviderRunning(sp, sessName)
+			running := false
+			if lite {
+				running = hasInfo && info.state == session.StateActive
+			} else {
+				running = statusProviderRunning(sp, sessName)
+			}
 			if running {
 				rawRunning++
 			}
@@ -262,9 +272,12 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 		mode := ns.ModeOrDefault()
 		status := s.namedSessionStatus(cfg, sessionSnapshot, cityName, identity, mode, suspendedRigs)
 		namedSessionDetails = append(namedSessionDetails, StatusNamedSessionDetail{
-			Identity: identity,
-			Status:   status,
-			Mode:     mode,
+			Identity:           identity,
+			Status:             status,
+			Mode:               mode,
+			OperatorVisibility: ns.OperatorVisibilityOrDefault(),
+			OperatorVisible:    ns.OperatorVisible(),
+			ChatVisible:        ns.ChatVisible(),
 		})
 	}
 
@@ -734,6 +747,11 @@ func appendUnlimitedPoolSessionBeads(expanded []expandedAgent, a config.Agent, c
 		seenSessionNames[info.sessionName] = true
 	}
 	return expanded
+}
+
+func expandAgentFromSessionSnapshot(a config.Agent, cityName, sessTmpl string, snapshot statusSessionSnapshot) []expandedAgent {
+	expanded := expandAgent(a, cityName, sessTmpl, nil)
+	return appendUnlimitedPoolSessionBeads(expanded, a, cityName, sessTmpl, snapshot)
 }
 
 func statusSessionQualifiedName(cityName, sessTmpl string, info statusSessionInfo) string {

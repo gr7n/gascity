@@ -84,3 +84,22 @@ func paginate[T any](items []T, pp pageParams) (page []T, total int, nextCursor 
 	}
 	return page, total, nextCursor
 }
+
+// pageForResponse applies the same paging semantics as paginate, but is meant
+// for handlers that need to slice cheap domain rows before expensive response
+// enrichment. Limit-only requests cap the returned rows without emitting a
+// cursor, preserving the legacy non-cursor list behavior.
+func pageForResponse[T any](items []T, pp pageParams) (page []T, total int, nextCursor string) {
+	if !pp.IsPaging {
+		total = len(items)
+		if pp.Limit < len(items) {
+			items = items[:pp.Limit]
+		}
+		return items, total, ""
+	}
+	page, total, nextCursor = paginate(items, pp)
+	if page == nil {
+		page = []T{}
+	}
+	return page, total, nextCursor
+}

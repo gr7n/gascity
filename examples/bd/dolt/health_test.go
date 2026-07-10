@@ -43,7 +43,9 @@ func repoRoot(t *testing.T) string {
 // route runtime.sh at the production state file. The explicit keys
 // argument remains for non-GC_/DOLT_ scrubbing such as PATH.
 func filteredEnv(keys ...string) []string {
-	blocked := make(map[string]struct{}, len(keys))
+	blocked := make(map[string]struct{}, len(keys)+2)
+	blocked["BASH_ENV"] = struct{}{}
+	blocked["ENV"] = struct{}{}
 	for _, key := range keys {
 		blocked[key] = struct{}{}
 	}
@@ -94,6 +96,24 @@ func TestFilteredEnvStripsGCAndDOLTPrefixes(t *testing.T) {
 	}
 	if !sawKept {
 		t.Errorf("filteredEnv dropped non-GC_/DOLT_ entry FILTERED_ENV_TEST_KEEP")
+	}
+}
+
+func TestFilteredEnvStripsShellStartupHooks(t *testing.T) {
+	t.Setenv("BASH_ENV", "/tmp/should-not-source")
+	t.Setenv("ENV", "/tmp/should-not-source")
+	t.Setenv("GC_DOLT_PORT", "3306")
+
+	env := filteredEnv("GC_DOLT_PORT")
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "BASH_ENV", "ENV", "GC_DOLT_PORT":
+			t.Fatalf("filteredEnv leaked blocked key %s", key)
+		}
 	}
 }
 

@@ -50,8 +50,7 @@ func (s *countingStore) ListByAssignee(assignee, status string, limit int) ([]be
 // keys its response cache on a wall-clock TTL bucket, not the event sequence,
 // so a busy city (whose sequence advances every poll) still hits the cache
 // instead of rebuilding the O(store-size) body on every request. Recording an
-// event must NOT bust the /status cache within the TTL window — unlike the
-// index-keyed endpoints (see TestHandleAgentListCachesUntilIndexChanges).
+// event must NOT bust the /status cache within the TTL window.
 func TestHandleStatusCachesAcrossIndexChanges(t *testing.T) {
 	// Pin a wide TTL so every request in this test lands in the same time
 	// bucket; this isolates the "index churn must not bust the cache" property
@@ -176,7 +175,11 @@ func TestHandleStatusBlockingBypassesTimeCache(t *testing.T) {
 	}
 }
 
-func TestHandleAgentListCachesUntilIndexChanges(t *testing.T) {
+func TestHandleAgentListCachesAcrossIndexChanges(t *testing.T) {
+	oldTTL := timeBucketResponseCacheTTL
+	timeBucketResponseCacheTTL = time.Hour
+	t.Cleanup(func() { timeBucketResponseCacheTTL = oldTTL })
+
 	state := newFakeState(t)
 	store := &countingStore{Store: beads.NewMemStore()}
 	state.stores["myrig"] = store
@@ -205,8 +208,8 @@ func TestHandleAgentListCachesUntilIndexChanges(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("third agents = %d, want 200", rec.Code)
 	}
-	if store.listByAssigneeCalls != 4 {
-		t.Fatalf("ListByAssignee calls after index change = %d, want 4", store.listByAssigneeCalls)
+	if store.listByAssigneeCalls != 2 {
+		t.Fatalf("ListByAssignee calls after index change = %d, want 2 (time-bucketed cache must survive sequence churn)", store.listByAssigneeCalls)
 	}
 }
 

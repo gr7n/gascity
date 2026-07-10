@@ -227,6 +227,16 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	return p.route(name).Nudge(name, content)
 }
 
+// NudgeWithContext delegates to routed backends that can honor caller
+// cancellation during their default nudge path.
+func (p *Provider) NudgeWithContext(ctx context.Context, name string, content []runtime.ContentBlock) error {
+	routed := p.route(name)
+	if np, ok := routed.(runtime.ContextNudgeProvider); ok {
+		return np.NudgeWithContext(ctx, name, content)
+	}
+	return routed.Nudge(name, content)
+}
+
 // WaitForIdle delegates to the routed backend when it supports explicit
 // idle-boundary waiting.
 func (p *Provider) WaitForIdle(ctx context.Context, name string, timeout time.Duration) error {

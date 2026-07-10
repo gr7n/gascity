@@ -49,6 +49,27 @@ type lockedBuffer struct {
 	buf bytes.Buffer
 }
 
+func TestSupervisorAllowedHostsForBindAddsConcreteNonLoopbackBind(t *testing.T) {
+	got := supervisorAllowedHostsForBind("100.96.12.40", []string{"city-admin.local"})
+	want := []string{"city-admin.local", "100.96.12.40"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("allowed hosts = %#v, want %#v", got, want)
+	}
+}
+
+func TestSupervisorAllowedHostsForBindSkipsLoopbackAndWildcard(t *testing.T) {
+	cases := []string{"", "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "::", "[::]"}
+	for _, bind := range cases {
+		t.Run(bind, func(t *testing.T) {
+			got := supervisorAllowedHostsForBind(bind, []string{"city-admin.local"})
+			want := []string{"city-admin.local"}
+			if !slices.Equal(got, want) {
+				t.Fatalf("allowed hosts = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

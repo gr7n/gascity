@@ -83,6 +83,36 @@ func TestMultiplexerListAllAppliesGlobalLimitAfterMerge(t *testing.T) {
 	}
 }
 
+func TestMultiplexerListAfterCursorAppliesPerCityAfterSeq(t *testing.T) {
+	m := NewMultiplexer()
+
+	alpha := NewFake()
+	alpha.Record(Event{Type: SessionWoke, Actor: "a1", Subject: "alpha-old", Ts: time.Unix(1, 0)})
+	alpha.Record(Event{Type: SessionWoke, Actor: "a1", Subject: "alpha-seen", Ts: time.Unix(2, 0)})
+	alpha.Record(Event{Type: SessionWoke, Actor: "a1", Subject: "alpha-new", Ts: time.Unix(4, 0)})
+
+	beta := NewFake()
+	beta.Record(Event{Type: SessionWoke, Actor: "b1", Subject: "beta-first", Ts: time.Unix(3, 0)})
+
+	m.Add("alpha", alpha)
+	m.Add("beta", beta)
+
+	evts, err := m.ListAfterCursor(map[string]uint64{"alpha": 2}, Filter{Type: SessionWoke})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evts) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(evts), evts)
+	}
+	got := []string{evts[0].City + ":" + evts[0].Subject, evts[1].City + ":" + evts[1].Subject}
+	want := []string{"beta:beta-first", "alpha:alpha-new"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestMultiplexerListAllOrdersEqualTimestampsDeterministically(t *testing.T) {
 	m := NewMultiplexer()
 	ts := time.Unix(1, 0)

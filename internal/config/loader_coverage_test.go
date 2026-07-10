@@ -66,7 +66,7 @@ name = "operator"
 [[named_session]]
 template = "operator"
 mode = "always"
-operator_visibility = "primary"
+operator_visibility = "operator"
 `)
 	cfg, _, err := LoadWithIncludes(fs, "/city/city.toml")
 	if err != nil {
@@ -76,8 +76,8 @@ operator_visibility = "primary"
 	if len(sessions) != 1 {
 		t.Fatalf("len(user NamedSessions) = %d, want 1", len(sessions))
 	}
-	if got := sessions[0].OperatorVisibility; got != "primary" {
-		t.Fatalf("OperatorVisibility = %q, want primary", got)
+	if got := sessions[0].OperatorVisibility; got != "operator" {
+		t.Fatalf("OperatorVisibility = %q, want operator", got)
 	}
 }
 

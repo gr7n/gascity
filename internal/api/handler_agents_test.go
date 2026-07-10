@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/sessionlog"
 )
 
@@ -977,6 +978,82 @@ func TestAgentModelAndContext(t *testing.T) {
 		t.Error("expected non-nil ContextWindow")
 	} else if *resp.ContextWindow != 200000 {
 		t.Errorf("ContextWindow = %d, want 200000", *resp.ContextWindow)
+	}
+}
+
+func TestAgentListLiteSkipsTranscriptMetadata(t *testing.T) {
+	state := newFakeState(t)
+	state.cfg.Workspace.Provider = "claude"
+	state.cfg.Agents = []config.Agent{
+		{Name: "worker", Dir: "myrig", Provider: "claude", MaxActiveSessions: intPtr(1)},
+	}
+	state.cfg.Rigs = []config.Rig{{Name: "myrig", Path: "/tmp/myrig"}}
+	state.cityBeadStore = beads.NewMemStore()
+	if _, err := state.cityBeadStore.Create(beads.Bead{
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"state":        string(session.StateActive),
+			"template":     "myrig/worker",
+			"session_name": "myrig--worker",
+		},
+	}); err != nil {
+		t.Fatalf("Create session bead: %v", err)
+	}
+	if err := state.sp.Start(context.Background(), "myrig--worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	searchDir := t.TempDir()
+	slug := sessionlog.ProjectSlug("/tmp/myrig")
+	slugDir := filepath.Join(searchDir, slug)
+	if err := os.MkdirAll(slugDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(slugDir, "test-session.jsonl")
+	lines := `{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-5-20251101","usage":{"input_tokens":10000}}}` + "\n"
+	if err := os.WriteFile(sessionFile, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(state)
+	srv.sessionLogSearchPaths = []string{searchDir}
+	h := newTestCityHandlerWith(t, state, srv)
+
+	req := httptest.NewRequest("GET", cityURL(state, "/agents?running=true"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("full status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var full struct {
+		Items []agentResponse `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&full); err != nil {
+		t.Fatalf("decode full: %v", err)
+	}
+	if len(full.Items) != 1 || full.Items[0].Model != "claude-opus-4-5-20251101" {
+		t.Fatalf("full agent metadata = %+v, want transcript model", full.Items)
+	}
+
+	req = httptest.NewRequest("GET", cityURL(state, "/agents?lite=true&running=true"), nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("lite status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var lite struct {
+		Items []agentResponse `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&lite); err != nil {
+		t.Fatalf("decode lite: %v", err)
+	}
+	if len(lite.Items) != 1 || !lite.Items[0].Running {
+		t.Fatalf("lite agents = %+v, want one running agent from session read model", lite.Items)
+	}
+	if lite.Items[0].Model != "" || lite.Items[0].ContextPct != nil || lite.Items[0].Activity != "" {
+		t.Fatalf("lite agent transcript metadata = model %q context %v activity %q, want empty", lite.Items[0].Model, lite.Items[0].ContextPct, lite.Items[0].Activity)
 	}
 }
 

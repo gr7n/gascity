@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/session"
@@ -918,6 +919,55 @@ func TestClientSubmitSessionWaitsForResultEvent(t *testing.T) {
 	}
 	if resp.Status != "accepted" || resp.ID != "sess-123" || !resp.Queued || resp.Intent != session.SubmitIntentInterruptNow {
 		t.Fatalf("response = %#v, want accepted queued interrupt_now for sess-123", resp)
+	}
+}
+
+func TestClientSubmitSessionInitialPostUsesTimeoutContext(t *testing.T) {
+	oldTimeout := sessionMessageTimeout
+	sessionMessageTimeout = 25 * time.Millisecond
+	t.Cleanup(func() {
+		sessionMessageTimeout = oldTimeout
+	})
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/alpha/session/sess-123/submit" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		entered <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer ts.Close()
+	defer close(release)
+
+	c := NewCityScopedClient(ts.URL, "alpha")
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := c.SubmitSession("sess-123", "take this now", session.SubmitIntentInterruptNow)
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("submit POST did not reach test server")
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("SubmitSession succeeded after stalled initial POST")
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("SubmitSession elapsed %s, want initial POST bounded by sessionMessageTimeout", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SubmitSession did not return after initial POST context timeout")
 	}
 }
 

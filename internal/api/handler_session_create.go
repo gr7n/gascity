@@ -88,6 +88,11 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
+		if msg, conflict := alwaysNamedSessionCreateConflict(s.state.Config(), name); conflict {
+			s.idem.unreserve(idemKey)
+			writeError(w, http.StatusConflict, "named_session_target", msg)
+			return
+		}
 		transport, err = validateSessionTransport(resolved, transport, s.state.SessionProvider())
 		if err != nil {
 			s.idem.unreserve(idemKey)

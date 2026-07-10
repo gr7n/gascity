@@ -206,9 +206,12 @@ type StatusRigDetail struct {
 // StatusNamedSessionDetail mirrors the CLI's Named sessions block so the
 // API path can render it without a separate query.
 type StatusNamedSessionDetail struct {
-	Identity string `json:"identity" doc:"Qualified named-session identity."`
-	Status   string `json:"status" doc:"Lifecycle status string (materialized, reserved-unmaterialized, etc.)."`
-	Mode     string `json:"mode" doc:"Named-session mode (on-demand, always, etc.)."`
+	Identity           string `json:"identity" doc:"Qualified named-session identity."`
+	Status             string `json:"status" doc:"Lifecycle status string (materialized, reserved-unmaterialized, etc.)."`
+	Mode               string `json:"mode" doc:"Named-session mode (on-demand, always, etc.)."`
+	OperatorVisibility string `json:"operator_visibility" doc:"Operator-facing visibility: operator, background, or internal."`
+	OperatorVisible    bool   `json:"operator_visible" doc:"Whether operator UIs should show this named session as an ordinary human-facing lane."`
+	ChatVisible        bool   `json:"chat_visible" doc:"Whether this named session should be offered as a direct human chat target."`
 }
 
 // StatusSessionCountsDetail mirrors the CLI's Sessions line

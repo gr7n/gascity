@@ -6,6 +6,8 @@ package api
 // These types drive the OpenAPI spec for all /v0/session* endpoints.
 
 import (
+	"strings"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -17,6 +19,7 @@ type SessionListInput struct {
 	State    string `query:"state" required:"false" doc:"Filter by session state (e.g. active, closed)."`
 	Template string `query:"template" required:"false" doc:"Filter by session template (agent qualified name)."`
 	Peek     bool   `query:"peek" required:"false" doc:"Include last output preview."`
+	Lite     bool   `query:"lite" required:"false" doc:"Use cached session read-model state instead of live provider probes for low-cost dashboard polls."`
 
 	// cursorPresent is set by Resolve to distinguish "cursor absent" from
 	// "cursor present but empty" in the query string. Huma gives "" for both.
@@ -28,8 +31,19 @@ type SessionListInput struct {
 func (s *SessionListInput) Resolve(ctx huma.Context) []error {
 	// huma.Context.URL() returns the parsed URL; check raw query for cursor key.
 	u := ctx.URL()
-	s.cursorPresent = u.Query().Has("cursor")
+	q := u.Query()
+	s.cursorPresent = q.Has("cursor")
+	s.Lite = s.Lite || sessionLiteQuery(q.Get("lite")) || strings.EqualFold(strings.TrimSpace(q.Get("fresh")), "false")
 	return nil
+}
+
+func sessionLiteQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // CityPendingInput is the Huma input for GET /v0/city/{cityName}/pending.

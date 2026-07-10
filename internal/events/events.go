@@ -127,6 +127,7 @@ const (
 	CityResumed       = "city.resumed"
 	// Typed async request result events. 5 success types (one per
 	// operation, fully typed payload) + 1 shared failure type.
+	RequestProgress             = "request.progress"
 	RequestResultCityCreate     = "request.result.city.create"
 	RequestResultCityUnregister = "request.result.city.unregister"
 	RequestResultSessionCreate  = "request.result.session.create"
@@ -246,6 +247,7 @@ var KnownEventTypes = []string{
 	ConvoyCreated, ConvoyClosed,
 	ControllerStarted, ControllerStopped,
 	CitySuspended, CityResumed,
+	RequestProgress,
 	RequestResultCityCreate, RequestResultCityUnregister,
 	RequestResultSessionCreate, RequestResultSessionMessage,
 	RequestResultSessionSubmit, RequestFailed,
@@ -269,6 +271,19 @@ var KnownEventTypes = []string{
 	// yet registered in internal/api (the payload registration lives in a
 	// follow-up that adds the full SSE projection). Until then, subscribers
 	// receive it via the custom-event envelope.
+}
+
+// RequestEventTypes lists async request progress/result event types. It lives
+// in events so low-level providers can index request correlations without
+// importing the API package.
+var RequestEventTypes = []string{
+	RequestProgress,
+	RequestResultCityCreate,
+	RequestResultCityUnregister,
+	RequestResultSessionCreate,
+	RequestResultSessionMessage,
+	RequestResultSessionSubmit,
+	RequestFailed,
 }
 
 // Event is a single recorded occurrence in the system.
@@ -324,6 +339,12 @@ type Provider interface {
 // trailing matching events without scanning or materializing the whole history.
 type TailProvider interface {
 	ListTail(filter Filter, limit int) ([]Event, error)
+}
+
+// RequestEventProvider is an optional extension for providers that can look
+// up async request events by request_id without rescanning general history.
+type RequestEventProvider interface {
+	ListRequestEvents(requestID string, afterSeq uint64) ([]Event, error)
 }
 
 // Watcher yields events one at a time. Created by [Provider.Watch].

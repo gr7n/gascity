@@ -34,7 +34,7 @@ Client                        Handler                    Internal OM
   |--- POST mutation ---------->|                            |
   |                             | validate (sync, fast)      |
   |                             | generate request_id        |
-  |<-- 202 { request_id } -----|                            |
+  |<-- 202 { request_id, event_cursor } --------------------|
   |                             | go func() {               |
   |                             |   result, err := om(...)  ->| (unchanged sync OM)
   |                             |   emit typed event         |
@@ -87,16 +87,24 @@ carries the full typed response the old sync handler returned.
 
 ## The 202 response
 
-The 202 response body contains ONLY the `request_id`:
+The 202 response body contains the `request_id` and an event-stream
+cursor captured before the background work starts:
 
 ```json
-{ "request_id": "req-a1b2c3d4e5f6a1b2c3d4e5f6" }
+{
+  "request_id": "req-a1b2c3d4e5f6a1b2c3d4e5f6",
+  "event_cursor": "42"
+}
 ```
 
-No resource IDs. No session data. No domain fields. The resource
-does not exist yet. Returning an ID for it invites the client to
-use it before it's ready, causing errors like "session not found"
-or "state creating does not accept command suspend."
+No resource IDs. No session data. No domain fields. The cursor is
+transport metadata only: pass it to the relevant event stream
+(`after_seq` for city event streams, `after_cursor` for supervisor
+streams) so the client can subscribe after the POST without missing a
+fast terminal event. The resource may not exist yet. Returning an ID
+for it invites the client to use it before it's ready, causing errors
+like "session not found" or "state creating does not accept command
+suspend."
 
 The client gets the full typed result from the success event
 AFTER the operation completes.
@@ -246,12 +254,14 @@ giving clients real-time visibility into operation progress.
 
 ## Client contract
 
-1. Subscribe to the event stream that carries the operation's terminal
-   event:
+1. Send the mutation POST.
+2. Parse the 202 response; extract `request_id` and `event_cursor`.
+3. Subscribe to the event stream that carries the operation's terminal
+   event, using the returned cursor:
    - city create/unregister: `/v0/events/stream`
+     with `after_cursor=<event_cursor>`
    - session create/message/submit: `/v0/city/{city}/events/stream`
-2. Send the mutation POST.
-3. Parse the 202 response; extract `request_id`.
+     with `after_seq=<event_cursor>`
 4. Wait for an event where the envelope `type` is the expected
    success type or `request.failed`, and `payload.request_id`
    matches:
@@ -268,6 +278,38 @@ the request ID instead of emitting a second terminal event.
 6. On failure, `error_code` + `error_message` describe the problem.
 7. Do NOT use the resource before the success event arrives.
 
+For city-scoped session operations, clients that miss or drop the SSE
+frame can poll the durable event log:
+
+```http
+GET /v0/city/{city}/request/{request_id}?after_seq={event_cursor}
+```
+
+For supervisor/global operations, or when a client only has a
+composite supervisor cursor, use the supervisor-scope fallback:
+
+```http
+GET /v0/request/{request_id}?after_cursor={event_cursor}
+```
+
+The response is:
+
+```json
+{
+  "request_id": "req-...",
+  "status": "pending",
+  "operation": "session.submit",
+  "event": null
+}
+```
+
+`status` becomes `succeeded` or `failed` when a matching terminal
+event is found. This endpoint is a fallback for observability and UI
+recovery; SSE remains the progress channel. The city-scoped response
+returns a `WireEvent`; the supervisor/global response returns a
+`WireTaggedEvent` so clients can see which city/source produced the
+terminal result.
+
 ## Implementation rules
 
 1. **For ordinary async handlers, the goroutine runs the EXACT SAME OM code the old sync
@@ -282,7 +324,9 @@ the request ID instead of emitting a second terminal event.
 3. **Use `context.Background()` in the goroutine.** The HTTP
    request context is cancelled when the 202 is sent.
 
-4. **The 202 response contains ONLY `request_id`.** Nothing else.
+4. **The 202 response contains `request_id` plus `event_cursor`.**
+   Nothing else. The cursor is transport metadata for reliable
+   stream replay, not a domain resource.
 
 5. **Every goroutine has panic recovery.** Panics emit
    `request.failed` with `error_code: "internal_error"`. The

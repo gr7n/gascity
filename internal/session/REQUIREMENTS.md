@@ -84,6 +84,7 @@ unless the row names how they map to the canonical projection.
 | SESSION-LIFE-006 | Missing config | A session whose backing config target is missing is desired-blocked with blocker missing-config instead of silently waking. | `internal/session/lifecycle_projection_test.go` |
 | SESSION-LIFE-007 | Terminal wake conflict | Closed or closing bead IDs cannot be woken. Archived historical beads cannot be woken by bead ID unless continuity-eligible. Active metadata on a closed bead does not override terminal status. | `internal/session/lifecycle_projection_test.go`; `internal/api/session_model_phase0_lifecycle_spec_test.go`; `internal/session/waits_test.go` |
 | SESSION-LIFE-008 | User-facing projection guard | CLI/API/doctor user-facing consumers must use projection helpers rather than raw state interpretation. | `internal/session/lifecycle_projection_test.go` static guard |
+| SESSION-LIFE-009 | Lite session list projection | `GET /sessions?lite=true` and `fresh=false` list sessions from persisted bead/read-model state only. They must not probe provider/runtime liveness, attachment, last activity, active work, or transcript output; `running` is derived from stored active state and `last_output` stays empty even when `peek=true`. Full/detail session reads remain responsible for live runtime reconciliation. | `internal/api/handler_lite_reads_test.go` (`TestLiteSessionListDoesNotProbeLiveProvider`) |
 
 ### State Transitions
 

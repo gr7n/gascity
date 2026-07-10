@@ -308,6 +308,14 @@ type ImmediateNudgeProvider interface {
 	NudgeNow(name string, content []ContentBlock) error
 }
 
+// ContextNudgeProvider is an optional extension for runtimes whose default
+// nudge path can wait internally before injecting text. Callers with an
+// operation deadline should prefer this over Provider.Nudge so cancellation can
+// stop provider-specific wait-idle work.
+type ContextNudgeProvider interface {
+	NudgeWithContext(ctx context.Context, name string, content []ContentBlock) error
+}
+
 // InterruptedTurnResetProvider is an optional extension for runtimes that can
 // discard the just-interrupted user turn from the provider's active
 // conversation state without restarting the session.

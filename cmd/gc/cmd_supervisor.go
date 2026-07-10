@@ -148,6 +148,27 @@ func supervisorLogTeeDisabled() bool {
 	return os.Getenv(supervisorLogTeeEnv) == "0"
 }
 
+func supervisorAllowedHostsForBind(bind string, configured []string) []string {
+	out := make([]string, 0, len(configured)+1)
+	for _, host := range configured {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			out = append(out, host)
+		}
+	}
+	bind = strings.TrimSpace(bind)
+	switch bind {
+	case "", "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "::", "[::]":
+		return out
+	}
+	for _, host := range out {
+		if strings.EqualFold(host, bind) {
+			return out
+		}
+	}
+	return append(out, bind)
+}
+
 // openSupervisorLogForTee opens the supervisor log file in append mode for
 // runSupervisor to tee output into.
 func openSupervisorLogForTee() (*os.File, error) {
@@ -1350,8 +1371,9 @@ func runSupervisor(stdout, stderr io.Writer) int {
 	if len(supCfg.Supervisor.AllowedOrigins) > 0 {
 		apiMux.WithAllowedOrigins(supCfg.Supervisor.AllowedOrigins)
 	}
-	if len(supCfg.Supervisor.AllowedHosts) > 0 {
-		apiMux.WithAllowedHosts(supCfg.Supervisor.AllowedHosts)
+	allowedHosts := supervisorAllowedHostsForBind(supCfg.Supervisor.BindOrDefault(), supCfg.Supervisor.AllowedHosts)
+	if len(allowedHosts) > 0 {
+		apiMux.WithAllowedHosts(allowedHosts)
 	}
 	// Gate city-config mutations on a signed write grant when configured. Fail
 	// closed at boot if write-auth is required but no key is set, so the

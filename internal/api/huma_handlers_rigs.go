@@ -25,10 +25,22 @@ func (s *Server) humaHandleRigList(ctx context.Context, input *RigListInput) (*L
 		return nil, err
 	}
 	wantGit := input.Git
+	lite := input.Lite
+	var sessionSnapshot statusSessionSnapshot
+	var partialErrors []string
+	if lite {
+		sessionSnapshot = s.statusSessionSnapshot(ctx)
+		partialErrors = append(partialErrors, sessionSnapshot.partialErrors...)
+	}
 
 	rigs := make([]rigResponse, 0, len(cfg.Rigs))
 	for _, rig := range cfg.Rigs {
-		resp := s.buildRigResponse(cfg, rig, sp, cityName, s.state.CityPath())
+		var resp rigResponse
+		if lite {
+			resp = s.buildRigResponseLite(cfg, rig, sessionSnapshot, cityName, s.state.CityPath())
+		} else {
+			resp = s.buildRigResponse(cfg, rig, sp, cityName, s.state.CityPath())
+		}
 		if wantGit {
 			resp.Git = fetchGitStatus(rig.Path)
 		}
@@ -37,7 +49,12 @@ func (s *Server) humaHandleRigList(ctx context.Context, input *RigListInput) (*L
 	return &ListOutput[rigResponse]{
 		Index:     s.latestIndex(),
 		CacheAgeS: cacheAgeSeconds(store),
-		Body:      ListBody[rigResponse]{Items: rigs, Total: len(rigs)},
+		Body: ListBody[rigResponse]{
+			Items:         rigs,
+			Total:         len(rigs),
+			Partial:       len(partialErrors) > 0,
+			PartialErrors: partialErrors,
+		},
 	}, nil
 }
 

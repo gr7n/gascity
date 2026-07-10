@@ -222,7 +222,7 @@ func (h *RuntimeHandle) Message(ctx context.Context, req MessageRequest) (result
 		err = fmt.Errorf("%w: %s", sessionpkg.ErrSessionInactive, h.sessionName)
 		return MessageResult{}, err
 	}
-	if err := h.provider.Nudge(h.sessionName, runtime.TextContent(req.Text)); err != nil {
+	if err := h.nudgeDefault(ctx, req.Text); err != nil {
 		return MessageResult{}, err
 	}
 	result = MessageResult{Queued: false}
@@ -263,7 +263,7 @@ func (h *RuntimeHandle) Nudge(ctx context.Context, req NudgeRequest) (result Nud
 	}
 	switch req.Delivery {
 	case "", NudgeDeliveryDefault:
-		if err := h.provider.Nudge(h.sessionName, runtime.TextContent(req.Text)); err != nil {
+		if err := h.nudgeDefault(ctx, req.Text); err != nil {
 			return NudgeResult{}, err
 		}
 		result = NudgeResult{Delivered: true}
@@ -388,6 +388,14 @@ func (h *RuntimeHandle) nudgeNow(message string) error {
 	content := runtime.TextContent(message)
 	if immediate, ok := h.provider.(runtime.ImmediateNudgeProvider); ok {
 		return immediate.NudgeNow(h.sessionName, content)
+	}
+	return h.provider.Nudge(h.sessionName, content)
+}
+
+func (h *RuntimeHandle) nudgeDefault(ctx context.Context, message string) error {
+	content := runtime.TextContent(message)
+	if np, ok := h.provider.(runtime.ContextNudgeProvider); ok {
+		return np.NudgeWithContext(ctx, h.sessionName, content)
 	}
 	return h.provider.Nudge(h.sessionName, content)
 }

@@ -979,6 +979,9 @@ func buildDesiredStateWithSessionBeads(
 		tp.InstanceName = identity
 		tp.ConfiguredNamedIdentity = identity
 		tp.ConfiguredNamedMode = spec.Mode
+		tp.ConfiguredNamedOperatorVisibility = spec.OperatorVisibility
+		tp.ConfiguredNamedOperatorVisible = spec.OperatorVisible
+		tp.ConfiguredNamedChatVisible = spec.ChatVisible
 		if tp.Env == nil {
 			tp.Env = make(map[string]string)
 		}

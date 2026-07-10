@@ -41,7 +41,7 @@ type MailEventPayload struct {
 // IsEventPayload marks MailEventPayload as an events.Payload variant.
 func (MailEventPayload) IsEventPayload() {}
 
-// Operation constants used by RequestFailedPayload.
+// Operation constants used by RequestProgressPayload and RequestFailedPayload.
 const (
 	RequestOperationCityCreate     = "city.create"
 	RequestOperationCityUnregister = "city.unregister"
@@ -50,11 +50,35 @@ const (
 	RequestOperationSessionSubmit  = "session.submit"
 )
 
+// Request progress stages used by request.progress and request.failed stage
+// diagnostics.
+const (
+	RequestStageResolving     = "resolving"
+	RequestStageMaterializing = "materializing"
+	RequestStageDelivering    = "delivering"
+	RequestStageSubmitted     = "submitted"
+	RequestStageTimeout       = "timeout"
+)
+
 // --- Typed async request result payloads ---
 //
 // 5 success types (one per operation, fully typed) + 1 shared failure
 // type. The event type encodes operation and outcome; no string
 // discriminator fields on success payloads.
+
+// RequestProgressPayload is emitted on request.progress for non-terminal
+// async request stage diagnostics.
+type RequestProgressPayload struct {
+	RequestID     string `json:"request_id" doc:"Correlation ID from the 202 response."`
+	Operation     string `json:"operation" enum:"city.create,city.unregister,session.create,session.message,session.submit" doc:"Async operation reporting progress."`
+	Stage         string `json:"stage" enum:"resolving,materializing,delivering,submitted,timeout" doc:"Current async request stage."`
+	SessionTarget string `json:"session_target,omitempty" doc:"Original session target from the request, when applicable."`
+	SessionID     string `json:"session_id,omitempty" doc:"Resolved session ID once known."`
+	ElapsedMs     int64  `json:"elapsed_ms" doc:"Elapsed milliseconds since the async request was accepted."`
+}
+
+// IsEventPayload marks RequestProgressPayload as an events.Payload variant.
+func (RequestProgressPayload) IsEventPayload() {}
 
 // CityCreateSucceededPayload is emitted on request.result.city.create.
 type CityCreateSucceededPayload struct {
@@ -166,6 +190,8 @@ type RequestFailedPayload struct {
 	Operation    string `json:"operation" enum:"city.create,city.unregister,session.create,session.message,session.submit" doc:"Which operation failed."`
 	ErrorCode    string `json:"error_code" doc:"Machine-readable error code."`
 	ErrorMessage string `json:"error_message" doc:"Human-readable error description."`
+	Stage        string `json:"stage,omitempty" enum:"resolving,materializing,delivering,submitted,timeout" doc:"Async stage active when the failure was emitted, if known."`
+	ElapsedMs    int64  `json:"elapsed_ms,omitempty" doc:"Elapsed milliseconds since the async request was accepted, if known."`
 }
 
 // IsEventPayload marks RequestFailedPayload as an events.Payload variant.
@@ -617,6 +643,7 @@ func init() {
 	events.RegisterPayload(events.CitySuspended, events.NoPayload{})
 	events.RegisterPayload(events.CityResumed, events.NoPayload{})
 	// Typed async request result events.
+	events.RegisterPayload(events.RequestProgress, RequestProgressPayload{})
 	events.RegisterPayload(events.RequestResultCityCreate, CityCreateSucceededPayload{})
 	events.RegisterPayload(events.RequestResultCityUnregister, CityUnregisterSucceededPayload{})
 	events.RegisterPayload(events.RequestResultSessionCreate, SessionCreateSucceededPayload{})

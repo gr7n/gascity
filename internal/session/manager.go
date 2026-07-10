@@ -1725,6 +1725,18 @@ func (m *Manager) ListFull(stateFilter string, templateFilter string) (*ListResu
 // session-labeled beads. Callers that already loaded session beads can avoid
 // a second store scan by passing the same slice here.
 func (m *Manager) ListFullFromBeads(all []beads.Bead, stateFilter string, templateFilter string) *ListResult {
+	return m.listFromBeads(all, stateFilter, templateFilter, false)
+}
+
+// ListLiteFromBeads is like ListFullFromBeads, but it trusts the persisted
+// session projection and avoids live provider probes. It is intended for
+// high-frequency dashboard reads where freshness is less important than
+// predictable latency.
+func (m *Manager) ListLiteFromBeads(all []beads.Bead, stateFilter string, templateFilter string) *ListResult {
+	return m.listFromBeads(all, stateFilter, templateFilter, true)
+}
+
+func (m *Manager) listFromBeads(all []beads.Bead, stateFilter string, templateFilter string, lite bool) *ListResult {
 	result := make([]Info, 0, len(all))
 	for _, b := range all {
 		if !IsSessionBeadOrRepairable(b) {
@@ -1733,7 +1745,12 @@ func (m *Manager) ListFullFromBeads(all []beads.Bead, stateFilter string, templa
 		if !sessionMatchesFilters(b, stateFilter, templateFilter) {
 			continue
 		}
-		result = append(result, m.infoFromBead(b))
+
+		if lite {
+			result = append(result, m.infoFromBeadMetadata(b))
+		} else {
+			result = append(result, m.infoFromBead(b))
+		}
 	}
 	return &ListResult{Sessions: result, Beads: all}
 }
@@ -1780,6 +1797,47 @@ func (m *Manager) infoFromBead(b beads.Bead) Info {
 		}
 	}
 
+	return info
+}
+
+// infoFromBeadMetadata converts a bead to an Info struct without touching
+// runtime/provider state. Keep this aligned with infoFromBead's persisted
+// fields so lite list responses remain shape-compatible with full reads.
+func (m *Manager) infoFromBeadMetadata(b beads.Bead) Info {
+	sessName := b.Metadata["session_name"]
+	if sessName == "" {
+		sessName = sessionNameFor(b.ID)
+	}
+	closed := b.Status == "closed"
+	state := normalizeInfoState(State(b.Metadata["state"]))
+	if closed {
+		state = "" // closed beads have no runtime state
+	}
+
+	info := Info{
+		ID:            b.ID,
+		Template:      b.Metadata["template"],
+		State:         state,
+		Closed:        closed,
+		Title:         b.Title,
+		Alias:         b.Metadata["alias"],
+		AgentName:     b.Metadata["agent_name"],
+		Provider:      b.Metadata["provider"],
+		Transport:     transportFromMetadata(b),
+		Command:       b.Metadata["command"],
+		WorkDir:       b.Metadata["work_dir"],
+		SessionName:   sessName,
+		SessionKey:    b.Metadata["session_key"],
+		ResumeFlag:    b.Metadata["resume_flag"],
+		ResumeStyle:   b.Metadata["resume_style"],
+		ResumeCommand: b.Metadata["resume_command"],
+		CreatedAt:     b.CreatedAt,
+	}
+	if raw := strings.TrimSpace(b.Metadata[MetadataLastNudgeDeliveredAt]); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			info.LastNudgeDeliveredAt = parsed
+		}
+	}
 	return info
 }
 

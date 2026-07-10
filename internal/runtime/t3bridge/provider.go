@@ -919,7 +919,7 @@ func (p *Provider) rpcCallOnce(method string, params map[string]interface{}, req
 			continue
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(bridgeWSTimeout))
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -2345,21 +2345,21 @@ func (p *Provider) ProcessAlive(name string, _ []string) bool {
 
 // Nudge delivers content to the session as a new user turn.
 func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
+	text := runtime.FlattenText(content)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
 	snapshot, err := p.rpcSnapshot()
 	if err != nil {
 		if isSoftBridgeUnavailable(err) {
-			return nil
+			return fmt.Errorf("T3 bridge unavailable for nudge %q: %w", name, softenBridgeStartupError(err))
 		}
 		return err
 	}
 	thread := snapshotThreadBySessionName(snapshot, name)
 	binding := snapshotThreadBinding(thread)
 	if binding == nil {
-		return nil
-	}
-	text := runtime.FlattenText(content)
-	if strings.TrimSpace(text) == "" {
-		return nil
+		return fmt.Errorf("%w: T3 bridge has no thread binding for %q", runtime.ErrSessionNotFound, name)
 	}
 	meta := threadCustomMetadata(thread)
 	provider := meta["gc.runtimeProvider"]

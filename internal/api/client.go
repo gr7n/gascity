@@ -263,7 +263,9 @@ type Client struct {
 	initErr  error  // set when NewClient failed to build the transport (malformed baseURL, etc.)
 }
 
-const sessionMessageTimeout = 4 * time.Minute
+const defaultSessionMessageTimeout = 35 * time.Second
+
+var sessionMessageTimeout = defaultSessionMessageTimeout
 
 // defaultClientTimeout is the overall HTTP timeout for control-plane client
 // calls. The read paths (ListBeads, GetBead, GetStatus, ListMailInbox,
@@ -1157,7 +1159,9 @@ func (c *Client) SubmitSession(id, message string, intent session.SubmitIntent) 
 		i := genclient.SubmitIntent(intent)
 		body.Intent = &i
 	}
-	resp, err := c.cw.SubmitSessionWithResponse(context.Background(), c.cityName, id, nil, body)
+	ctx, cancel := context.WithTimeout(context.Background(), sessionMessageTimeout)
+	defer cancel()
+	resp, err := c.cw.SubmitSessionWithResponse(ctx, c.cityName, id, nil, body)
 	if err != nil {
 		return SessionSubmitResponse{}, &connError{err: fmt.Errorf("request failed: %w", err)}
 	}
@@ -1172,8 +1176,6 @@ func (c *Client) SubmitSession(id, message string, intent session.SubmitIntent) 
 	}
 	requestID := resp.JSON202.RequestId
 
-	ctx, cancel := context.WithTimeout(context.Background(), sessionMessageTimeout)
-	defer cancel()
 	env, err := c.waitForEvent(ctx, requestID, events.RequestResultSessionSubmit, RequestOperationSessionSubmit, resp.JSON202.EventCursor)
 	if err != nil {
 		return SessionSubmitResponse{}, err

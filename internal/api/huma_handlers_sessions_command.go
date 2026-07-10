@@ -26,8 +26,9 @@ import (
 // to isolate mutation logic from reads and streaming.
 
 var (
-	sessionMessageAsyncTimeout      = sessionMessageTimeout
-	sessionCreateCommandableTimeout = 120 * time.Second
+	sessionSubmitAsyncTimeout       = 30 * time.Second
+	sessionMessageAsyncTimeout      = sessionSubmitAsyncTimeout
+	sessionCreateCommandableTimeout = 5 * time.Minute
 )
 
 type sessionCommandableWaiter interface {
@@ -65,6 +66,9 @@ func (s *Server) humaHandleSessionCreate(ctx context.Context, input *SessionCrea
 			return nil, apierr.AgentNotFound.Msg("agent '" + name + "' not found")
 		}
 		return nil, apierr.Internal.Msg(err.Error())
+	}
+	if msg, conflict := alwaysNamedSessionCreateConflict(s.state.Config(), name); conflict {
+		return nil, apierr.SessionConflict.Msg("named_session_target: " + msg)
 	}
 	transport, err = validateSessionTransport(resolved, transport, s.state.SessionProvider())
 	if err != nil {
@@ -563,24 +567,136 @@ func (s *Server) humaHandleSessionSubmit(_ context.Context, input *SessionSubmit
 	if reqIDErr != nil {
 		return nil, apierr.Internal.Msg(reqIDErr.Error())
 	}
-	eventCursor, cursorErr := s.currentCityEventCursor()
+	eventCursor, cursorErr := s.requiredCityEventCursor()
 	if cursorErr != nil {
+		if errors.Is(cursorErr, errNoCityEventProvider) {
+			return nil, apierr.ServiceUnavailable.Msg("no_event_provider: session.submit requires city events so async results are observable")
+		}
 		return nil, apierr.Internal.Msg(cursorErr.Error())
 	}
 	message := input.Body.Message
 	sessionTarget := input.ID
+	startedAt := time.Now()
 	go func() {
 		defer s.recoverAsRequestFailed(reqID, RequestOperationSessionSubmit)
-		id, err := s.resolveSessionIDMaterializingNamedWithContext(context.Background(), store.Store, sessionTarget)
-		if err != nil {
-			s.emitSessionSubmitFailed(reqID, "resolve_failed", err.Error())
-			return
+
+		type submitResult struct {
+			sessionID string
+			queued    bool
+			intent    string
+			stage     string
+			elapsedMs int64
+			errorCode string
+			err       error
 		}
-		outcome, submitErr := s.submitMessageToSession(context.Background(), store.Store, id, message, intent)
-		if submitErr != nil {
-			s.emitSessionSubmitFailed(reqID, "submit_failed", submitErr.Error())
-		} else {
-			s.emitSessionSubmitSucceeded(reqID, id, outcome.Queued, string(intent))
+		type submitStageSnapshot struct {
+			stage     string
+			sessionID string
+		}
+
+		resultCh := make(chan submitResult, 1)
+		var terminalEmitted atomic.Bool
+		var currentStage atomic.Value
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		elapsedMs := func() int64 {
+			elapsed := time.Since(startedAt).Milliseconds()
+			if elapsed < 0 {
+				return 0
+			}
+			return elapsed
+		}
+		setStage := func(stage, sessionID string) {
+			if stage == "" || terminalEmitted.Load() {
+				return
+			}
+			currentStage.Store(submitStageSnapshot{stage: stage, sessionID: sessionID})
+			s.emitSessionSubmitProgress(reqID, sessionTarget, sessionID, stage, elapsedMs())
+		}
+		stageSnapshot := func() submitStageSnapshot {
+			snapshot, _ := currentStage.Load().(submitStageSnapshot)
+			return snapshot
+		}
+		failureMessage := func(message, stage string) string {
+			if strings.TrimSpace(stage) == "" {
+				return message
+			}
+			return fmt.Sprintf("%s (stage=%s)", message, stage)
+		}
+		sendResult := func(result submitResult) {
+			if terminalEmitted.Load() {
+				if result.err != nil {
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s stage=%s error_code=%s err=%v", reqID, sessionTarget, result.stage, result.errorCode, result.err)
+				} else {
+					log.Printf("api: late session.submit result after timeout request_id=%s target=%s stage=%s session_id=%s", reqID, sessionTarget, result.stage, result.sessionID)
+				}
+				return
+			}
+			resultCh <- result
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					sendResult(submitResult{errorCode: "internal_error", err: fmt.Errorf("panic: %v", r)})
+				}
+			}()
+			setStage(RequestStageResolving, "")
+			if _, ok, err := s.findNamedSessionSpecForTarget(store, sessionTarget); err == nil && ok {
+				setStage(RequestStageMaterializing, "")
+			}
+			id, err := s.resolveSessionIDMaterializingNamedWithContext(ctx, store, sessionTarget)
+			if err != nil {
+				snapshot := stageSnapshot()
+				sendResult(submitResult{errorCode: "resolve_failed", stage: snapshot.stage, elapsedMs: elapsedMs(), err: err})
+				return
+			}
+			setStage(RequestStageDelivering, id)
+			outcome, submitErr := s.submitMessageToSession(ctx, store, id, message, intent)
+			if submitErr != nil {
+				code := "submit_failed"
+				if errors.Is(submitErr, context.DeadlineExceeded) || errors.Is(submitErr, context.Canceled) {
+					code = "timeout"
+				}
+				snapshot := stageSnapshot()
+				sendResult(submitResult{sessionID: id, errorCode: code, stage: snapshot.stage, elapsedMs: elapsedMs(), err: submitErr})
+				return
+			}
+			setStage(RequestStageSubmitted, id)
+			sendResult(submitResult{sessionID: id, queued: outcome.Queued, intent: string(intent), stage: RequestStageSubmitted, elapsedMs: elapsedMs()})
+		}()
+
+		timer := time.NewTimer(sessionSubmitAsyncTimeout)
+		defer timer.Stop()
+		select {
+		case result := <-resultCh:
+			terminalEmitted.Store(true)
+			if result.err != nil {
+				s.emitSessionSubmitFailedWithStage(reqID, result.errorCode, failureMessage(result.err.Error(), result.stage), result.stage, result.elapsedMs)
+				return
+			}
+			s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
+		case <-timer.C:
+			cancel()
+			select {
+			case result := <-resultCh:
+				terminalEmitted.Store(true)
+				if result.err != nil {
+					s.emitSessionSubmitFailedWithStage(reqID, result.errorCode, failureMessage(result.err.Error(), result.stage), result.stage, result.elapsedMs)
+					return
+				}
+				s.emitSessionSubmitSucceeded(reqID, result.sessionID, result.queued, result.intent)
+				return
+			default:
+			}
+			terminalEmitted.Store(true)
+			snapshot := stageSnapshot()
+			activeStage := snapshot.stage
+			if activeStage == "" {
+				activeStage = RequestStageTimeout
+			}
+			elapsed := elapsedMs()
+			s.emitSessionSubmitProgress(reqID, sessionTarget, snapshot.sessionID, RequestStageTimeout, elapsed)
+			s.emitSessionSubmitFailedWithStage(reqID, "timeout", fmt.Sprintf("session.submit timed out after %s (stage=%s)", sessionSubmitAsyncTimeout, activeStage), activeStage, elapsed)
 		}
 	}()
 
@@ -605,8 +721,11 @@ func (s *Server) humaHandleSessionMessage(_ context.Context, input *SessionMessa
 	if reqIDErr != nil {
 		return nil, apierr.Internal.Msg(reqIDErr.Error())
 	}
-	eventCursor, cursorErr := s.currentCityEventCursor()
+	eventCursor, cursorErr := s.requiredCityEventCursor()
 	if cursorErr != nil {
+		if errors.Is(cursorErr, errNoCityEventProvider) {
+			return nil, apierr.ServiceUnavailable.Msg("no_event_provider: session.message requires city events so async results are observable")
+		}
 		return nil, apierr.Internal.Msg(cursorErr.Error())
 	}
 	message := input.Body.Message

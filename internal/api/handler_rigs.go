@@ -11,6 +11,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	gitpkg "github.com/gastownhall/gascity/internal/git"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/suspensionstate"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
 )
@@ -73,6 +74,44 @@ func (s *Server) buildRigResponse(cfg *config.City, rig config.Rig, sp runtime.P
 		resp.LastActivity = &maxActivity
 	}
 	return resp
+}
+
+func (s *Server) buildRigResponseLite(cfg *config.City, rig config.Rig, snapshot statusSessionSnapshot, cityName, cityPath string) rigResponse {
+	tmpl := cfg.Workspace.SessionTemplate
+	citySt, _ := suspensionstate.Load(fsys.OSFS{}, cityPath)
+	rigSuspended := suspensionstate.EffectiveRigSuspended(citySt, rig.Name, rig.EffectiveSuspendedOnStart())
+	var agentCount, runningCount, suspendedCount int
+
+	for _, a := range cfg.Agents {
+		if workdirutil.ConfiguredRigName(cityPath, a, cfg.Rigs) != rig.Name {
+			continue
+		}
+		expanded := expandAgentFromSessionSnapshot(a, cityName, tmpl, snapshot)
+		for _, ea := range expanded {
+			agentCount++
+			sessionName := agent.SessionNameFor(cityName, ea.qualifiedName, tmpl)
+			info, hasInfo := snapshot.bySessionName[sessionName]
+			if hasInfo && info.state == session.StateActive {
+				runningCount++
+			}
+			if ea.suspended || a.Suspended || rigSuspended || (hasInfo && info.state == session.StateSuspended) {
+				suspendedCount++
+			}
+		}
+	}
+	if !rigSuspended && agentCount > 0 && suspendedCount == agentCount {
+		rigSuspended = true
+	}
+
+	return rigResponse{
+		Name:          rig.Name,
+		Path:          rig.Path,
+		Suspended:     rigSuspended,
+		Prefix:        rig.Prefix,
+		DefaultBranch: rig.DefaultBranch,
+		AgentCount:    agentCount,
+		RunningCount:  runningCount,
+	}
 }
 
 // rigSuspended computes the effective suspended state for a rig. A rig

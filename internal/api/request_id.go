@@ -4,12 +4,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
 
 	"github.com/gastownhall/gascity/internal/events"
 )
+
+var errNoCityEventProvider = errors.New("no city event provider configured")
 
 func newRequestID() (string, error) {
 	b := make([]byte, 12)
@@ -23,6 +26,18 @@ func (s *Server) currentCityEventCursor() (string, error) {
 	ep := s.state.EventProvider()
 	if ep == nil {
 		return "0", nil
+	}
+	seq, err := ep.LatestSeq()
+	if err != nil {
+		return "", fmt.Errorf("capturing city event cursor: %w", err)
+	}
+	return strconv.FormatUint(seq, 10), nil
+}
+
+func (s *Server) requiredCityEventCursor() (string, error) {
+	ep := s.state.EventProvider()
+	if ep == nil {
+		return "", errNoCityEventProvider
 	}
 	seq, err := ep.LatestSeq()
 	if err != nil {
@@ -56,6 +71,18 @@ func EmitRequestFailed(rec events.Recorder, requestID, operation, errorCode, err
 	})
 }
 
+// EmitRequestProgress records a request.progress event to the given recorder.
+func EmitRequestProgress(rec events.Recorder, requestID, operation, stage, subject, sessionTarget, sessionID string, elapsedMs int64) {
+	EmitTypedEvent(rec, events.RequestProgress, subject, RequestProgressPayload{
+		RequestID:     requestID,
+		Operation:     operation,
+		Stage:         stage,
+		SessionTarget: sessionTarget,
+		SessionID:     sessionID,
+		ElapsedMs:     elapsedMs,
+	})
+}
+
 func (s *Server) emitAsyncResult(eventType, subject string, payload events.Payload) {
 	rec := s.state.EventProvider()
 	if rec == nil {
@@ -71,6 +98,28 @@ func (s *Server) emitRequestFailed(requestID, operation, errorCode, errorMessage
 		Operation:    operation,
 		ErrorCode:    errorCode,
 		ErrorMessage: errorMessage,
+	})
+}
+
+func (s *Server) emitRequestFailedWithStage(requestID, operation, errorCode, errorMessage, stage string, elapsedMs int64) {
+	s.emitAsyncResult(events.RequestFailed, "", RequestFailedPayload{
+		RequestID:    requestID,
+		Operation:    operation,
+		ErrorCode:    errorCode,
+		ErrorMessage: errorMessage,
+		Stage:        stage,
+		ElapsedMs:    elapsedMs,
+	})
+}
+
+func (s *Server) emitRequestProgress(requestID, operation, stage, subject, sessionTarget, sessionID string, elapsedMs int64) {
+	s.emitAsyncResult(events.RequestProgress, subject, RequestProgressPayload{
+		RequestID:     requestID,
+		Operation:     operation,
+		Stage:         stage,
+		SessionTarget: sessionTarget,
+		SessionID:     sessionID,
+		ElapsedMs:     elapsedMs,
 	})
 }
 
@@ -91,6 +140,8 @@ func requestIDFromPayload(payload events.Payload) string {
 	case SessionMessageSucceededPayload:
 		return p.RequestID
 	case SessionSubmitSucceededPayload:
+		return p.RequestID
+	case RequestProgressPayload:
 		return p.RequestID
 	case RequestFailedPayload:
 		return p.RequestID
@@ -136,6 +187,14 @@ func (s *Server) emitSessionSubmitSucceeded(requestID, sessionID string, queued 
 }
 
 // emitSessionSubmitFailed records a request.failed event for session.submit.
-func (s *Server) emitSessionSubmitFailed(requestID, errorCode, errorMessage string) {
-	s.emitRequestFailed(requestID, RequestOperationSessionSubmit, errorCode, errorMessage)
+func (s *Server) emitSessionSubmitFailedWithStage(requestID, errorCode, errorMessage, stage string, elapsedMs int64) {
+	s.emitRequestFailedWithStage(requestID, RequestOperationSessionSubmit, errorCode, errorMessage, stage, elapsedMs)
+}
+
+func (s *Server) emitSessionSubmitProgress(requestID, sessionTarget, sessionID, stage string, elapsedMs int64) {
+	subject := sessionID
+	if subject == "" {
+		subject = sessionTarget
+	}
+	s.emitRequestProgress(requestID, RequestOperationSessionSubmit, stage, subject, sessionTarget, sessionID, elapsedMs)
 }
