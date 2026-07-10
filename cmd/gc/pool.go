@@ -305,6 +305,12 @@ func deepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 			dst.Env[k] = v
 		}
 	}
+	if len(src.Annotations) > 0 {
+		dst.Annotations = make(map[string]string, len(src.Annotations))
+		for k, v := range src.Annotations {
+			dst.Annotations[k] = v
+		}
+	}
 	if len(src.PreStart) > 0 {
 		dst.PreStart = make([]string, len(src.PreStart))
 		copy(dst.PreStart, src.PreStart)

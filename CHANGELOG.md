@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Declaration-only agent annotations.** Agent definitions may declare opaque
+  string metadata with `annotations = { "example.com/key" = "value" }`.
+  Annotations survive pack/import composition and appear as an optional,
+  additive `annotations` object in schema-v1 `gc agent list --json` output.
+  Gas City does not interpret annotations or grant them authority, and this
+  release adds no patch, rig-override, or agent-API mutation surface for them.
+
 - **Prompt-consumer capability for deterministic workers.** Agent definitions,
   patches, and rig overrides now accept `accepts_prompt = false`. The setting
   suppresses prompt rendering and startup nudges, disables trust-dialog

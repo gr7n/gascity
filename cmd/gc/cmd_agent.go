@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -423,7 +424,7 @@ func newAgentListCmd(stdout, stderr io.Writer) *cobra.Command {
 		Long: `List configured agents from the resolved city configuration.
 
 Use --json to inspect agent routing fields, including effective work_query
-and sling_query values.`,
+and sling_query values, plus any declaration-only annotations.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if cmdAgentList(jsonOutput, stdout, stderr) != 0 {
@@ -446,20 +447,21 @@ type AgentListJSON struct {
 
 // AgentListItem is one configured agent in "gc agent list --json".
 type AgentListItem struct {
-	Name                 string    `json:"name"`
-	QualifiedName        string    `json:"qualified_name"`
-	Dir                  string    `json:"dir,omitempty"`
-	Scope                string    `json:"scope,omitempty"`
-	WorkDir              string    `json:"work_dir,omitempty"`
-	Provider             string    `json:"provider,omitempty"`
-	AcceptsPrompt        bool      `json:"accepts_prompt"`
-	Session              string    `json:"session,omitempty"`
-	Suspended            bool      `json:"suspended"`
-	Pool                 *PoolJSON `json:"pool,omitempty"`
-	WorkQuery            string    `json:"work_query"`
-	SlingQuery           string    `json:"sling_query"`
-	ConfiguredWorkQuery  string    `json:"configured_work_query,omitempty"`
-	ConfiguredSlingQuery string    `json:"configured_sling_query,omitempty"`
+	Name                 string            `json:"name"`
+	QualifiedName        string            `json:"qualified_name"`
+	Dir                  string            `json:"dir,omitempty"`
+	Scope                string            `json:"scope,omitempty"`
+	Annotations          map[string]string `json:"annotations,omitempty"`
+	WorkDir              string            `json:"work_dir,omitempty"`
+	Provider             string            `json:"provider,omitempty"`
+	AcceptsPrompt        bool              `json:"accepts_prompt"`
+	Session              string            `json:"session,omitempty"`
+	Suspended            bool              `json:"suspended"`
+	Pool                 *PoolJSON         `json:"pool,omitempty"`
+	WorkQuery            string            `json:"work_query"`
+	SlingQuery           string            `json:"sling_query"`
+	ConfiguredWorkQuery  string            `json:"configured_work_query,omitempty"`
+	ConfiguredSlingQuery string            `json:"configured_sling_query,omitempty"`
 }
 
 func cmdAgentList(jsonOutput bool, stdout, stderr io.Writer) int {
@@ -514,6 +516,7 @@ func agentListItems(cfg *config.City) []AgentListItem {
 			QualifiedName:        a.QualifiedName(),
 			Dir:                  a.Dir,
 			Scope:                a.Scope,
+			Annotations:          maps.Clone(a.Annotations),
 			WorkDir:              a.WorkDir,
 			Provider:             a.Provider,
 			AcceptsPrompt:        a.AcceptsPromptEnabled(),

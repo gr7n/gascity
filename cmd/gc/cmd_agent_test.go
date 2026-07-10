@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ name = "worker"
 dir = "frontend"
 suspended = true
 accepts_prompt = false
+annotations = { "example.com/context_profile" = "company", owner = "platform" }
 work_query = "bd ready --label=frontend"
 sling_query = "bd update {} --set-metadata gc.routed_to=frontend/worker"
 `)
@@ -51,6 +53,12 @@ sling_query = "bd update {} --set-metadata gc.routed_to=frontend/worker"
 	var result AgentListJSON
 	if err := json.Unmarshal([]byte(lines[0]), &result); err != nil {
 		t.Fatalf("invalid JSON: %v\nraw: %s", err, stdout.String())
+	}
+	var rawResult struct {
+		Agents []map[string]json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &rawResult); err != nil {
+		t.Fatalf("invalid raw JSON: %v\nraw: %s", err, stdout.String())
 	}
 	if result.SchemaVersion != "1" || result.CityName != "test-city" {
 		t.Fatalf("unexpected result: %+v", result)
@@ -80,9 +88,30 @@ sling_query = "bd update {} --set-metadata gc.routed_to=frontend/worker"
 	if worker.AcceptsPrompt {
 		t.Fatalf("worker AcceptsPrompt = true, want false")
 	}
+	wantAnnotations := map[string]string{
+		"example.com/context_profile": "company",
+		"owner":                       "platform",
+	}
+	if !reflect.DeepEqual(worker.Annotations, wantAnnotations) {
+		t.Fatalf("worker Annotations = %#v, want %#v", worker.Annotations, wantAnnotations)
+	}
 	for _, item := range userAgents {
-		if item.QualifiedName == "mayor" && !item.AcceptsPrompt {
+		if item.QualifiedName != "mayor" {
+			continue
+		}
+		if !item.AcceptsPrompt {
 			t.Fatal("legacy/default mayor AcceptsPrompt = false, want compatibility default true")
+		}
+		if item.Annotations != nil {
+			t.Fatalf("agent without annotations decoded a non-nil map: %#v", item.Annotations)
+		}
+	}
+	for _, item := range rawResult.Agents {
+		if string(item["name"]) != `"mayor"` {
+			continue
+		}
+		if _, exists := item["annotations"]; exists {
+			t.Fatalf("agent without annotations emitted the optional field: %s", stdout.String())
 		}
 	}
 }

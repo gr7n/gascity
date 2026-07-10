@@ -804,6 +804,7 @@ func TestDeepCopyAgentCoversAllFields(t *testing.T) {
 	src := config.Agent{
 		Name:                         "original",
 		Description:                  "test agent description",
+		Annotations:                  map[string]string{"example.com/context_profile": "company"},
 		Dir:                          "original-dir",
 		WorkDir:                      ".gc/agents/original",
 		Scope:                        "city",
@@ -930,6 +931,7 @@ func TestDeepCopyAgentCoversAllFields(t *testing.T) {
 	// Verify deep independence: mutating src slices/maps should not affect dst.
 	src.PreStart[0] = "MUTATED"
 	src.Env["K"] = "MUTATED"
+	src.Annotations["example.com/context_profile"] = "MUTATED"
 	src.SessionSetup[0] = "MUTATED"
 	src.Args[0] = "MUTATED"
 	src.ProcessNames[0] = "MUTATED"
@@ -945,6 +947,9 @@ func TestDeepCopyAgentCoversAllFields(t *testing.T) {
 	}
 	if dst.Env["K"] == "MUTATED" {
 		t.Error("Env is not a deep copy")
+	}
+	if dst.Annotations["example.com/context_profile"] == "MUTATED" {
+		t.Error("Annotations is not a deep copy")
 	}
 	if dst.SessionSetup[0] == "MUTATED" {
 		t.Error("SessionSetup is not a deep copy")
