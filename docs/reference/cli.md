@@ -2818,6 +2818,11 @@ When agent-name is omitted, `GC_ALIAS` is used (falling back to `GC_AGENT`).
 If agent-name matches a configured agent with a prompt_template,
 that template is output. Otherwise outputs a default worker prompt.
 
+With --json, bytes reports the emitted content size and prompt_version /
+prompt_sha report the rendered template projection when observed. The SHA
+includes configured template fragments and excludes runtime delivery envelopes
+such as hook formatting and launch beacons.
+
 Pass --strict to fail on debugging mistakes instead of silently falling
 back to the default prompt. Strict errors on:
 

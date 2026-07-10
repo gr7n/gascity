@@ -2624,6 +2624,14 @@ export type SessionResponse = {
         [key: string]: string;
     };
     pool?: string;
+    /**
+     * SHA-256 of the rendered template projection (including configured template fragments, excluding runtime delivery envelopes). Absent for legacy or prompt-less sessions.
+     */
+    prompt_sha?: string;
+    /**
+     * Template version from the persisted startup prompt receipt. Absent for legacy or prompt-less sessions.
+     */
+    prompt_version?: string;
     provider: string;
     reason?: string;
     rig?: string;
@@ -5493,7 +5501,7 @@ export type WorkerOperationEventPayload = {
     op_id: string;
     operation: string;
     /**
-     * SHA-256 of the rendered prompt (best-effort, currently always absent; #1256 follow-up).
+     * SHA-256 of the rendered template projection from the persisted startup receipt (includes configured template fragments; excludes runtime delivery envelopes; legacy sessions may be absent).
      */
     prompt_sha?: string;
     /**
@@ -5501,7 +5509,7 @@ export type WorkerOperationEventPayload = {
      */
     prompt_tokens?: number;
     /**
-     * Template version frontmatter (best-effort, currently always absent; #1256 follow-up).
+     * Template version frontmatter from the persisted startup prompt receipt (best-effort; legacy sessions may be absent).
      */
     prompt_version?: string;
     provider?: string;

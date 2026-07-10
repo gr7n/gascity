@@ -1290,6 +1290,13 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			meta["live_hash"] = liveHash
 			meta["session_origin"] = origin
 			meta["synced_at"] = now.Format("2006-01-02T15:04:05Z07:00")
+			// A start-pending bead can safely carry the exact template-projection
+			// receipt prepared for its imminent launch. Do not backfill an
+			// already-live adopted runtime: its historical rendered template is
+			// not observable.
+			if createState != "active" {
+				meta = session.WithPromptReceiptMetadata(meta, tp.PromptReceipt)
+			}
 			if !isPoolInstance {
 				meta["session_name"] = sn
 			}

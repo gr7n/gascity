@@ -60,14 +60,16 @@ type PromptContext struct {
 	Env              map[string]string // from Agent.Env — custom vars
 }
 
-// PromptRenderResult holds the rendered text plus the version and rendered
-// content SHA introduced by issue #1256 (1e).
+// PromptRenderResult holds the rendered template projection plus its version
+// and content SHA introduced by issue #1256 (1e).
 //
 // Version comes from the template's `version` frontmatter field — a human
 // label that surfaces in dashboards and `gc analyze` output. SHA is the
 // SHA-256 of the rendered text (after text/template substitution); two
 // runs with the same Version but diverging SHAs reveal an unbumped
-// template edit.
+// template edit. Injected/appended template fragments are included. Runtime
+// launch envelopes added later (beacon, assigned-skills appendix, initial
+// message) are deliberately outside this projection.
 type PromptRenderResult struct {
 	Text    string
 	Version string
@@ -84,6 +86,8 @@ type PromptRenderResult struct {
 // the output after rendering. Returns empty string if templatePath is empty
 // or the file doesn't exist. On parse or execute error, logs a warning to
 // stderr and returns the raw text (graceful fallback).
+//
+//nolint:unparam // Keep the compatibility wrapper signature aligned with renderPromptWithMeta.
 func renderPrompt(fs fsys.FS, cityPath, cityName, templatePath string, ctx PromptContext, sessionTemplate string, stderr io.Writer, packDirs []string, injectFragments []string, store beads.Store) string {
 	return renderPromptWithMeta(fs, cityPath, cityName, templatePath, ctx, sessionTemplate, stderr, packDirs, injectFragments, store).Text
 }

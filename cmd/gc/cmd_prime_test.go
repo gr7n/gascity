@@ -9,9 +9,125 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/promptmeta"
+	"github.com/gastownhall/gascity/internal/session"
 )
+
+func TestPrimeJSONIncludesRenderedPromptReceiptWithoutChangingContent(t *testing.T) {
+	clearGCEnv(t)
+	cityDir := t.TempDir()
+	write := func(rel, data string) {
+		path := filepath.Join(cityDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+	write("city.toml", `
+[workspace]
+name = "receipt-city"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.template.md"
+`)
+	write("prompts/worker.template.md", "---\nversion: v5\n---\nhello {{.AgentName}}\n")
+	t.Setenv("GC_CITY", cityDir)
+
+	var plain, plainErr bytes.Buffer
+	if code := doPrime([]string{"worker"}, &plain, &plainErr); code != 0 {
+		t.Fatalf("doPrime = %d; stderr=%q", code, plainErr.String())
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"prime", "worker", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("prime --json = %d; stderr=%q", code, stderr.String())
+	}
+	var got primeJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v; stdout=%q", err, stdout.String())
+	}
+	if got.Content != plain.String() {
+		t.Fatalf("JSON content changed plain prompt: got %q want %q", got.Content, plain.String())
+	}
+	if got.Bytes != len(got.Content) {
+		t.Fatalf("Bytes = %d, want %d", got.Bytes, len(got.Content))
+	}
+	if got.PromptVersion != "v5" {
+		t.Fatalf("PromptVersion = %q, want v5", got.PromptVersion)
+	}
+	if got.PromptSHA != promptmeta.SHA(got.Content) {
+		t.Fatalf("PromptSHA = %q, want hash of rendered content %q", got.PromptSHA, promptmeta.SHA(got.Content))
+	}
+}
+
+func TestPrimeHookPersistsRenderedReceiptForDirectStartSession(t *testing.T) {
+	clearGCEnv(t)
+	configureIsolatedRuntimeEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	withPrimeHookStdin(t)
+	cityDir := t.TempDir()
+	write := func(rel, data string) {
+		path := filepath.Join(cityDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("city.toml", `
+[workspace]
+name = "receipt-city"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.template.md"
+`)
+	write("prompts/worker.template.md", "---\nversion: v11\n---\nhook prompt for {{.AgentName}}\n")
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_BEADS", "file")
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	created, err := store.Create(beads.Bead{
+		Title:  "worker",
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"template":     "worker",
+			"state":        "active",
+			"session_name": "s-worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	t.Setenv("GC_SESSION_ID", created.ID)
+	t.Setenv("GC_SESSION_NAME", "s-worker")
+	t.Setenv("GC_ALIAS", "worker")
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithMode([]string{"worker"}, &stdout, &stderr, true, false); code != 0 {
+		t.Fatalf("doPrimeWithMode = %d; stderr=%q", code, stderr.String())
+	}
+	updated, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	got := session.PromptReceiptFromMetadata(updated.Metadata)
+	want := session.PromptReceipt{Version: "v11", SHA: promptmeta.SHA("hook prompt for worker\n")}
+	if got != want {
+		t.Fatalf("persisted prompt receipt = %+v, want %+v", got, want)
+	}
+}
 
 func TestBuildPrimeContextFallsBackToConfiguredRigRoot(t *testing.T) {
 	t.Setenv("GC_RIG", "demo")

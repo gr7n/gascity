@@ -29,12 +29,12 @@ import (
 // receiving populated fields without the corresponding announcement.
 func TestWorkerOperationPayload1aWiringStatusPin(t *testing.T) {
 	wiredAlready := map[string]string{
-		"agent_name": "session.Info.AgentName with Alias fallback via populateOperationEventIdentity (PR #1272)",
+		"agent_name":     "session.Info.AgentName with Alias fallback via populateOperationEventIdentity (PR #1272)",
+		"prompt_version": "persisted session prompt receipt via populateOperationEventIdentity",
+		"prompt_sha":     "persisted session prompt receipt via populateOperationEventIdentity",
 	}
 	notWiredYet := map[string]string{
 		"model":                 "follow-up: tail sessionlog at finish() to extract msg.Model",
-		"prompt_version":        "follow-up #1256: propagate promptmeta.FrontMatter.Version through session metadata",
-		"prompt_sha":            "follow-up #1256: propagate promptmeta.SHA through session metadata",
 		"bead_id":               "follow-up: thread operation context through worker.beginOperationEvent",
 		"prompt_tokens":         "follow-up: wire sessionlog/tail.go extraction to operation finish",
 		"completion_tokens":     "follow-up: wire sessionlog/tail.go extraction to operation finish",
@@ -154,18 +154,19 @@ func nonZeroPayloadForField(field string) WorkerOperationEventPayload {
 // downstream consumer reads from /v0/events/stream.
 func captureWorkerOperationEventToday(t *testing.T) string {
 	t.Helper()
-	// Today's wiring populates AgentName, nothing else from 1a. Mirror
-	// that explicitly so we don't accidentally rely on the worker
-	// package.
+	// Mirror the fields currently populated by the worker producer without
+	// importing the worker package into this API-layer shape test.
 	payload := WorkerOperationEventPayload{
-		OpID:        "test-op",
-		Operation:   "message",
-		Result:      "succeeded",
-		AgentName:   "rig/polecat-1",
-		SessionID:   "sess-1",
-		SessionName: "rig/polecat-1",
-		Provider:    "claude",
-		Transport:   "tmux",
+		OpID:          "test-op",
+		Operation:     "message",
+		Result:        "succeeded",
+		AgentName:     "rig/polecat-1",
+		PromptVersion: "v3",
+		PromptSHA:     "abc123",
+		SessionID:     "sess-1",
+		SessionName:   "rig/polecat-1",
+		Provider:      "claude",
+		Transport:     "tmux",
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

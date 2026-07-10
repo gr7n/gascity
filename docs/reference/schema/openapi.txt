@@ -7161,6 +7161,14 @@
           "pool": {
             "type": "string"
           },
+          "prompt_sha": {
+            "description": "SHA-256 of the rendered template projection (including configured template fragments, excluding runtime delivery envelopes). Absent for legacy or prompt-less sessions.",
+            "type": "string"
+          },
+          "prompt_version": {
+            "description": "Template version from the persisted startup prompt receipt. Absent for legacy or prompt-less sessions.",
+            "type": "string"
+          },
           "provider": {
             "type": "string"
           },
@@ -17583,7 +17591,7 @@
             "type": "string"
           },
           "prompt_sha": {
-            "description": "SHA-256 of the rendered prompt (best-effort, currently always absent; #1256 follow-up).",
+            "description": "SHA-256 of the rendered template projection from the persisted startup receipt (includes configured template fragments; excludes runtime delivery envelopes; legacy sessions may be absent).",
             "type": "string"
           },
           "prompt_tokens": {
@@ -17592,7 +17600,7 @@
             "type": "integer"
           },
           "prompt_version": {
-            "description": "Template version frontmatter (best-effort, currently always absent; #1256 follow-up).",
+            "description": "Template version frontmatter from the persisted startup prompt receipt (best-effort; legacy sessions may be absent).",
             "type": "string"
           },
           "provider": {

@@ -1586,6 +1586,8 @@ export const zSessionResponse = z.object({
     model: z.string().optional(),
     options: z.record(z.string(), z.string()).optional(),
     pool: z.string().optional(),
+    prompt_sha: z.string().optional(),
+    prompt_version: z.string().optional(),
     provider: z.string(),
     reason: z.string().optional(),
     rig: z.string().optional(),

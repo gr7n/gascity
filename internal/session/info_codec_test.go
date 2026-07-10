@@ -52,6 +52,8 @@ func infoFromPersistedBeadFrozen(b beads.Bead) Info {
 
 		ContinuationEpoch: b.Metadata["continuation_epoch"],
 		SleepReason:       b.Metadata["sleep_reason"],
+		PromptVersion:     b.Metadata[promptVersionMetadataKey],
+		PromptSHA:         b.Metadata[promptSHAMetadataKey],
 
 		ConfiguredNamedIdentity: b.Metadata[NamedSessionIdentityMetadata],
 		ConfiguredNamedSession:  strings.TrimSpace(b.Metadata[NamedSessionMetadataKey]) == "true",

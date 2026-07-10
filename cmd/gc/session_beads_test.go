@@ -307,8 +307,9 @@ func TestSyncSessionBeads_CreatesNonActiveBeadWithPendingCreateStartedAt(t *test
 	clk := &clock.Fake{Time: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}
 	sp := runtime.NewFake()
 
+	receipt := &session.PromptReceipt{Version: "v2", SHA: "rendered-sha"}
 	ds := map[string]TemplateParams{
-		"helper": {TemplateName: "helper", Command: "true"},
+		"helper": {TemplateName: "helper", Command: "true", PromptReceipt: receipt},
 	}
 
 	var stderr bytes.Buffer
@@ -331,6 +332,29 @@ func TestSyncSessionBeads_CreatesNonActiveBeadWithPendingCreateStartedAt(t *test
 	}
 	if got, want := b.Metadata["pending_create_started_at"], pendingCreateStartedAtNow(clk.Now()); got != want {
 		t.Fatalf("pending_create_started_at = %q, want %q", got, want)
+	}
+	if got := session.PromptReceiptFromMetadata(b.Metadata); got != *receipt {
+		t.Fatalf("prompt receipt = %+v, want %+v", got, *receipt)
+	}
+}
+
+func TestSyncSessionBeadsDoesNotBackfillReceiptOntoAdoptedRuntime(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}
+	sp := runtime.NewFake()
+	_ = sp.Start(context.TODO(), "helper", runtime.Config{Command: "true"})
+	receipt := &session.PromptReceipt{Version: "v2", SHA: "current-not-observed"}
+	ds := map[string]TemplateParams{
+		"helper": {TemplateName: "helper", Command: "true", PromptReceipt: receipt},
+	}
+
+	syncSessionBeads("", store, ds, sp, allConfiguredDS(ds), nil, clk, ioDiscard{}, false)
+	all := allSessionBeads(t, store)
+	if len(all) != 1 {
+		t.Fatalf("session bead count = %d, want 1", len(all))
+	}
+	if got := session.PromptReceiptFromMetadata(all[0].Metadata); got != (session.PromptReceipt{}) {
+		t.Fatalf("adopted runtime receipt = %+v, want honest absence", got)
 	}
 }
 

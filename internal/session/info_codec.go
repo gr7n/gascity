@@ -51,6 +51,8 @@ var infoKeyCodec = []infoKeySpec{
 	{"resume_command", func(i *Info, v string) { i.ResumeCommand = v }},
 	{"continuation_epoch", func(i *Info, v string) { i.ContinuationEpoch = v }},
 	{"sleep_reason", func(i *Info, v string) { i.SleepReason = v }},
+	{promptVersionMetadataKey, func(i *Info, v string) { i.PromptVersion = v }},
+	{promptSHAMetadataKey, func(i *Info, v string) { i.PromptSHA = v }},
 
 	// session_name: fallback-defaulted; reads info.ID (set in the prologue).
 	{"session_name", func(i *Info, v string) {

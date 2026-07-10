@@ -7621,6 +7621,27 @@ func TestSessionToResponse_ProjectsLastNudgeDeliveredAt(t *testing.T) {
 	}
 }
 
+func TestSessionToResponseProjectsPromptReceiptAndPreservesLegacyAbsence(t *testing.T) {
+	resp := sessionToResponse(session.Info{
+		ID:            "sess-receipt",
+		Template:      "myrig/worker",
+		Provider:      "codex",
+		PromptVersion: "v6",
+		PromptSHA:     "rendered-sha",
+	}, nil)
+	if resp.PromptVersion != "v6" || resp.PromptSHA != "rendered-sha" {
+		t.Fatalf("response prompt receipt = (%q, %q)", resp.PromptVersion, resp.PromptSHA)
+	}
+
+	raw, err := json.Marshal(sessionToResponse(session.Info{ID: "legacy"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"prompt_version"`) || strings.Contains(string(raw), `"prompt_sha"`) {
+		t.Fatalf("legacy response synthesized prompt receipt: %s", raw)
+	}
+}
+
 func TestHandleSessionStopReturnsOKWithID(t *testing.T) {
 	fs := newSessionFakeState(t)
 	h := newTestCityHandler(t, fs)

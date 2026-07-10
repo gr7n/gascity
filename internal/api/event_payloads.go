@@ -354,8 +354,9 @@ func MoleculeResolvedPayloadJSON(p MoleculeResolvedPayload) json.RawMessage {
 //   - CostUSDEstimate=0 does NOT mean "this op cost nothing"; it means
 //     either tokens or pricing was not wired.
 //   - Empty Model / PromptVersion / PromptSHA do NOT mean "no model" or
-//     "version unknown"; they mean source-side wiring has not yet
-//     propagated metadata into the event.
+//     "version unknown"; they mean the source did not observe that data.
+//     Prompt receipts are persisted for newly rendered starts; legacy sessions
+//     remain absent rather than being reconstructed from today's template.
 //
 // Aggregations that sum across events (per-agent cost, per-rig token
 // volumes) MUST filter to events that actually carry the field — for
@@ -404,17 +405,17 @@ type WorkerOperationEventPayload struct {
 	// PromptVersion is the human-readable template version label from
 	// frontmatter (`version:` field). Surfaced in dashboards for grouping.
 	//
-	// Wired: TODO — promptmeta.FrontMatter is computed (PR #1272) but
-	// not propagated through session metadata into operation events
-	// yet. Currently always absent on the wire.
-	PromptVersion string `json:"prompt_version,omitempty" doc:"Template version frontmatter (best-effort, currently always absent; #1256 follow-up)."`
-	// PromptSHA is the SHA-256 hex digest of the rendered prompt.
+	// Wired: YES — sourced from the rendered prompt receipt persisted on the
+	// session at startup. Legacy sessions may be absent.
+	PromptVersion string `json:"prompt_version,omitempty" doc:"Template version frontmatter from the persisted startup prompt receipt (best-effort; legacy sessions may be absent)."`
+	// PromptSHA is the SHA-256 hex digest of the rendered template projection.
 	// Distinguishes two runs that share PromptVersion but differ in
-	// rendered bytes (unbumped template edit).
+	// rendered template bytes (unbumped template edit). Runtime delivery
+	// envelopes added after rendering are deliberately excluded.
 	//
-	// Wired: TODO — promptmeta.SHA is computed (PR #1272) but not
-	// propagated through session metadata yet. Currently always absent.
-	PromptSHA string `json:"prompt_sha,omitempty" doc:"SHA-256 of the rendered prompt (best-effort, currently always absent; #1256 follow-up)."`
+	// Wired: YES — sourced from the rendered prompt receipt persisted on the
+	// session at startup. Legacy sessions may be absent.
+	PromptSHA string `json:"prompt_sha,omitempty" doc:"SHA-256 of the rendered template projection from the persisted startup receipt (includes configured template fragments; excludes runtime delivery envelopes; legacy sessions may be absent)."`
 	// BeadID is the work bead this operation is acting on, when one
 	// exists. Empty for operations not tied to a bead (e.g. lifecycle
 	// transitions).

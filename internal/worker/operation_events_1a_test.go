@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 // TestOperationEventCarriesAgentNameFromMetadata verifies the 1a addition
@@ -60,6 +62,33 @@ func TestOperationEventCarriesAgentNameFromAliasFallback(t *testing.T) {
 	}
 	if payload.AgentName != "myrig/polecat-alias" {
 		t.Errorf("AgentName = %q, want alias fallback", payload.AgentName)
+	}
+}
+
+func TestOperationEventCarriesPersistedPromptReceipt(t *testing.T) {
+	recorder := &recordingEventRecorder{}
+	receipt := &sessionpkg.PromptReceipt{Version: "v8", SHA: "rendered-sha"}
+	handle, _, _, _ := newTestSessionHandleWithRecorder(t, SessionSpec{
+		Profile:  ProfileClaudeTmuxCLI,
+		Template: "polecat",
+		Alias:    "opaque-worker-42",
+		Title:    "Opaque worker",
+		Command:  "claude",
+		WorkDir:  t.TempDir(),
+		Provider: "claude",
+		Metadata: sessionpkg.WithPromptReceiptMetadata(nil, receipt),
+	}, recorder)
+
+	if err := handle.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var payload operationEventPayload
+	if err := json.Unmarshal(lastRecordedWorkerOperation(t, recorder).Payload, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if payload.PromptVersion != receipt.Version || payload.PromptSHA != receipt.SHA {
+		t.Fatalf("prompt receipt = (%q, %q), want (%q, %q)", payload.PromptVersion, payload.PromptSHA, receipt.Version, receipt.SHA)
 	}
 }
 
