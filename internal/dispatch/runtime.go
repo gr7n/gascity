@@ -14,6 +14,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/controlkind"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
@@ -169,30 +170,15 @@ func ProcessControl(store beads.Store, bead beads.Bead, opts ProcessOptions) (Co
 		return result, err
 	}
 
-	switch bead.Metadata[beadmeta.KindMetadataKey] {
-	case beadmeta.KindRetry:
-		return processRetryControl(store, bead, opts)
-	case beadmeta.KindRalph:
-		return processRalphControl(store, bead, opts)
-	case beadmeta.KindCheck:
-		return processRalphCheck(store, bead, opts)
-	case beadmeta.KindRetryEval:
-		return processRetryEval(store, bead, opts)
-	case beadmeta.KindFanout:
-		return processFanout(store, bead, opts)
-	case beadmeta.KindDrain:
-		return processDrain(store, bead, opts)
-	case beadmeta.KindScopeCheck:
-		return processScopeCheck(store, bead, opts)
-	case beadmeta.KindWorkflowFinalize:
-		return processWorkflowFinalize(store, bead, opts)
-	default:
+	handler, ok := controlHandlerFor(bead.Metadata[beadmeta.KindMetadataKey])
+	if !ok {
 		return ControlResult{}, fmt.Errorf("%s: unsupported control bead kind %q", bead.ID, bead.Metadata[beadmeta.KindMetadataKey])
 	}
+	return handler(store, bead, opts)
 }
 
 func closeOrphanedControl(store beads.Store, bead beads.Bead, opts ProcessOptions) (ControlResult, bool, error) {
-	if bead.Metadata[beadmeta.KindMetadataKey] == beadmeta.KindWorkflowFinalize {
+	if controlkind.SkipsOrphanedWorkflowRootClose(bead.Metadata[beadmeta.KindMetadataKey]) {
 		return ControlResult{}, false, nil
 	}
 	rootID := strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
@@ -1316,15 +1302,11 @@ func canSkipScopeMemberWithDeps(deps []beads.Dep, pending map[string]beads.Bead)
 	return true
 }
 
-type scopeSkipDepBatchLister interface {
-	DepListBatch(ids []string) (map[string][]beads.Dep, error)
-}
-
 func loadDownDepsForScopeSkip(store beads.Store, ids []string) (map[string][]beads.Dep, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if batch, ok := store.(scopeSkipDepBatchLister); ok {
+	if batch, ok := store.(beads.DepBatchLister); ok {
 		deps, err := batch.DepListBatch(ids)
 		if err != nil {
 			return nil, fmt.Errorf("batch listing scope skip deps: %w", err)

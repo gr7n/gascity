@@ -202,6 +202,34 @@ func TestMemStoreListByLabel(t *testing.T) {
 	}
 }
 
+func TestMemStoreListLabelPrefix(t *testing.T) {
+	s := beads.NewMemStore()
+
+	if _, err := s.Create(beads.Bead{Title: "lint", Labels: []string{"order-run:lint"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(beads.Bead{Title: "unrelated", Labels: []string{"order-tracking"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(beads.Bead{Title: "sweep", Labels: []string{"order-run:sweep", "extra"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.List(beads.ListQuery{LabelPrefix: "order-run:", Sort: beads.SortCreatedDesc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List(LabelPrefix) returned %d beads, want 2", len(got))
+	}
+	if got[0].Title != "sweep" {
+		t.Errorf("got[0].Title = %q, want %q (newest first)", got[0].Title, "sweep")
+	}
+	if got[1].Title != "lint" {
+		t.Errorf("got[1].Title = %q, want %q", got[1].Title, "lint")
+	}
+}
+
 func TestMemStoreListOpenExcludesClosedByDefault(t *testing.T) {
 	s := beads.NewMemStore()
 

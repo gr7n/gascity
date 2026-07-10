@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -36,6 +37,25 @@ type captureGraphStore struct {
 	beads.Store
 	plan    *beads.GraphApplyPlan
 	storage beads.StorageClass
+}
+
+type captureLastOrderRunStore struct {
+	beads.Store
+	calls         []string
+	snapshotCalls int
+	last          time.Time
+	snapshot      map[string]time.Time
+	err           error
+}
+
+func (s *captureLastOrderRunStore) LastOrderRun(name string) (time.Time, error) {
+	s.calls = append(s.calls, name)
+	return s.last, s.err
+}
+
+func (s *captureLastOrderRunStore) LastOrderRuns() (map[string]time.Time, error) {
+	s.snapshotCalls++
+	return s.snapshot, s.err
 }
 
 func underlyingPolicyStoreForTest(store beads.Store) beads.Store {
@@ -72,6 +92,112 @@ func TestBeadPolicyStorePreservesConditionalAssignmentReleaser(t *testing.T) {
 	}
 	if got.Status != "open" || got.Assignee != "" {
 		t.Fatalf("released bead = %+v, want open and unassigned", got)
+	}
+}
+
+func TestBeadPolicyStorePreservesLastOrderRunIndex(t *testing.T) {
+	want := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	backing := &captureLastOrderRunStore{Store: beads.NewMemStore(), last: want}
+	wrapped := wrapStoreWithBeadPolicies(backing, &config.City{})
+
+	indexed, ok := wrapped.(interface {
+		LastOrderRun(name string) (time.Time, error)
+	})
+	if !ok {
+		t.Fatal("wrapped store implements LastOrderRun = false")
+	}
+	got, err := indexed.LastOrderRun("digest")
+	if err != nil {
+		t.Fatalf("LastOrderRun: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("LastOrderRun = %s, want %s", got, want)
+	}
+	if len(backing.calls) != 1 || backing.calls[0] != "digest" {
+		t.Fatalf("inner LastOrderRun calls = %v, want [digest]", backing.calls)
+	}
+}
+
+func TestBeadPolicyStorePreservesLastOrderRunsSnapshot(t *testing.T) {
+	want := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	backing := &captureLastOrderRunStore{
+		Store:    beads.NewMemStore(),
+		snapshot: map[string]time.Time{"digest": want},
+	}
+	wrapped := wrapStoreWithBeadPolicies(backing, &config.City{})
+
+	indexed, ok := wrapped.(interface {
+		LastOrderRuns() (map[string]time.Time, error)
+	})
+	if !ok {
+		t.Fatal("wrapped store implements LastOrderRuns = false")
+	}
+	got, err := indexed.LastOrderRuns()
+	if err != nil {
+		t.Fatalf("LastOrderRuns: %v", err)
+	}
+	if !got["digest"].Equal(want) {
+		t.Fatalf("LastOrderRuns[digest] = %s, want %s", got["digest"], want)
+	}
+	if backing.snapshotCalls != 1 {
+		t.Fatalf("inner LastOrderRuns calls = %d, want 1", backing.snapshotCalls)
+	}
+}
+
+func TestBeadPolicyStoreWithoutSnapshotDoesNotAdvertiseLastOrderRuns(t *testing.T) {
+	wrapped := wrapStoreWithBeadPolicies(beads.NewMemStore(), &config.City{})
+	if _, ok := wrapped.(interface {
+		LastOrderRuns() (map[string]time.Time, error)
+	}); ok {
+		t.Fatal("wrapped store implements LastOrderRuns = true, want false")
+	}
+}
+
+func TestBeadPolicyStorePreservesLastOrderRunIndexError(t *testing.T) {
+	wantErr := errors.New("index unavailable")
+	backing := &captureLastOrderRunStore{Store: beads.NewMemStore(), err: wantErr}
+	wrapped := wrapStoreWithBeadPolicies(backing, &config.City{})
+
+	indexed := wrapped.(interface {
+		LastOrderRun(name string) (time.Time, error)
+	})
+	if _, err := indexed.LastOrderRun("digest"); !errors.Is(err, wantErr) {
+		t.Fatalf("LastOrderRun error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestBeadPolicyStoreLastOrderRunFallbackUsesOrderRunHistory(t *testing.T) {
+	wrapped := wrapStoreWithBeadPolicies(beads.NewMemStore(), &config.City{})
+	tracked, err := wrapped.Create(beads.Bead{
+		Title:  "order:digest",
+		Status: "closed",
+		Labels: []string{"order-tracking", "order-run:digest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	manual, err := wrapped.Create(beads.Bead{
+		Title:  "order:digest",
+		Status: "closed",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manual.CreatedAt.After(tracked.CreatedAt) {
+		t.Fatalf("test setup invalid: manual.CreatedAt=%s, tracked.CreatedAt=%s", manual.CreatedAt, tracked.CreatedAt)
+	}
+
+	indexed := wrapped.(interface {
+		LastOrderRun(name string) (time.Time, error)
+	})
+	got, err := indexed.LastOrderRun("digest")
+	if err != nil {
+		t.Fatalf("LastOrderRun: %v", err)
+	}
+	if !got.Equal(manual.CreatedAt) {
+		t.Fatalf("LastOrderRun = %s, want newer manual run %s", got, manual.CreatedAt)
 	}
 }
 
@@ -643,6 +769,56 @@ func (s *countCaptureStore) Count(_ context.Context, query beads.ListQuery, excl
 	s.gotQuery = query
 	s.gotExcludes = excludeTypes
 	return 4, s.countErr
+}
+
+type depBatchCaptureStore struct {
+	beads.Store
+	depBatchCalls int
+	gotIDs        []string
+}
+
+func (s *depBatchCaptureStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	s.depBatchCalls++
+	s.gotIDs = append([]string(nil), ids...)
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	return nil, fmt.Errorf("inner store does not support DepListBatch")
+}
+
+func TestBeadPolicyStorePreservesDepListBatch(t *testing.T) {
+	inner := &depBatchCaptureStore{Store: beads.NewMemStore()}
+	dependsOn, err := inner.Create(beads.Bead{Title: "depends on"})
+	if err != nil {
+		t.Fatalf("Create(dependsOn): %v", err)
+	}
+	issue, err := inner.Create(beads.Bead{Title: "issue"})
+	if err != nil {
+		t.Fatalf("Create(issue): %v", err)
+	}
+	if err := inner.DepAdd(issue.ID, dependsOn.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd: %v", err)
+	}
+	store := wrapStoreWithBeadPolicies(inner, &config.City{})
+
+	batch, ok := store.(beads.DepBatchLister)
+	if !ok {
+		t.Fatal("policy store does not implement beads.DepBatchLister")
+	}
+	depsByID, err := batch.DepListBatch([]string{issue.ID, dependsOn.ID})
+	if err != nil {
+		t.Fatalf("DepListBatch: %v", err)
+	}
+	if inner.depBatchCalls != 1 {
+		t.Fatalf("inner DepListBatch calls = %d, want 1", inner.depBatchCalls)
+	}
+	if len(inner.gotIDs) != 2 || inner.gotIDs[0] != issue.ID || inner.gotIDs[1] != dependsOn.ID {
+		t.Fatalf("inner got IDs = %v, want [%s %s]", inner.gotIDs, issue.ID, dependsOn.ID)
+	}
+	deps := depsByID[issue.ID]
+	if len(deps) != 1 || deps[0].IssueID != issue.ID || deps[0].DependsOnID != dependsOn.ID || deps[0].Type != "blocks" {
+		t.Fatalf("deps[%s] = %v, want %s -> %s", issue.ID, deps, issue.ID, dependsOn.ID)
+	}
 }
 
 func TestBeadPolicyStoreCountExpandsReadTier(t *testing.T) {

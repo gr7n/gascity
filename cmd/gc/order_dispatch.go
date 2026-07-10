@@ -1528,7 +1528,10 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 
 	// Stamp the created wisp through the store contract rather than a raw
 	// bd subprocess so controller dispatch stays provider-aware.
-	update := beads.UpdateOpts{Labels: []string{"order-run:" + scoped}}
+	update := beads.UpdateOpts{
+		Labels:   []string{"order-run:" + scoped},
+		Metadata: orderRootProvenanceMetadata(a, trackingID),
+	}
 	if a.Trigger == "event" && m.ep != nil {
 		update.Labels = append(update.Labels,
 			fmt.Sprintf("order:%s", scoped),
@@ -1536,7 +1539,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		)
 	}
 	if a.Pool != "" {
-		update.Metadata = map[string]string{beadmeta.RoutedToMetadataKey: pool}
+		update.Metadata[beadmeta.RoutedToMetadataKey] = pool
 	}
 	if err := store.Update(rootID, update); err != nil {
 		// Label failure is critical for duplicate-dispatch prevention.
@@ -1560,6 +1563,17 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 
 	// Label tracking bead with outcome.
 	orders.NewStore(beads.OrdersStore{Store: store}).SetOutcome(trackingID, orders.RunOutcomeWisp) //nolint:errcheck // best-effort
+}
+
+func orderRootProvenanceMetadata(a orders.Order, trackingID string) map[string]string {
+	metadata := map[string]string{
+		beadmeta.OrderNameMetadataKey:       a.Name,
+		beadmeta.OrderScopedNameMetadataKey: a.ScopedName(),
+	}
+	if trackingID != "" {
+		metadata[beadmeta.OrderTrackingBeadIDMetadataKey] = trackingID
+	}
+	return metadata
 }
 
 // orderRigSuspended reports whether the order targets a suspended rig.

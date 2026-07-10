@@ -1,6 +1,7 @@
 package formula
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
@@ -74,6 +75,53 @@ func TestApplyGraphControlsRecursesIntoNestedChildren(t *testing.T) {
 	}
 	if !containsString(finalizer.Needs, "member-scope-check") {
 		t.Fatalf("workflow-finalize needs = %v, want nested scope-check sink", finalizer.Needs)
+	}
+}
+
+func TestApplyGraphControlsStoresInlineFanoutTemplate(t *testing.T) {
+	t.Parallel()
+
+	f := &Formula{
+		Contract: "graph.v2",
+		Steps: []*Step{
+			{
+				ID:    "survey",
+				Title: "Survey",
+				OnComplete: &OnCompleteSpec{
+					ForEach: "output.items",
+					Template: []*Step{
+						{
+							ID:    "{target}.review-{item.id}",
+							Title: "Review {item.id}",
+							Metadata: map[string]string{
+								"gc.run_target": "{item.target}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ApplyGraphControls(f)
+
+	steps := collectGraphSteps(f.Steps)
+	fanout := findGraphStepByID(steps, "survey-fanout")
+	if fanout == nil {
+		t.Fatal("missing survey-fanout control")
+	}
+	if got := fanout.Metadata["gc.bond"]; got != "" {
+		t.Fatalf("survey-fanout gc.bond = %q, want empty inline template fanout", got)
+	}
+	var template []*Step
+	if err := json.Unmarshal([]byte(fanout.Metadata["gc.fanout_template"]), &template); err != nil {
+		t.Fatalf("survey-fanout gc.fanout_template invalid JSON: %v", err)
+	}
+	if len(template) != 1 || template[0].ID != "{target}.review-{item.id}" {
+		t.Fatalf("template = %+v, want one review step", template)
+	}
+	if got := template[0].Metadata["gc.run_target"]; got != "{item.target}" {
+		t.Fatalf("template gc.run_target = %q, want {item.target}", got)
 	}
 }
 

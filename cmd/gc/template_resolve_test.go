@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gastownhall/gascity/internal/config"
+)
 
 func TestT3BridgeStartupEnvelopeModel_PrefersResolvedEnvModel(t *testing.T) {
 	tp := TemplateParams{
@@ -27,14 +31,40 @@ func TestT3BridgeStartupEnvelopeModel_UsesCurrentProviderDefaults(t *testing.T) 
 			want: "gpt-5-codex",
 		},
 		{
+			// Wrapped codex alias resolves to the codex family default, not
+			// the claude fallback (regression: an exact name match used to
+			// stamp claude-opus into a codex session's envelope).
 			name: "codex-mini",
 			tp:   TemplateParams{Env: map[string]string{"GC_PROVIDER": "codex-mini"}},
-			want: "claude-opus-4-6",
+			want: "gpt-5-codex",
 		},
 		{
 			name: "claude",
 			tp:   TemplateParams{Env: map[string]string{"GC_PROVIDER": "claude"}},
 			want: "claude-opus-4-6",
+		},
+		{
+			name: "claude wrapper alias",
+			tp:   TemplateParams{Env: map[string]string{"GC_PROVIDER": "claude-max"}},
+			want: "claude-opus-4-6",
+		},
+		{
+			// Custom provider with a declared base: the builtin ancestor
+			// decides the family even though the name matches nothing.
+			name: "custom provider with codex ancestor",
+			tp: TemplateParams{
+				Env:              map[string]string{"GC_PROVIDER": "speedy"},
+				ResolvedProvider: &config.ResolvedProvider{Name: "speedy", BuiltinAncestor: "codex"},
+			},
+			want: "gpt-5-codex",
+		},
+		{
+			// Fully custom provider with no resolvable family: no model is
+			// guessed. requiredThreadModel matches threads by model, so a
+			// fabricated default would force thread recreation on resume.
+			name: "fully custom provider omits model",
+			tp:   TemplateParams{Env: map[string]string{"GC_PROVIDER": "bespoke"}},
+			want: "",
 		},
 	}
 

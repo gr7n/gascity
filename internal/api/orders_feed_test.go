@@ -183,12 +183,13 @@ func TestBuildOrderRunFeedItemsUsesAllOrdersForDisabledExecMetadata(t *testing.T
 	}
 }
 
-func TestOrderTrackingUpdatedAtLogsLookupFailure(t *testing.T) {
-	front := orders.NewStore(beads.OrdersStore{Store: labelFailListStore{
-		Store:     beads.NewMemStore(),
-		failLabel: "order-run:digest",
-	}})
-	run := orders.OrderRun{
+func TestLatestOrderRunTimesLogsLookupFailure(t *testing.T) {
+	store := labelPrefixFailListStore{
+		Store:      beads.NewMemStore(),
+		failPrefix: "order-run:",
+	}
+	front := orders.NewStore(beads.OrdersStore{Store: store})
+	tracking := orders.OrderRun{
 		Scoped:    "digest",
 		CreatedAt: time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC),
 	}
@@ -201,12 +202,97 @@ func TestOrderTrackingUpdatedAtLogsLookupFailure(t *testing.T) {
 	}
 	defer func() { orderFeedLogf = origLogf }()
 
-	got := orderTrackingUpdatedAt(front, run)
-	if !got.Equal(run.CreatedAt) {
-		t.Fatalf("updatedAt = %s, want %s", got, run.CreatedAt)
+	runTimes := latestOrderRunTimes(front, "myrig")
+	if len(runTimes) != 0 {
+		t.Fatalf("runTimes = %v, want empty on scan failure", runTimes)
 	}
-	if !strings.Contains(logs.String(), "order feed update lookup failed") {
-		t.Fatalf("logs = %q, want update lookup failure warning", logs.String())
+	if got := orderTrackingUpdatedAt(tracking, runTimes); !got.Equal(tracking.CreatedAt) {
+		t.Fatalf("updatedAt = %s, want %s", got, tracking.CreatedAt)
+	}
+	if !strings.Contains(logs.String(), "order feed run scan failed") {
+		t.Fatalf("logs = %q, want run scan failure warning", logs.String())
+	}
+}
+
+func TestBuildOrderRunFeedItemsUsesLatestRunForUpdatedAt(t *testing.T) {
+	state := newFakeState(t)
+	state.cityBeadStore = beads.NewMemStore()
+	state.allOrders = []orders.Order{
+		{Name: "digest", Exec: "scripts/digest.sh", Trigger: "cooldown", Interval: "1h"},
+	}
+
+	tracking, err := state.cityBeadStore.Create(beads.Bead{
+		Title:  "order:digest",
+		Labels: []string{"order-tracking", "order-run:digest", "wisp"},
+	})
+	if err != nil {
+		t.Fatalf("create tracking bead: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	run, err := state.cityBeadStore.Create(beads.Bead{
+		Title:  "order run",
+		Labels: []string{"order-run:digest", "wisp"},
+	})
+	if err != nil {
+		t.Fatalf("create run bead: %v", err)
+	}
+
+	got, err := buildOrderRunFeedItems(state, "city", "test-city")
+	if err != nil {
+		t.Fatalf("buildOrderRunFeedItems: %v", err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(got.Items))
+	}
+	item := got.Items[0]
+	if item.BeadID != tracking.ID {
+		t.Fatalf("bead_id = %q, want %q", item.BeadID, tracking.ID)
+	}
+	wantUpdated := run.CreatedAt.Format(time.RFC3339Nano)
+	if item.UpdatedAt != wantUpdated {
+		t.Fatalf("updated_at = %q, want run bead time %q", item.UpdatedAt, wantUpdated)
+	}
+	if item.StartedAt != tracking.CreatedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("started_at = %q, want tracking bead time %q", item.StartedAt, tracking.CreatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestBuildOrderRunFeedItemsBatchesOrderRunLookups(t *testing.T) {
+	const orderCount = 500
+	store := &listCountingStore{MemStore: beads.NewMemStore()}
+	state := newFakeState(t)
+	state.cityBeadStore = store
+	state.stores = nil
+
+	allOrders := make([]orders.Order, 0, orderCount)
+	for i := 0; i < orderCount; i++ {
+		name := fmt.Sprintf("order-%04d", i)
+		allOrders = append(allOrders, orders.Order{Name: name, Formula: "review"})
+		if _, err := store.Create(beads.Bead{
+			Title:  "order:" + name,
+			Labels: []string{"order-tracking", "order-run:" + name, "wisp"},
+		}); err != nil {
+			t.Fatalf("create tracking bead: %v", err)
+		}
+		if _, err := store.Create(beads.Bead{
+			Title:  "run",
+			Labels: []string{"order-run:" + name, "wisp"},
+		}); err != nil {
+			t.Fatalf("create run bead: %v", err)
+		}
+	}
+	state.allOrders = allOrders
+	store.lists = 0
+
+	got, err := buildOrderRunFeedItems(state, "city", workflowCityScopeRef(state.CityName()))
+	if err != nil {
+		t.Fatalf("buildOrderRunFeedItems: %v", err)
+	}
+	if len(got.Items) != orderCount {
+		t.Fatalf("items = %d, want %d", len(got.Items), orderCount)
+	}
+	if store.lists > 3 {
+		t.Fatalf("store List calls = %d, want <= 3", store.lists)
 	}
 }
 
@@ -214,16 +300,28 @@ type workflowProjectionStore struct {
 	*beads.MemStore
 }
 
-type labelFailListStore struct {
+type labelPrefixFailListStore struct {
 	beads.Store
-	failLabel string
+	failPrefix string
 }
 
-func (s labelFailListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
-	if query.Label == s.failLabel {
+func (s labelPrefixFailListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if query.LabelPrefix == s.failPrefix {
 		return nil, errors.New("list failed")
 	}
 	return s.Store.List(query)
+}
+
+// listCountingStore counts List calls so tests can guard against rebuilding the
+// order feed with one backing query per tracked order.
+type listCountingStore struct {
+	*beads.MemStore
+	lists int
+}
+
+func (s *listCountingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	s.lists++
+	return s.MemStore.List(query)
 }
 
 func (s *workflowProjectionStore) List(query beads.ListQuery) ([]beads.Bead, error) {

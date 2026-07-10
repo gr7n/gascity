@@ -1518,7 +1518,9 @@ func nativePriorityFromIssue(issue *beadslib.Issue) *int {
 
 func nativeIssueFilterFromListQuery(query ListQuery) beadslib.IssueFilter {
 	limit := query.Limit
-	if query.Sort != SortDefault || query.TierMode == TierWisps {
+	if query.Sort != SortDefault || query.TierMode == TierWisps || query.LabelPrefix != "" {
+		// Upstream filters labels by exact match only; ApplyListQuery applies
+		// the prefix match after the fetch, so the limit must apply post-filter.
 		limit = 0
 	}
 	filter := beadslib.IssueFilter{

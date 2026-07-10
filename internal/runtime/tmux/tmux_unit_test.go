@@ -17,6 +17,52 @@ func TestProviderEnvSkipsEscapeForCopilot(t *testing.T) {
 	}
 }
 
+// TestProviderEnvFamily locks in the GC_PROVIDER normalization used by the
+// tmux behavior gates: known families (including wrapped aliases that
+// normalize onto one) resolve to the family name, while custom providers
+// whose family the name does not reveal resolve to "" so callers fall back
+// to process-tree detection instead of assuming default behavior.
+func TestProviderEnvFamily(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     string
+	}{
+		{"", ""},
+		{"codex", "codex"},
+		{"codex-mini", "codex"},
+		{"gemini", "gemini"},
+		{"my-gemini-fast", "gemini"},
+		{"kimi", "kimi"},
+		{"kimi-pro", "kimi"},
+		{"claude", "claude"},
+		{"claude-eco", "claude"},
+		{"copilot", "copilot"},
+		{"grok", "grok"},
+		{"my-pi/tmux", "pi"},
+		{"antigravity", "antigravity"},
+		{"opencode", "opencode"},
+		// Custom wrappers: nothing in the name reveals the family. The gate
+		// must treat these like an unset GC_PROVIDER (process-tree fallback),
+		// not like a provider with known default behavior.
+		{"bespoke", ""},
+		{"router-exec", ""},
+	}
+	for _, tt := range tests {
+		if got := providerEnvFamily(tt.provider); got != tt.want {
+			t.Errorf("providerEnvFamily(%q) = %q, want %q", tt.provider, got, tt.want)
+		}
+	}
+}
+
+// TestProviderEnvSkipsEscapeUnknownProvider: a custom provider name must not
+// skip the Escape on the strength of the env value alone — the process-tree
+// fallback in shouldSendEscapeBeforeEnter makes that call.
+func TestProviderEnvSkipsEscapeUnknownProvider(t *testing.T) {
+	if providerEnvSkipsEscape("bespoke") {
+		t.Fatal("unknown custom provider must not skip pre-enter Escape from env alone")
+	}
+}
+
 // TestComputeExcludingKillSet_SelfCloseExcludesCallerKeepsAgent locks in the
 // fix for the self-close wedge: when `gc session close` runs from inside the
 // pane it is tearing down, the caller is a descendant of the pane leader (the

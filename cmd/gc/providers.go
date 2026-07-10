@@ -1121,7 +1121,27 @@ func newHybridProvider(sc config.SessionConfig, cityName, cityPath string) (runt
 	if v := os.Getenv("GC_HYBRID_REMOTE_MATCH"); v != "" {
 		pattern = v
 	}
-	return sessionhybrid.New(local, remote, func(name string) bool {
-		return pattern != "" && strings.Contains(name, pattern)
-	}), nil
+	return sessionhybrid.New(local, remote, hybridRemoteMatcher(pattern)), nil
+}
+
+func hybridRemoteMatcher(pattern string) func(string) bool {
+	parts := strings.Split(pattern, ",")
+	fragments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			fragments = append(fragments, part)
+		}
+	}
+	return func(name string) bool {
+		if name == "" {
+			return false
+		}
+		for _, fragment := range fragments {
+			if name == fragment || strings.Contains(name, fragment) {
+				return true
+			}
+		}
+		return false
+	}
 }

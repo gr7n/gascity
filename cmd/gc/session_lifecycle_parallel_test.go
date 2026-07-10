@@ -6902,6 +6902,37 @@ func TestSessionTranscriptProvider(t *testing.T) {
 			want:     "kimi",
 		},
 		{
+			// Wrapper provider: the command base name is the wrapper binary,
+			// which the transcript layer cannot map to a family. The session's
+			// recorded family must win so the stale-resume probe stays
+			// probeable (regression: the base-name guess used to mask it).
+			name:     "metadata provider_kind wins over wrapper command base name",
+			rp:       &config.ResolvedProvider{Command: "aimux run claude --"},
+			metadata: map[string]string{"provider_kind": "claude"},
+			want:     "claude",
+		},
+		{
+			name:     "metadata builtin_ancestor wins over provider_kind and command",
+			rp:       &config.ResolvedProvider{Command: "aimux run claude --"},
+			metadata: map[string]string{"builtin_ancestor": "claude", "provider_kind": "stale-kind"},
+			want:     "claude",
+		},
+		{
+			name: "resolved builtin ancestor wins over metadata",
+			rp:   &config.ResolvedProvider{BuiltinAncestor: "kimi", Command: "kimi-wrapper"},
+			metadata: map[string]string{
+				"builtin_ancestor": "claude",
+				"provider_kind":    "claude",
+			},
+			want: "kimi",
+		},
+		{
+			name:     "command base name used when metadata has no family keys",
+			rp:       &config.ResolvedProvider{Command: "/usr/local/bin/claude --resume"},
+			metadata: map[string]string{"provider": "my-claude-alias"},
+			want:     "claude",
+		},
+		{
 			name:     "metadata provider fallback",
 			rp:       nil,
 			metadata: map[string]string{"provider": "codex"},

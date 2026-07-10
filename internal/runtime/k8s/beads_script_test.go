@@ -16,9 +16,10 @@ func TestBeadsScriptEnsureReadyDoesNotAutoInitSharedWorkspace(t *testing.T) {
 	result := runBeadsScript(t, beadsScriptOptions{
 		Op: "ensure-ready",
 		Env: map[string]string{
-			"GC_K8S_IMAGE": "gc-beads:latest",
-			"GC_DOLT_HOST": "canonical-dolt.example.com",
-			"GC_DOLT_PORT": "4406",
+			"GC_K8S_IMAGE":            "gc-beads:latest",
+			"GC_DOLT_HOST":            "canonical-dolt.example.com",
+			"GC_DOLT_PORT":            "4406",
+			"GC_K8S_DOLT_SECRET_NAME": "dolt-credentials",
 		},
 	})
 	if result.err != nil {
@@ -29,6 +30,29 @@ func TestBeadsScriptEnsureReadyDoesNotAutoInitSharedWorkspace(t *testing.T) {
 	}
 	if _, ok := result.manifestEnv["GC_DOLT_PORT"]; ok {
 		t.Fatalf("manifest unexpectedly projected GC_DOLT_PORT: %#v", result.manifestEnv)
+	}
+	if got := result.manifestEnv["BEADS_DOLT_SERVER_HOST"]; got != "canonical-dolt.example.com" {
+		t.Fatalf("BEADS_DOLT_SERVER_HOST = %q, want canonical Dolt host", got)
+	}
+	if got := result.manifestEnv["BEADS_DOLT_SERVER_PORT"]; got != "4406" {
+		t.Fatalf("BEADS_DOLT_SERVER_PORT = %q, want canonical Dolt port", got)
+	}
+	if got := result.manifestEnv["HOME"]; got != "/home/ubuntu" {
+		t.Fatalf("HOME = %q, want runner user's home", got)
+	}
+	if !strings.Contains(result.manifest, `"name": "BEADS_DOLT_SERVER_USER"`) ||
+		!strings.Contains(result.manifest, `"name": "dolt-credentials"`) ||
+		!strings.Contains(result.manifest, `"name": "BEADS_DOLT_PASSWORD"`) ||
+		!strings.Contains(result.manifest, `"key": "BEADS_DOLT_PASSWORD"`) ||
+		!strings.Contains(result.manifest, `"name": "BEADS_DOLT_SERVER_PASSWORD"`) ||
+		!strings.Contains(result.manifest, `"optional": true`) {
+		t.Fatalf("manifest does not project Dolt credential secret refs:\n%s", result.manifest)
+	}
+	if !strings.Contains(result.manifest, `"mountPath": "/workspace"`) {
+		t.Fatalf("manifest does not mount writable workspace:\n%s", result.manifest)
+	}
+	if !strings.Contains(result.manifest, `"emptyDir": {}`) {
+		t.Fatalf("manifest does not declare workspace emptyDir:\n%s", result.manifest)
 	}
 	assertCallNotContains(t, result.callLog, "bd init")
 	assertCallNotContains(t, result.callLog, "config set issue_prefix")
@@ -164,7 +188,7 @@ func TestBeadsScriptListUsesScopedWorkdir(t *testing.T) {
 		t.Fatalf("gc-beads-k8s list error = %v\noutput:\n%s", result.err, result.output)
 	}
 	assertCallContains(t, result.callLog, "/workspace/frontend")
-	assertCallContains(t, result.callLog, "list --json --limit 0 --all")
+	assertCallContains(t, result.callLog, "list --json --include-infra --include-gates --limit 0")
 	assertCallContains(t, result.callLog, `export BEADS_DIR="$workdir/.beads"`)
 	assertCallContains(t, result.callLog, `git config --global beads.role`)
 }
@@ -191,6 +215,33 @@ func TestBeadsScriptCloseForcesCrossActorClose(t *testing.T) {
 	assertCallContains(t, result.callLog, "close --force --json ga-orphan")
 }
 
+func TestBeadsScriptListSyncsExternalScopeMetadata(t *testing.T) {
+	scopeRoot := filepath.Join(t.TempDir(), "external-scope")
+	if err := os.MkdirAll(filepath.Join(scopeRoot, ".beads"), 0o755); err != nil {
+		t.Fatalf("mkdir .beads: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopeRoot, ".beads", "metadata.json"), []byte(`{"dolt_database":"scope_db"}`), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	result := runBeadsScript(t, beadsScriptOptions{
+		Op: "list",
+		Env: map[string]string{
+			"GC_CITY_PATH":                           "/city",
+			"GC_STORE_ROOT":                          scopeRoot,
+			"GC_K8S_BEADS_PROJECT_ID_OVERRIDES_JSON": `{"scope_db":"runner-project"}`,
+		},
+		ListOutput: "[]",
+	})
+	if result.err != nil {
+		t.Fatalf("gc-beads-k8s list external scope error = %v\noutput:\n%s", result.err, result.output)
+	}
+	assertCallContains(t, result.callLog, "exec -i gc-beads-runner")
+	assertCallContains(t, result.callLog, "/workspace/external/external-scope-")
+	assertCallContains(t, result.callLog, `{"scope_db":"runner-project"}`)
+	assertCallContains(t, result.callLog, "list --json --include-infra --include-gates --limit 0")
+}
+
 func TestBeadsScriptListDoesNotRewriteIssuePrefixPerCommand(t *testing.T) {
 	result := runBeadsScript(t, beadsScriptOptions{
 		Op: "list",
@@ -205,6 +256,22 @@ func TestBeadsScriptListDoesNotRewriteIssuePrefixPerCommand(t *testing.T) {
 		t.Fatalf("gc-beads-k8s list error = %v\noutput:\n%s", result.err, result.output)
 	}
 	assertCallNotContains(t, result.callLog, "config set issue_prefix")
+}
+
+func TestBeadsScriptListByLabelUsesBdFilter(t *testing.T) {
+	result := runBeadsScript(t, beadsScriptOptions{
+		Op:   "list-by-label",
+		Args: []string{"gc:session", "3"},
+		Env: map[string]string{
+			"GC_CITY_PATH":  "/city",
+			"GC_STORE_ROOT": "/city/frontend",
+		},
+		ListOutput: "[]",
+	})
+	if result.err != nil {
+		t.Fatalf("gc-beads-k8s list-by-label error = %v\noutput:\n%s", result.err, result.output)
+	}
+	assertCallContains(t, result.callLog, "list --json --include-infra --include-gates --label gc:session --limit 3")
 }
 
 func TestBeadsScriptReadyForwardsIncludeEphemeral(t *testing.T) {
@@ -278,6 +345,7 @@ type beadsScriptOptions struct {
 
 type beadsScriptResult struct {
 	manifestEnv map[string]string
+	manifest    string
 	callLog     string
 	output      string
 	err         error
@@ -327,8 +395,12 @@ fi
 if [[ "$joined" == *" wait --for=condition=Ready pod/gc-beads-runner "* ]]; then
   exit 0
 fi
+if [[ "$joined" == *" exec -i gc-beads-runner -- sh -c "* ]]; then
+  cat >/dev/null
+  exit 0
+fi
 if [[ "$joined" == *" exec gc-beads-runner -- sh -c "* ]]; then
-  if [[ "$*" == *"bd list --json --limit 0 --all"* ]]; then
+  if [[ "$*" == *"bd list --json"* ]]; then
     printf '%%s' "$list_output"
     exit 0
   fi
@@ -388,6 +460,7 @@ exit 1
 
 	return beadsScriptResult{
 		manifestEnv: manifestEnv,
+		manifest:    string(manifestBytes),
 		callLog:     string(callLogBytes),
 		output:      string(out),
 		err:         err,

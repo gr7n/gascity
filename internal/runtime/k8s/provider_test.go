@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/gastownhall/gascity/internal/runtime"
 )
@@ -51,6 +52,89 @@ func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	}
 	if port != "3308" {
 		t.Fatalf("port = %q, want 3308", port)
+	}
+}
+
+func TestParsePodProjectionEnv(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `[
+		{"name":"agent-tools","configMap":{"name":"agent-tools","defaultMode":365}}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", `[
+		{"name":"agent-tools","mountPath":"/opt/agent-tools","readOnly":true}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_ENV_JSON", `[
+		{"name":"PROVIDER_API_KEY","valueFrom":{"secretKeyRef":{"name":"provider-api-key","key":"PROVIDER_API_KEY"}}}
+	]`)
+
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		t.Fatalf("parsePodProjectionEnv() error = %v", err)
+	}
+
+	if got := projection.volumes[0].Name; got != "agent-tools" {
+		t.Fatalf("volume name = %q, want agent-tools", got)
+	}
+	if got := projection.volumes[0].ConfigMap.Name; got != "agent-tools" {
+		t.Fatalf("configmap name = %q, want agent-tools", got)
+	}
+	if got := *projection.volumes[0].ConfigMap.DefaultMode; got != 365 {
+		t.Fatalf("defaultMode = %d, want 365", got)
+	}
+	if got := projection.volumeMounts[0].MountPath; got != "/opt/agent-tools" {
+		t.Fatalf("mount path = %q, want /opt/agent-tools", got)
+	}
+	if got := projection.env[0].ValueFrom.SecretKeyRef.Name; got != "provider-api-key" {
+		t.Fatalf("secret name = %q, want provider-api-key", got)
+	}
+}
+
+func TestParsePodProjectionEnvRejectsInvalidJSON(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `not-json`)
+
+	if _, err := parsePodProjectionEnv(); err == nil || !strings.Contains(err.Error(), "GC_K8S_EXTRA_VOLUMES_JSON") {
+		t.Fatalf("parsePodProjectionEnv() error = %v, want GC_K8S_EXTRA_VOLUMES_JSON context", err)
+	}
+}
+
+func clearPodProjectionEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_EXTRA_VOLUMES_JSON",
+		"GC_K8S_EXTRA_VOLUME_MOUNTS_JSON",
+		"GC_K8S_EXTRA_ENV_JSON",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestTuneRESTClientRateLimits(t *testing.T) {
+	t.Setenv("GC_K8S_CLIENT_QPS", "")
+	t.Setenv("GC_K8S_CLIENT_BURST", "")
+
+	cfg, err := tuneRESTClientRateLimits(&rest.Config{})
+	if err != nil {
+		t.Fatalf("tuneRESTClientRateLimits() error = %v", err)
+	}
+	if cfg.QPS != 50 {
+		t.Fatalf("QPS = %v, want 50", cfg.QPS)
+	}
+	if cfg.Burst != 100 {
+		t.Fatalf("Burst = %d, want 100", cfg.Burst)
+	}
+
+	t.Setenv("GC_K8S_CLIENT_QPS", "75.5")
+	t.Setenv("GC_K8S_CLIENT_BURST", "150")
+	cfg, err = tuneRESTClientRateLimits(&rest.Config{})
+	if err != nil {
+		t.Fatalf("tuneRESTClientRateLimits() with env error = %v", err)
+	}
+	if cfg.QPS != 75.5 {
+		t.Fatalf("QPS = %v, want 75.5", cfg.QPS)
+	}
+	if cfg.Burst != 150 {
+		t.Fatalf("Burst = %d, want 150", cfg.Burst)
 	}
 }
 
@@ -225,6 +309,36 @@ func TestIsRunning(t *testing.T) {
 
 	if p.IsRunning("gc-test-agent") {
 		t.Error("IsRunning returned true for session with dead tmux")
+	}
+}
+
+func TestIsRunningUsesDynamicUserTmuxSocket(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.pods["gc-test-agent"].Annotations = map[string]string{}
+	fake.pods["gc-test-agent"].Annotations[podLinuxUsernameAnnotation] = "ubuntu"
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-0/default"))
+	fake.setExecResult("gc-test-agent",
+		tmuxCommand("ubuntu", []string{"tmux", "has-session", "-t", "main"}), "", nil)
+
+	if !p.IsRunning("gc-test-agent") {
+		t.Fatal("IsRunning returned false for dynamic-user tmux session")
+	}
+
+	foundUserTmux := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "sh" && c.cmd[1] == "-lc" &&
+			strings.Contains(c.cmd[2], "su -m 'ubuntu'") &&
+			strings.Contains(c.cmd[2], "tmux has-session -t main") {
+			foundUserTmux = true
+		}
+	}
+	if !foundUserTmux {
+		t.Fatalf("dynamic-user tmux check was not run; calls=%#v", fake.calls)
 	}
 }
 
@@ -576,6 +690,53 @@ func TestStartCreatesPodsAndWaits(t *testing.T) {
 	}
 	if pod.Annotations["gc-session-name"] != "gc-test-agent" {
 		t.Errorf("annotation gc-session-name = %q, want gc-test-agent", pod.Annotations["gc-session-name"])
+	}
+}
+
+func TestStartWaitsForDynamicUserTmuxSocket(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-0/default"))
+	fake.setExecResult("gc-test-agent",
+		tmuxCommand("ubuntu", []string{"tmux", "has-session", "-t", "main"}), "", nil)
+
+	cfg := runtime.Config{
+		Command:   "gr7n k8s canary",
+		Lifecycle: runtime.LifecycleOneShot,
+		Env: map[string]string{
+			"GC_AGENT":       "k8s-canary",
+			"GC_CITY":        "/workspace",
+			"LINUX_USERNAME": "ubuntu",
+		},
+	}
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	pod := fake.pods["gc-test-agent"]
+	if pod == nil {
+		t.Fatal("pod not created")
+	}
+	if got := pod.Annotations[podLinuxUsernameAnnotation]; got != "ubuntu" {
+		t.Fatalf("%s annotation = %q, want ubuntu", podLinuxUsernameAnnotation, got)
+	}
+
+	foundUserTmux := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "sh" && c.cmd[1] == "-lc" &&
+			strings.Contains(c.cmd[2], "su -m 'ubuntu'") &&
+			strings.Contains(c.cmd[2], "tmux has-session -t main") {
+			foundUserTmux = true
+		}
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "tmux" && c.cmd[1] == "has-session" {
+			t.Fatalf("Start checked root tmux socket for dynamic user: %#v", c.cmd)
+		}
+	}
+	if !foundUserTmux {
+		t.Fatalf("Start did not check tmux through dynamic user; calls=%#v", fake.calls)
 	}
 }
 
@@ -1413,10 +1574,50 @@ func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
 		if !strings.Contains(script, "m.pop('project_id'") {
 			t.Fatalf("repair script did not strip project_id: %s", script)
 		}
+		if strings.Contains(script, "<<<") {
+			t.Fatalf("repair script must be POSIX sh compatible, found here-string: %s", script)
+		}
 		found = true
 	}
 	if !found {
 		t.Fatal("initBeadsInPod did not use projected store root and prefix")
+	}
+}
+
+func TestInitBeadsInPodAllowsExistingMetadataWithoutProjectedPrefix(t *testing.T) {
+	fake := newFakeK8sOps()
+	cfg := runtime.Config{
+		WorkDir: "/host/city",
+		Env: map[string]string{
+			"GC_CITY":      "/host/city",
+			"GC_DOLT_HOST": "canonical-dolt.example.com",
+			"GC_DOLT_PORT": "3308",
+		},
+	}
+
+	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace", podManagedDoltHost, podManagedDoltPort); err != nil {
+		t.Fatalf("initBeadsInPod: %v", err)
+	}
+
+	found := false
+	for _, c := range fake.calls {
+		if c.method != "execInPod" || len(c.cmd) < 3 {
+			continue
+		}
+		if c.cmd[0] != "sh" || c.cmd[1] != "-c" {
+			continue
+		}
+		script := c.cmd[2]
+		if !strings.Contains(script, "if [ -f .beads/metadata.json ]") {
+			continue
+		}
+		if !strings.Contains(script, "missing projected GC_BEADS_PREFIX for .beads initialization") {
+			t.Fatalf("repair script should only require prefix for missing .beads initialization: %s", script)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("initBeadsInPod did not emit repair script")
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -507,8 +508,8 @@ func initAndHookDir(cityPath, dir, prefix string) error {
 	if usesPostgres, err := scopeUsesPostgresBackendForInit(cityPath, dir); err != nil {
 		return err
 	} else if usesPostgres {
-		if err := installBeadHooks(dir, cityPath); err != nil {
-			return fmt.Errorf("install hooks at %s: %w", dir, err)
+		if err := installBeadHooksIfWritable(dir, cityPath); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -544,10 +545,30 @@ func initAndHookDir(cityPath, dir, prefix string) error {
 		}
 	}
 	// Non-fatal: hooks are convenience (event forwarding), not critical.
+	if err := installBeadHooksIfWritable(dir, cityPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func installBeadHooksIfWritable(dir, cityPath string) error {
 	if err := installBeadHooks(dir, cityPath); err != nil {
+		if isReadOnlyFilesystemError(err) {
+			return nil
+		}
 		return fmt.Errorf("install hooks at %s: %w", dir, err)
 	}
 	return nil
+}
+
+func isReadOnlyFilesystemError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EROFS) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "read-only file system")
 }
 
 func scopeUsesPostgresBackendForInit(cityPath, dir string) (bool, error) {

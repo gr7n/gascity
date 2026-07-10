@@ -3986,6 +3986,47 @@ func TestCachingStoreCompleteEmbeddedDepsAvoidPerIDDepList(t *testing.T) {
 	}
 }
 
+func TestCachingStoreCompleteEmbeddedDepsAvoidBackingForDepListBatch(t *testing.T) {
+	t.Parallel()
+
+	backing := &completeEmbeddedDepsStore{
+		Store: NewMemStore(),
+		beads: []Bead{
+			{ID: "gc-parent", Title: "parent", Status: "open", Type: "task"},
+			{
+				ID:     "gc-child",
+				Title:  "child",
+				Status: "open",
+				Type:   "task",
+				Dependencies: []Dep{{
+					IssueID:     "gc-child",
+					DependsOnID: "gc-parent",
+					Type:        "blocks",
+				}},
+			},
+		},
+	}
+	cache := NewCachingStore(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+
+	depsByID, err := cache.DepListBatch([]string{"gc-child", "gc-parent"})
+	if err != nil {
+		t.Fatalf("DepListBatch: %v", err)
+	}
+	deps := depsByID["gc-child"]
+	if len(deps) != 1 || deps[0].IssueID != "gc-child" || deps[0].DependsOnID != "gc-parent" || deps[0].Type != "blocks" {
+		t.Fatalf("deps[gc-child] = %v, want embedded gc-child -> gc-parent", deps)
+	}
+	if len(depsByID["gc-parent"]) != 0 {
+		t.Fatalf("deps[gc-parent] = %v, want none", depsByID["gc-parent"])
+	}
+	if backing.depListCalls != 0 {
+		t.Fatalf("backing DepList calls = %d, want 0", backing.depListCalls)
+	}
+}
+
 func TestCachingStoreBdIncompleteDepsDepAddDoesNotDropExistingBackingDeps(t *testing.T) {
 	t.Parallel()
 

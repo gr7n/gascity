@@ -94,7 +94,18 @@ func processFanout(store beads.Store, bead beads.Bead, opts ProcessOptions) (Con
 		}
 		return ControlResult{Processed: true, Action: "fanout-empty", Skipped: scopeResult.Skipped}, nil
 	}
-	if len(opts.FormulaSearchPaths) == 0 {
+	inlineTemplate, err := parseInlineFanoutTemplate(bead.Metadata[beadmeta.FanoutTemplateMetadataKey])
+	if err != nil {
+		return ControlResult{}, fmt.Errorf("%w: %s: parsing gc.fanout_template: %w", ErrControlGraphMalformed, bead.ID, err)
+	}
+	bondName := strings.TrimSpace(bead.Metadata[beadmeta.BondMetadataKey])
+	if bondName == "" && len(inlineTemplate) == 0 {
+		return ControlResult{}, fmt.Errorf("%w: %s: missing gc.bond or gc.fanout_template", ErrControlGraphMalformed, bead.ID)
+	}
+	if bondName != "" && len(inlineTemplate) > 0 {
+		return ControlResult{}, fmt.Errorf("%w: %s: gc.bond and gc.fanout_template are mutually exclusive", ErrControlGraphMalformed, bead.ID)
+	}
+	if bondName != "" && len(opts.FormulaSearchPaths) == 0 {
 		return ControlResult{}, fmt.Errorf("%s: missing formula search paths", bead.ID)
 	}
 
@@ -132,7 +143,7 @@ func processFanout(store beads.Store, bead beads.Bead, opts ProcessOptions) (Con
 			}
 			itemVars["scope_ref"] = scopeRef
 		}
-		fragment, err := formula.CompileExpansionFragment(context.Background(), bead.Metadata[beadmeta.BondMetadataKey], opts.FormulaSearchPaths, target, itemVars)
+		fragment, err := compileFanoutFragment(bead, opts, target, itemVars, item, index, bondName, inlineTemplate)
 		if err != nil {
 			if errors.Is(err, formula.ErrVarValidation) {
 				return ControlResult{}, fmt.Errorf("%w: %s: compiling fragment %d: %w", ErrControlGraphMalformed, bead.ID, index+1, err)
@@ -200,6 +211,22 @@ func processFanout(store beads.Store, bead beads.Bead, opts ProcessOptions) (Con
 		return ControlResult{}, fmt.Errorf("%s: recording fanout state: %w", bead.ID, err)
 	}
 	return ControlResult{Processed: true, Action: "fanout-spawn", Created: totalCreated}, nil
+}
+
+func compileFanoutFragment(bead beads.Bead, opts ProcessOptions, target *formula.Step, itemVars map[string]string, item interface{}, index int, bondName string, inlineTemplate []*formula.Step) (*formula.FragmentRecipe, error) {
+	if bondName != "" {
+		return formula.CompileExpansionFragment(context.Background(), bondName, opts.FormulaSearchPaths, target, itemVars)
+	}
+	steps, err := materializeInlineFanoutTemplate(inlineTemplate, item, index)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(bead.Metadata[beadmeta.StepRefMetadataKey])
+	if name == "" {
+		name = bead.ID
+	}
+	name += ".inline." + strconv.Itoa(index+1)
+	return formula.CompileInlineExpansionFragment(context.Background(), name, opts.FormulaSearchPaths, steps, target, itemVars)
 }
 
 func fanoutTargetRef(source beads.Bead, sourceRef string, index int) string {
@@ -806,6 +833,95 @@ func parseFanoutVars(raw string) (map[string]string, error) {
 		return nil, err
 	}
 	return vars, nil
+}
+
+func parseInlineFanoutTemplate(raw string) ([]*formula.Step, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var steps []*formula.Step
+	if err := json.Unmarshal([]byte(raw), &steps); err != nil {
+		return nil, err
+	}
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("template must contain at least one step")
+	}
+	return steps, nil
+}
+
+func materializeInlineFanoutTemplate(template []*formula.Step, item interface{}, index int) ([]*formula.Step, error) {
+	if len(template) == 0 {
+		return nil, nil
+	}
+	data, err := json.Marshal(template)
+	if err != nil {
+		return nil, err
+	}
+	var steps []*formula.Step
+	if err := json.Unmarshal(data, &steps); err != nil {
+		return nil, err
+	}
+	substituteFanoutPlaceholdersInSteps(steps, item, index)
+	return steps, nil
+}
+
+func substituteFanoutPlaceholdersInSteps(steps []*formula.Step, item interface{}, index int) {
+	for _, step := range steps {
+		if step == nil {
+			continue
+		}
+		step.ID = substituteFanoutTemplate(step.ID, item, index)
+		step.Title = substituteFanoutTemplate(step.Title, item, index)
+		step.Description = substituteFanoutTemplate(step.Description, item, index)
+		step.DescriptionFile = substituteFanoutTemplate(step.DescriptionFile, item, index)
+		step.Notes = substituteFanoutTemplate(step.Notes, item, index)
+		step.Type = substituteFanoutTemplate(step.Type, item, index)
+		step.Assignee = substituteFanoutTemplate(step.Assignee, item, index)
+		step.Expand = substituteFanoutTemplate(step.Expand, item, index)
+		step.Condition = substituteFanoutTemplate(step.Condition, item, index)
+		step.WaitsFor = substituteFanoutTemplate(step.WaitsFor, item, index)
+		step.Timeout = substituteFanoutTemplate(step.Timeout, item, index)
+		for i := range step.Labels {
+			step.Labels[i] = substituteFanoutTemplate(step.Labels[i], item, index)
+		}
+		for i := range step.DependsOn {
+			step.DependsOn[i] = substituteFanoutTemplate(step.DependsOn[i], item, index)
+		}
+		for i := range step.Needs {
+			step.Needs[i] = substituteFanoutTemplate(step.Needs[i], item, index)
+		}
+		for key, value := range step.Metadata {
+			step.Metadata[key] = substituteFanoutTemplate(value, item, index)
+		}
+		for key, value := range step.ExpandVars {
+			step.ExpandVars[key] = substituteFanoutTemplate(value, item, index)
+		}
+		if step.Gate != nil {
+			step.Gate.Type = substituteFanoutTemplate(step.Gate.Type, item, index)
+			step.Gate.ID = substituteFanoutTemplate(step.Gate.ID, item, index)
+			step.Gate.Timeout = substituteFanoutTemplate(step.Gate.Timeout, item, index)
+		}
+		if step.Loop != nil {
+			step.Loop.Var = substituteFanoutTemplate(step.Loop.Var, item, index)
+			step.Loop.Range = substituteFanoutTemplate(step.Loop.Range, item, index)
+			step.Loop.Until = substituteFanoutTemplate(step.Loop.Until, item, index)
+			substituteFanoutPlaceholdersInSteps(step.Loop.Body, item, index)
+		}
+		if step.OnComplete != nil {
+			step.OnComplete.ForEach = substituteFanoutTemplate(step.OnComplete.ForEach, item, index)
+			step.OnComplete.Bond = substituteFanoutTemplate(step.OnComplete.Bond, item, index)
+			for key, value := range step.OnComplete.Vars {
+				step.OnComplete.Vars[key] = substituteFanoutTemplate(value, item, index)
+			}
+			substituteFanoutPlaceholdersInSteps(step.OnComplete.Template, item, index)
+		}
+		if step.Ralph != nil && step.Ralph.Check != nil {
+			step.Ralph.Check.Mode = substituteFanoutTemplate(step.Ralph.Check.Mode, item, index)
+			step.Ralph.Check.Path = substituteFanoutTemplate(step.Ralph.Check.Path, item, index)
+			step.Ralph.Check.Timeout = substituteFanoutTemplate(step.Ralph.Check.Timeout, item, index)
+		}
+		substituteFanoutPlaceholdersInSteps(step.Children, item, index)
+	}
 }
 
 func materializeFanoutVars(spec map[string]string, item interface{}, index int) map[string]string {

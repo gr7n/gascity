@@ -620,6 +620,50 @@ func (c *CachingStore) DepList(id, direction string) ([]Dep, error) {
 	return c.backing.DepList(id, direction)
 }
 
+// DepListBatch returns "down" dependencies for multiple beads, preserving the
+// cache's complete-dependency fast path when available.
+func (c *CachingStore) DepListBatch(ids []string) (map[string][]Dep, error) {
+	if len(ids) == 0 {
+		return map[string][]Dep{}, nil
+	}
+	c.mu.RLock()
+	if c.state == cacheLive && c.depsComplete {
+		result := make(map[string][]Dep, len(ids))
+		for _, id := range ids {
+			result[id] = cloneDeps(c.deps[id])
+		}
+		c.mu.RUnlock()
+		return result, nil
+	}
+	c.mu.RUnlock()
+
+	if batch, ok := c.backing.(DepBatchLister); ok {
+		depsByID, err := batch.DepListBatch(ids)
+		if err != nil {
+			return nil, err
+		}
+		result := make(map[string][]Dep, len(ids))
+		c.mu.Lock()
+		for _, id := range ids {
+			deps := cloneDeps(depsByID[id])
+			result[id] = cloneDeps(deps)
+			c.deps[id] = deps
+		}
+		c.mu.Unlock()
+		return result, nil
+	}
+
+	result := make(map[string][]Dep, len(ids))
+	for _, id := range ids {
+		deps, err := c.DepList(id, "down")
+		if err != nil {
+			return nil, err
+		}
+		result[id] = cloneDeps(deps)
+	}
+	return result, nil
+}
+
 // Ping delegates to the backing store.
 func (c *CachingStore) Ping() error {
 	return c.backing.Ping()

@@ -21,6 +21,7 @@ import (
 	execerr "k8s.io/client-go/util/exec"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 // Compile-time interface checks.
@@ -43,14 +44,17 @@ type Provider struct {
 	memRequest         string
 	cpuLimit           string
 	memLimit           string
-	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
-	prebaked           bool                // skip staging + init container for prebaked images
-	nodeSelector       map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
-	tolerations        []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
-	affinity           *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
-	priorityClassName  string              // GC_K8S_PRIORITY_CLASS_NAME
-	postStartSettle    time.Duration       // settle time before post-start liveness check
-	stderr             io.Writer           // warning output (default os.Stderr)
+	serviceAccount     string               // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	prebaked           bool                 // skip staging + init container for prebaked images
+	nodeSelector       map[string]string    // GC_K8S_NODE_SELECTOR (JSON)
+	tolerations        []corev1.Toleration  // GC_K8S_TOLERATIONS (JSON)
+	affinity           *corev1.Affinity     // GC_K8S_AFFINITY (JSON)
+	priorityClassName  string               // GC_K8S_PRIORITY_CLASS_NAME
+	extraVolumes       []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
+	extraVolumeMounts  []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
+	extraEnv           []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
+	postStartSettle    time.Duration        // settle time before post-start liveness check
+	stderr             io.Writer            // warning output (default os.Stderr)
 }
 
 type schedulingFields struct {
@@ -58,6 +62,12 @@ type schedulingFields struct {
 	tolerations       []corev1.Toleration
 	affinity          *corev1.Affinity
 	priorityClassName string
+}
+
+type podProjectionFields struct {
+	volumes      []corev1.Volume
+	volumeMounts []corev1.VolumeMount
+	env          []corev1.EnvVar
 }
 
 // NewProvider creates a K8s session provider.
@@ -68,6 +78,9 @@ type schedulingFields struct {
 //   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
+//   - GC_K8S_EXTRA_VOLUMES_JSON — extra corev1.Volume JSON array
+//   - GC_K8S_EXTRA_VOLUME_MOUNTS_JSON — extra corev1.VolumeMount JSON array
+//   - GC_K8S_EXTRA_ENV_JSON — extra corev1.EnvVar JSON array
 //
 // The in-cluster Dolt service alias defaults to the provider defaults
 // (dolt.gc.svc.cluster.local:3307). Pods receive projected GC_DOLT_* env;
@@ -101,6 +114,11 @@ func NewProvider() (*Provider, error) {
 		return nil, err
 	}
 
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Provider{
 		ops: &realK8sOps{
 			clientset:  clientset,
@@ -124,6 +142,9 @@ func NewProvider() (*Provider, error) {
 		tolerations:        scheduling.tolerations,
 		affinity:           scheduling.affinity,
 		priorityClassName:  scheduling.priorityClassName,
+		extraVolumes:       projection.volumes,
+		extraVolumeMounts:  projection.volumeMounts,
+		extraEnv:           projection.env,
 	}, nil
 }
 
@@ -146,6 +167,31 @@ func parseSchedulingEnv() (schedulingFields, error) {
 	}
 	scheduling.priorityClassName = os.Getenv("GC_K8S_PRIORITY_CLASS_NAME")
 	return scheduling, nil
+}
+
+func parsePodProjectionEnv() (podProjectionFields, error) {
+	var projection podProjectionFields
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUMES_JSON", &projection.volumes); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", &projection.volumeMounts); err != nil {
+		return podProjectionFields{}, err
+	}
+	if err := parseJSONEnv("GC_K8S_EXTRA_ENV_JSON", &projection.env); err != nil {
+		return podProjectionFields{}, err
+	}
+	return projection, nil
+}
+
+func parseJSONEnv(name string, target any) error {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), target); err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	return nil
 }
 
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).
@@ -178,8 +224,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		pod := &existing[0]
 		if pod.Status.Phase == corev1.PodRunning {
 			// Check if tmux is alive — stale pod detection.
-			_, tmuxErr := p.ops.execInPod(ctx, pod.Name, "agent",
-				[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+			_, tmuxErr := execTmuxInPod(ctx, p.ops, pod.Name, podLinuxUsername(pod),
+				[]string{"tmux", "has-session", "-t", tmuxSession})
 			if tmuxErr == nil {
 				return fmt.Errorf("%w: session %q (pod: %s)", runtime.ErrSessionExists, name, pod.Name)
 			}
@@ -256,7 +302,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}
 
 	// Wait for tmux session.
-	if err := waitForTmux(ctx, p.ops, podName, 60*time.Second); err != nil {
+	if err := waitForTmux(ctx, p.ops, podName, cfg.Env["LINUX_USERNAME"], 60*time.Second); err != nil {
 		cleanup("tmux not ready")
 		return fmt.Errorf("waiting for tmux in pod %q: %w", podName, err)
 	}
@@ -287,8 +333,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		}
 	}
 	if requiresPostStartLiveness {
-		_, tmuxErr := p.ops.execInPod(ctx, podName, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+		_, tmuxErr := execTmuxInPod(ctx, p.ops, podName, cfg.Env["LINUX_USERNAME"],
+			[]string{"tmux", "has-session", "-t", tmuxSession})
 		if tmuxErr != nil {
 			cleanup("session died immediately after startup")
 			return fmt.Errorf("%w: session %q died immediately after startup: %w",
@@ -310,8 +356,12 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 // run SessionLive (RunLive is a no-op), matching the pre-un-weld behavior.
 func (p *Provider) runPodPostLaunchSetup(ctx context.Context, podName string, cfg runtime.Config) {
 	// Enable pane logging for diagnostics.
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"}, nil)
+	linuxUsername := strings.TrimSpace(cfg.Env["LINUX_USERNAME"])
+	if linuxUsername == "" {
+		linuxUsername = p.podLinuxUsername(ctx, podName)
+	}
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"})
 
 	// Run session_setup commands inside the pod.
 	for _, cmd := range cfg.SessionSetup {
@@ -362,8 +412,9 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 	}
 	// The tmux server + "main" session must be alive to respawn into; a dead
 	// session means the box is not warm enough — reprovision, don't respawn.
-	if _, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	if _, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "has-session", "-t", tmuxSession}); err != nil {
 		return fmt.Errorf("%w: session %q (pod %s has no live tmux session)", runtime.ErrSessionNotFound, name, podName)
 	}
 
@@ -387,8 +438,8 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 			case <-timer.C:
 			}
 		}
-		if _, err := p.ops.execInPod(ctx, podName, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
+		if _, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+			[]string{"tmux", "has-session", "-t", tmuxSession}); err != nil {
 			return fmt.Errorf("%w: session %q died immediately after relaunch: %w",
 				runtime.ErrSessionDiedDuringStartup, name, err)
 		}
@@ -452,8 +503,9 @@ func (p *Provider) IsRunning(name string) bool {
 		return false
 	}
 	// Pod Running + tmux session alive.
-	_, err = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, err = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "has-session", "-t", tmuxSession})
 	return err == nil
 }
 
@@ -465,8 +517,9 @@ func (p *Provider) IsAttached(name string) bool {
 	if err != nil {
 		return false
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_attached}"}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_attached}"})
 	if err != nil {
 		return false
 	}
@@ -485,8 +538,14 @@ func (p *Provider) Attach(name string) error {
 	if p.k8sContext != "" {
 		args = append(args, "--context", p.k8sContext)
 	}
-	args = append(args, "-n", p.namespace, "exec", "-it", podName, "--",
-		"tmux", "attach", "-t", tmuxSession)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	if strings.TrimSpace(linuxUsername) != "" {
+		args = append(args, "-n", p.namespace, "exec", "-it", podName, "--")
+		args = append(args, tmuxCommand(linuxUsername, []string{"tmux", "attach", "-t", tmuxSession})...)
+	} else {
+		args = append(args, "-n", p.namespace, "exec", "-it", podName, "--",
+			"tmux", "attach", "-t", tmuxSession)
+	}
 
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
 	cmd.Stdin = os.Stdin
@@ -553,8 +612,9 @@ func (p *Provider) SetMeta(name, key, value string) error {
 	if err != nil {
 		return nil // best-effort
 	}
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value})
 	return nil
 }
 
@@ -565,8 +625,9 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "show-environment", "-t", tmuxSession, key}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "show-environment", "-t", tmuxSession, key})
 	if err != nil {
 		return "", nil
 	}
@@ -588,8 +649,9 @@ func (p *Provider) RemoveMeta(name, key string) error {
 	if err != nil {
 		return nil // best-effort
 	}
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	_, _ = execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key})
 	return nil
 }
 
@@ -631,8 +693,9 @@ func (p *Provider) GetLastActivity(name string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, nil
 	}
-	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_activity}"}, nil)
+	linuxUsername := p.podLinuxUsername(ctx, podName)
+	output, err := execTmuxInPod(ctx, p.ops, podName, linuxUsername,
+		[]string{"tmux", "display-message", "-t", tmuxSession, "-p", "#{session_activity}"})
 	if err != nil {
 		return time.Time{}, nil
 	}
@@ -684,7 +747,42 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 
 // --- Internal helpers ---
 
-// findRunningPod finds a running pod by session label.
+func podLinuxUsername(pod *corev1.Pod) string {
+	if pod == nil || pod.Annotations == nil {
+		return ""
+	}
+	return strings.TrimSpace(pod.Annotations[podLinuxUsernameAnnotation])
+}
+
+func (p *Provider) podLinuxUsername(ctx context.Context, podName string) string {
+	pod, err := p.ops.getPod(ctx, podName)
+	if err != nil {
+		return ""
+	}
+	return podLinuxUsername(pod)
+}
+
+func tmuxCommand(linuxUsername string, args []string) []string {
+	linuxUsername = strings.TrimSpace(linuxUsername)
+	if linuxUsername == "" {
+		return args
+	}
+	tmuxCmd := shellquote.Join(args)
+	quotedUser := shellquote.Quote(linuxUsername)
+	script := fmt.Sprintf(
+		`if id %s >/dev/null 2>&1; then exec su -m %s -c %s; fi; exec %s`,
+		quotedUser,
+		quotedUser,
+		shellquote.Quote(tmuxCmd),
+		tmuxCmd,
+	)
+	return []string{"sh", "-lc", script}
+}
+
+func execTmuxInPod(ctx context.Context, ops k8sOps, podName, linuxUsername string, args []string) (string, error) {
+	return ops.execInPod(ctx, podName, "agent", tmuxCommand(linuxUsername, args), nil)
+}
+
 // carrier returns the tmux carrier that drives this provider's sessions over
 // the pod exec connection ([Provider.Exec]). The in-box tmux session is always
 // tmuxSession ("main").
@@ -703,6 +801,7 @@ func (p *Provider) Exec(ctx context.Context, name string, argv []string) ([]byte
 	if err != nil {
 		return nil, -1, fmt.Errorf("k8s exec %q: %w", name, err)
 	}
+	argv = tmuxCommand(p.podLinuxUsername(ctx, podName), argv)
 	out, err := p.ops.execInPod(ctx, podName, "agent", argv, nil)
 	if err != nil {
 		var exitErr execerr.ExitError
@@ -716,6 +815,7 @@ func (p *Provider) Exec(ctx context.Context, name string, argv []string) ([]byte
 	return []byte(out), 0, nil
 }
 
+// findRunningPod finds a running pod by session label.
 func (p *Provider) findRunningPod(ctx context.Context, name string) (string, error) {
 	label := SanitizeLabel(name)
 	pods, err := p.ops.listPods(ctx, "gc-session="+label, "status.phase=Running")
@@ -797,7 +897,7 @@ func waitForPodRunning(ctx context.Context, ops k8sOps, name string, timeout tim
 }
 
 // waitForTmux waits for the tmux session to be available inside the pod.
-func waitForTmux(ctx context.Context, ops k8sOps, name string, timeout time.Duration) error {
+func waitForTmux(ctx context.Context, ops k8sOps, name, linuxUsername string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
@@ -805,8 +905,8 @@ func waitForTmux(ctx context.Context, ops k8sOps, name string, timeout time.Dura
 			return ctx.Err()
 		default:
 		}
-		_, err := ops.execInPod(ctx, name, "agent",
-			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+		_, err := execTmuxInPod(ctx, ops, name, linuxUsername,
+			[]string{"tmux", "has-session", "-t", tmuxSession})
 		if err == nil {
 			return nil
 		}
@@ -854,9 +954,6 @@ func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime
 	doltPort := projected["GC_DOLT_PORT"]
 	storeRoot := projectedPodStoreRoot(cfg, workDir)
 	prefix := strings.TrimSpace(cfg.Env["GC_BEADS_PREFIX"])
-	if prefix == "" {
-		return fmt.Errorf("missing projected GC_BEADS_PREFIX")
-	}
 
 	portNum, err := strconv.Atoi(doltPort)
 	if err != nil {
@@ -885,6 +982,7 @@ func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime
 			`p=json.loads(sys.stdin.read()); m.update(p); m.pop('project_id', None); `+
 			`json.dump(m,open('.beads/metadata.json','w'),indent=2)"; `+
 			`else PREFIX=$(echo '%s' | base64 -d) && `+
+			`if [ -z "$PREFIX" ]; then echo "missing projected GC_BEADS_PREFIX for .beads initialization" >&2; exit 1; fi && `+
 			`DOLT_HOST=$(echo '%s' | base64 -d) && `+
 			`DOLT_PORT=$(echo '%s' | base64 -d) && `+
 			`yes | BEADS_DIR="$WD/.beads" bd init --server --server-host "$DOLT_HOST" --server-port "$DOLT_PORT" -p "$PREFIX" --skip-hooks --skip-agents; fi`,
@@ -924,7 +1022,7 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	// Try in-cluster first.
 	cfg, err := rest.InClusterConfig()
 	if err == nil {
-		return cfg, nil
+		return tuneRESTClientRateLimits(cfg)
 	}
 	// Fall back to kubeconfig.
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -932,7 +1030,49 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	if k8sContext != "" {
 		overrides.CurrentContext = k8sContext
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	return tuneRESTClientRateLimits(cfg)
+}
+
+func tuneRESTClientRateLimits(cfg *rest.Config) (*rest.Config, error) {
+	qps, err := positiveFloat32Env("GC_K8S_CLIENT_QPS", 50)
+	if err != nil {
+		return nil, err
+	}
+	burst, err := positiveIntEnv("GC_K8S_CLIENT_BURST", 100)
+	if err != nil {
+		return nil, err
+	}
+	cfg.QPS = qps
+	cfg.Burst = burst
+	return cfg, nil
+}
+
+func positiveFloat32Env(key string, def float32) (float32, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.ParseFloat(raw, 32)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive number", key)
+	}
+	return float32(value), nil
+}
+
+func positiveIntEnv(key string, def int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return value, nil
 }
 
 func managedServiceAlias() (string, string, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -402,6 +403,40 @@ func TestRouteBeadsShow_SixRowMatrix(t *testing.T) {
 				t.Errorf("stdout missing %q:\n%s", tc.wantStdout, stdout.String())
 			}
 		})
+	}
+}
+
+func TestCmdBeadsShowStripsRawScopeFlagsBeforeFallback(t *testing.T) {
+	cityPath := writeBeadsTestCity(t)
+	logPath := filepath.Join(t.TempDir(), "calls.log")
+	script := writeNamedTestScript(t, "gc-beads-spy.sh", fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+if [ "$1" = "get" ] && [ "$2" = "ga-abc" ]; then
+  printf '{"id":"ga-abc","title":"detail","status":"open","type":"task","created_at":"2026-02-27T10:00:00Z"}\n'
+  exit 0
+fi
+echo "unexpected args: $*" >&2
+exit 1
+`, logPath))
+	t.Setenv("GC_BEADS", "exec:"+script)
+
+	var stdout, stderr bytes.Buffer
+	code := cmdBeadsShow([]string{"--city", cityPath, "--rig", "ignored", "ga-abc", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"id": "ga-abc"`) {
+		t.Fatalf("stdout missing bead id:\n%s", stdout.String())
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(calls), "--city") || strings.Contains(string(calls), "--rig") {
+		t.Fatalf("scope flags leaked to exec provider:\n%s", string(calls))
+	}
+	if !strings.Contains(string(calls), "get ga-abc") {
+		t.Fatalf("expected provider lookup for ga-abc, got:\n%s", string(calls))
 	}
 }
 

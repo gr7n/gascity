@@ -1949,6 +1949,29 @@ func TestNudgeSubmitDebounceUsesKimiProviderHint(t *testing.T) {
 	}
 }
 
+// TestNudgeSubmitDebounceUsesKimiFamilyHint mirrors the plain-kimi test for a
+// wrapped alias: the debounce gate normalizes GC_PROVIDER to its provider
+// family, so "kimi-pro" gets the same slow-paste debounce as "kimi".
+func TestNudgeSubmitDebounceUsesKimiFamilyHint(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	tm := testTmux()
+	sessionName := "gt-test-kimi-family-debounce-" + fmt.Sprintf("%d", time.Now().UnixNano()%10000)
+	if err := tm.NewSession(sessionName, os.TempDir()); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+
+	if err := tm.SetEnvironment(sessionName, "GC_PROVIDER", "kimi-pro"); err != nil {
+		t.Fatalf("SetEnvironment: %v", err)
+	}
+	if got, want := tm.nudgeSubmitDebounce(sessionName), 1500*time.Millisecond; got != want {
+		t.Fatalf("nudgeSubmitDebounce = %s, want %s", got, want)
+	}
+}
+
 func TestSendKeysLiteralWithRetry_ImmediateSuccess(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")

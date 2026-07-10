@@ -1931,6 +1931,61 @@ func TestParse_OnComplete(t *testing.T) {
 	}
 }
 
+func TestParse_OnCompleteInlineTemplateTOML(t *testing.T) {
+	tomlData := `
+formula = "mol-inline-fanout"
+version = 2
+contract = "graph.v2"
+
+[[steps]]
+id = "survey-workers"
+title = "Survey workers"
+
+[steps.on_complete]
+for_each = "output.workers"
+parallel = true
+
+[[steps.on_complete.template]]
+id = "{target}.review-{item.id}"
+title = "Review {item.id}"
+metadata = { "gc.run_target" = "{item.target}", "gc.review_lane" = "{item.id}" }
+
+[steps.on_complete.template.retry]
+max_attempts = 3
+on_exhausted = "soft_fail"
+`
+
+	p := NewParser()
+	formula, err := p.ParseTOML([]byte(tomlData))
+	if err != nil {
+		t.Fatalf("ParseTOML failed: %v", err)
+	}
+	if err := formula.Validate(); err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
+
+	oc := formula.Steps[0].OnComplete
+	if oc == nil {
+		t.Fatal("Steps[0].OnComplete is nil")
+	}
+	if oc.Bond != "" {
+		t.Fatalf("Bond = %q, want empty inline template", oc.Bond)
+	}
+	if len(oc.Template) != 1 {
+		t.Fatalf("len(Template) = %d, want 1", len(oc.Template))
+	}
+	template := oc.Template[0]
+	if template.ID != "{target}.review-{item.id}" {
+		t.Fatalf("template ID = %q, want {target}.review-{item.id}", template.ID)
+	}
+	if template.Metadata["gc.run_target"] != "{item.target}" {
+		t.Fatalf("template gc.run_target = %q, want {item.target}", template.Metadata["gc.run_target"])
+	}
+	if template.Retry == nil || template.Retry.MaxAttempts != 3 || template.Retry.OnExhausted != "soft_fail" {
+		t.Fatalf("template retry = %+v, want max_attempts=3 soft_fail", template.Retry)
+	}
+}
+
 func TestValidate_OnComplete_Valid(t *testing.T) {
 	formula := &Formula{
 		Formula: "mol-valid",
@@ -1952,6 +2007,30 @@ func TestValidate_OnComplete_Valid(t *testing.T) {
 	}
 }
 
+func TestValidate_OnCompleteInlineTemplateValid(t *testing.T) {
+	formula := &Formula{
+		Formula:  "mol-valid",
+		Contract: "graph.v2",
+		Type:     TypeWorkflow,
+		Steps: []*Step{
+			{
+				ID:    "survey",
+				Title: "Survey",
+				OnComplete: &OnCompleteSpec{
+					ForEach: "output.items",
+					Template: []*Step{
+						{ID: "{target}.review-{item.id}", Title: "Review {item.id}"},
+					},
+				},
+			},
+		},
+	}
+
+	if err := formula.Validate(); err != nil {
+		t.Errorf("Validate failed for valid inline on_complete: %v", err)
+	}
+}
+
 func TestValidate_OnComplete_MissingBond(t *testing.T) {
 	formula := &Formula{
 		Formula: "mol-invalid",
@@ -1970,10 +2049,39 @@ func TestValidate_OnComplete_MissingBond(t *testing.T) {
 
 	err := formula.Validate()
 	if err == nil {
-		t.Error("expected validation error for missing bond")
+		t.Error("expected validation error for missing bond or template")
 	}
-	if !strings.Contains(err.Error(), "bond is required") {
-		t.Errorf("expected 'bond is required' error, got: %v", err)
+	if !strings.Contains(err.Error(), "bond or template is required") {
+		t.Errorf("expected 'bond or template is required' error, got: %v", err)
+	}
+}
+
+func TestValidate_OnCompleteBondAndTemplate(t *testing.T) {
+	formula := &Formula{
+		Formula:  "mol-invalid",
+		Contract: "graph.v2",
+		Type:     TypeWorkflow,
+		Steps: []*Step{
+			{
+				ID:    "survey",
+				Title: "Survey",
+				OnComplete: &OnCompleteSpec{
+					ForEach: "output.items",
+					Bond:    "mol-item",
+					Template: []*Step{
+						{ID: "{target}.review-{item.id}", Title: "Review {item.id}"},
+					},
+				},
+			},
+		},
+	}
+
+	err := formula.Validate()
+	if err == nil {
+		t.Error("expected validation error for bond plus template")
+	}
+	if !strings.Contains(err.Error(), "bond and template are mutually exclusive") {
+		t.Errorf("expected mutual exclusion error, got: %v", err)
 	}
 }
 

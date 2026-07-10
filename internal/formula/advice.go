@@ -242,6 +242,9 @@ func cloneOnComplete(oc *OnCompleteSpec) *OnCompleteSpec {
 			clone.Vars[k] = v
 		}
 	}
+	if len(oc.Template) > 0 {
+		clone.Template = cloneStepsRecursive(oc.Template)
+	}
 	return &clone
 }
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 func applyT3BridgeRuntimeConfig(tp TemplateParams, env map[string]string) {
@@ -121,8 +123,27 @@ func t3BridgeStartupEnvelopeModel(provider string, tp TemplateParams) string {
 	if v := tp.Env["GC_MODEL"]; v != "" {
 		return v
 	}
-	if provider == "codex" {
-		return "gpt-5-codex"
+	// No explicit model anywhere: guess a default from the provider family.
+	// Resolve the family first (builtin ancestor for custom providers with
+	// `base` set, then name normalization) so wrapped aliases such as
+	// "codex-mini" get their family's default instead of falling through an
+	// exact name match.
+	source := provider
+	if tp.ResolvedProvider != nil {
+		if ancestor := strings.TrimSpace(tp.ResolvedProvider.BuiltinAncestor); ancestor != "" {
+			source = ancestor
+		}
 	}
-	return "claude-opus-4-6"
+	family := sessionpkg.ProviderFamilyFromMetadata(nil, source)
+	switch {
+	case family == "codex":
+		return "gpt-5-codex"
+	case strings.Contains(family, "claude"):
+		return "claude-opus-4-6"
+	}
+	// Unknown family (fully custom provider): leave the model unset rather
+	// than fabricating one. The envelope's resume policy matches threads on
+	// requiredThreadModel, so a wrong guess forces the bridge to recreate the
+	// thread on every resume; an absent model imposes no constraint.
+	return ""
 }

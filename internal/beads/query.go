@@ -3,6 +3,7 @@ package beads
 import (
 	"errors"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -64,10 +65,16 @@ func TierModeFromOpts(opts []QueryOpt) TierMode {
 // Queries are conjunctive: every populated field must match. A zero-value query
 // is rejected unless AllowScan is true.
 type ListQuery struct {
-	Status   string
-	Type     string
-	Label    string
-	Assignee string
+	Status string
+	Type   string
+	Label  string
+	// LabelPrefix matches beads carrying at least one label that starts
+	// with this prefix. Like every other selector it composes
+	// conjunctively, so combining it with Label requires both to match.
+	// Backends that cannot push a prefix match into the backing query
+	// fetch candidates and filter client-side.
+	LabelPrefix string
+	Assignee    string
 	// Assignees matches beads assigned to any listed assignee.
 	// It is mutually exclusive with Assignee; call Validate to enforce that contract.
 	Assignees []string
@@ -134,6 +141,7 @@ func (q ListQuery) HasFilter() bool {
 	return q.Status != "" ||
 		q.Type != "" ||
 		q.Label != "" ||
+		q.LabelPrefix != "" ||
 		q.Assignee != "" ||
 		len(q.Assignees) > 0 ||
 		q.ParentID != "" ||
@@ -172,6 +180,9 @@ func (q ListQuery) Matches(b Bead) bool {
 		return false
 	}
 	if q.Label != "" && !beadHasLabel(b, q.Label) {
+		return false
+	}
+	if q.LabelPrefix != "" && !beadHasLabelPrefix(b, q.LabelPrefix) {
 		return false
 	}
 	if q.Assignee != "" && b.Assignee != q.Assignee {
@@ -214,6 +225,15 @@ func beadUpdatedReferenceTime(b Bead) time.Time {
 func beadHasLabel(b Bead, want string) bool {
 	for _, label := range b.Labels {
 		if label == want {
+			return true
+		}
+	}
+	return false
+}
+
+func beadHasLabelPrefix(b Bead, prefix string) bool {
+	for _, label := range b.Labels {
+		if strings.HasPrefix(label, prefix) {
 			return true
 		}
 	}

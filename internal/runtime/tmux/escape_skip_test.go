@@ -29,12 +29,10 @@ func TestProviderEnvSkipsEscapeBeforeEnter(t *testing.T) {
 		// families.
 		{provider: "antigravity-max", want: true},
 		{provider: "codex-mini", want: true},
-		// claude has no substring case in sessionlog.ProviderFamily, so a
-		// non-exact claude-derived value falls through to the default
-		// Escape-before-Enter submit. Aliased claude providers are
-		// unaffected in practice because GC_PROVIDER is already resolved
-		// to the ancestor family "claude".
-		{provider: "claude-mini", want: false},
+		// providerEnvFamily adds the claude-family normalization that
+		// sessionlog.ProviderFamily does not provide, so wrapped values get
+		// the same non-destructive submit behavior as the builtin ancestor.
+		{provider: "claude-mini", want: true},
 		// Unknown providers keep the default Escape-before-Enter submit.
 		{provider: "", want: false},
 		{provider: "some-unknown-provider", want: false},

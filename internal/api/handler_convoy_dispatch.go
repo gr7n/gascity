@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -406,30 +407,65 @@ func collectWorkflowDeps(store beads.Store, beadIndex map[string]beads.Bead) ([]
 	seen := map[string]bool{}
 	partial := false
 
+	beadIDs := make([]string, 0, len(beadIndex))
 	for beadID := range beadIndex {
-		deps, err := store.DepList(beadID, "down")
+		beadIDs = append(beadIDs, beadID)
+	}
+	sort.Strings(beadIDs)
+
+	var depsByID map[string][]beads.Dep
+	if batch, ok := store.(beads.DepBatchLister); ok {
+		deps, err := batch.DepListBatch(beadIDs)
 		if err != nil {
-			partial = true
-			continue
+			return nil, true
 		}
-		for _, dep := range deps {
-			if _, ok := beadIndex[dep.DependsOnID]; !ok {
+		if deps == nil {
+			deps = make(map[string][]beads.Dep, len(beadIDs))
+		}
+		depsByID = deps
+	}
+
+	for _, beadID := range beadIDs {
+		deps := depsByID[beadID]
+		if depsByID == nil {
+			var err error
+			deps, err = store.DepList(beadID, "down")
+			if err != nil {
+				partial = true
 				continue
 			}
-			edge := workflowDepResponse{
-				From: dep.DependsOnID,
-				To:   dep.IssueID,
-				Kind: dep.Type,
-			}
-			key := edge.From + "|" + edge.To + "|" + edge.Kind
-			if !seen[key] {
-				workflowDeps = append(workflowDeps, edge)
-				seen[key] = true
-			}
 		}
+		appendWorkflowDeps(seen, beadIndex, deps, &workflowDeps)
 	}
 
 	return workflowDeps, partial
+}
+
+func appendWorkflowDeps(
+	seen map[string]bool,
+	beadIndex map[string]beads.Bead,
+	deps []beads.Dep,
+	out *[]workflowDepResponse,
+) {
+	for _, dep := range deps {
+		if _, ok := beadIndex[dep.IssueID]; !ok {
+			continue
+		}
+		if _, ok := beadIndex[dep.DependsOnID]; !ok {
+			continue
+		}
+		edge := workflowDepResponse{
+			From: dep.DependsOnID,
+			To:   dep.IssueID,
+			Kind: dep.Type,
+		}
+		key := edge.From + "|" + edge.To + "|" + edge.Kind
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		*out = append(*out, edge)
+	}
 }
 
 func prefetchedDepsForWorkflowBeads(workflowBeads []beads.Bead) (map[string][]beads.Dep, bool) {

@@ -459,6 +459,9 @@ type NamedSession struct {
 	// Note: mode="always" is independent of min_active_sessions; both produce
 	// sessions, and gc doctor reports accidental duplicate-pool combinations.
 	Mode string `toml:"mode,omitempty" jsonschema:"enum=on_demand,enum=always"`
+	// OperatorVisibility is optional operator-facing metadata for grouping
+	// named sessions in dashboards. Core scheduling treats it as advisory.
+	OperatorVisibility string `toml:"operator_visibility,omitempty"`
 	// SourceDir is the directory where this named session's config was
 	// defined. Set during pack/fragment loading; empty for inline config.
 	// Runtime-only — not persisted to TOML or JSON.

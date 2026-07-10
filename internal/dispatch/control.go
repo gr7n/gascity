@@ -13,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/controlkind"
 	"github.com/gastownhall/gascity/internal/convergence"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -995,7 +996,7 @@ func attemptRecipeStepNeedsScopeCheck(step formula.RecipeStep) bool {
 	if step.Metadata[beadmeta.ScopeRoleMetadataKey] == beadmeta.ScopeRoleTeardown {
 		return false
 	}
-	return !beadmeta.IsScopeCheckExemptKind(step.Metadata[beadmeta.KindMetadataKey])
+	return !controlkind.IsScopeCheckExempt(step.Metadata[beadmeta.KindMetadataKey])
 }
 
 // loadAttemptRouteConfigE loads the city.toml used for attempt-time routing.
@@ -1112,7 +1113,7 @@ func controlDispatcherTargetForExecutionTarget(executionTarget, rigContext strin
 // the dispatcher's ProcessControl switch executes (beadmeta.ControlKinds).
 // Pinned to the authoritative set by TestIsAttemptControlKindMatchesControlKinds.
 func isAttemptControlKind(kind string) bool {
-	return beadmeta.IsControlKind(kind)
+	return controlkind.IsAttemptControlKind(kind)
 }
 
 // latestAttemptCandidateIsControlInfrastructure reports whether a bead kind
@@ -1121,7 +1122,7 @@ func isAttemptControlKind(kind string) bool {
 // deliberately NOT included — for ralph controls, scope beads ARE the
 // iterations, and the caller handles that case.
 func latestAttemptCandidateIsControlInfrastructure(kind string) bool {
-	return beadmeta.IsControlKind(kind) || kind == beadmeta.KindWorkflow
+	return controlkind.IsLatestAttemptCandidateExempt(kind)
 }
 
 type attemptRouteBinding struct {
@@ -1531,7 +1532,7 @@ func latestAttemptFromCandidatesLegacyRefSurgery(control beads.Bead, candidates 
 		if latestAttemptCandidateIsControlInfrastructure(kind) {
 			continue
 		}
-		if kind == beadmeta.KindScope && controlKind != "ralph" {
+		if kind == beadmeta.KindScope && controlKind != beadmeta.KindRalph {
 			continue
 		}
 

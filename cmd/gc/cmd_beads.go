@@ -94,7 +94,8 @@ _cache_age_s; fallback-path JSON omits it.`,
 // the supervisor API when a controller is up and falls back to direct bd
 // multi-store reads otherwise.
 func cmdBeadsList(args []string, stdout, stderr io.Writer) int {
-	cityPath, err := resolveCity()
+	cityName, _, args := extractBdScopeFlags(args)
+	cityPath, err := resolveBdCity(cityName)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc beads list: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -186,7 +187,8 @@ func doBeadsListFallback(cityPath, format string, filters beadFilters, stdout, s
 // cmdBeadsShow is the CLI entry point for "gc beads show". Routes through
 // the supervisor API and falls back to a direct store lookup.
 func cmdBeadsShow(args []string, stdout, stderr io.Writer) int {
-	cityPath, err := resolveCity()
+	cityName, _, args := extractBdScopeFlags(args)
+	cityPath, err := resolveBdCity(cityName)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc beads show: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1

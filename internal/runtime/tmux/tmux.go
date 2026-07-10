@@ -1330,7 +1330,7 @@ func (t *Tmux) providerEnv(target string) string {
 }
 
 func (t *Tmux) requiresHiddenAttachedInterrupt(target string) bool {
-	switch t.providerEnv(target) {
+	switch providerEnvFamily(t.providerEnv(target)) {
 	case "gemini":
 		return true
 	case "":
@@ -1929,8 +1929,44 @@ func (t *Tmux) shouldSendEscapeBeforeEnter(target string) bool {
 	return true
 }
 
-func providerEnvSkipsEscape(provider string) bool {
+// knownProviderEnvFamilies are the provider families the tmux behavior gates
+// (escape-before-enter, hidden attached interrupt, interrupt boundary, nudge
+// debounce) have specific knowledge of.
+var knownProviderEnvFamilies = map[string]bool{
+	"antigravity": true,
+	"claude":      true,
+	"codex":       true,
+	"copilot":     true,
+	"gemini":      true,
+	"grok":        true,
+	"kimi":        true,
+	"opencode":    true,
+	"pi":          true,
+}
+
+// providerEnvFamily normalizes a GC_PROVIDER environment value to its
+// provider family for behavior gates. It returns "" when the value is empty
+// or names a custom provider whose family the name does not reveal, so that
+// callers fall back to process-tree detection instead of assuming default
+// behavior for a provider they know nothing about.
+func providerEnvFamily(provider string) string {
 	family := sessionlog.ProviderFamily(provider)
+	if knownProviderEnvFamilies[family] {
+		return family
+	}
+	// claude variants (claude, claude-eco, ...) fall through ProviderFamily
+	// unchanged; match them by name like the transcript layer does.
+	if strings.Contains(strings.ToLower(family), "claude") {
+		return "claude"
+	}
+	return ""
+}
+
+func providerEnvSkipsEscape(provider string) bool {
+	family := providerEnvFamily(provider)
+	if family == "" {
+		return false
+	}
 	for _, noEscape := range providersSkippingEscapeBeforeEnter {
 		if family == noEscape {
 			return true
@@ -1944,8 +1980,8 @@ func (t *Tmux) targetLooksLikeNoEscapeProvider(target string) bool {
 }
 
 func (t *Tmux) nudgeSubmitDebounce(target string) time.Duration {
-	provider := t.providerEnv(target)
-	if provider == "kimi" || (provider == "" && t.targetLooksLikeProvider(target, "kimi")) {
+	family := providerEnvFamily(t.providerEnv(target))
+	if family == "kimi" || (family == "" && t.targetLooksLikeProvider(target, "kimi")) {
 		return 1500 * time.Millisecond
 	}
 	return 500 * time.Millisecond
@@ -3075,14 +3111,16 @@ func waitForIdlePoll(ctx context.Context) error {
 // acknowledgement before the next user turn is injected.
 func (t *Tmux) WaitForInterruptBoundary(ctx context.Context, session string, since time.Time, timeout time.Duration) error {
 	provider, _ := t.GetEnvironment(session, "GC_PROVIDER")
-	switch strings.TrimSpace(provider) {
+	family := providerEnvFamily(provider)
+	switch family {
 	case "", "codex":
-		// Continue below. Empty provider env can happen in tests or with
-		// older sessions; fall back to process-tree detection.
+		// Continue below. An empty family covers tests, older sessions, and
+		// custom wrapper providers whose family the name does not reveal;
+		// fall back to process-tree detection.
 	default:
 		return runtime.ErrInteractionUnsupported
 	}
-	if strings.TrimSpace(provider) == "" && !t.targetLooksLikeProvider(session, "codex") {
+	if family == "" && !t.targetLooksLikeProvider(session, "codex") {
 		return runtime.ErrInteractionUnsupported
 	}
 	codexHome, err := t.GetEnvironment(session, "CODEX_HOME")

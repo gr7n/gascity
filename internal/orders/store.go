@@ -366,6 +366,32 @@ func (s *Store) LatestOpenRun(scoped string) (OrderRun, bool, error) {
 	return decodeRun(scoped, list[0]), true, err
 }
 
+// LatestOpenRunTimes returns the newest open order-run time for every scoped
+// order visible through the store. It is the batched counterpart to
+// LatestOpenRun for feed rebuilds: one label-prefix query replaces one
+// Limit-1 query per tracked order while preserving the open-only, both-tier
+// semantics. Partial results are returned alongside a store error.
+func (s *Store) LatestOpenRunTimes() (map[string]time.Time, error) {
+	latest := make(map[string]time.Time)
+	if s.store.Store == nil {
+		return latest, nil
+	}
+	list, err := s.store.List(beads.ListQuery{
+		LabelPrefix: labelOrderRunPrefix,
+		TierMode:    beads.TierBoth,
+	})
+	for _, b := range list {
+		run, ok := RunFromTrackingBead(b)
+		if !ok {
+			continue
+		}
+		if run.CreatedAt.After(latest[run.Scoped]) {
+			latest[run.Scoped] = run.CreatedAt
+		}
+	}
+	return latest, err
+}
+
 // RunFromTrackingBead projects an order tracking/run bead onto an OrderRun and
 // is the exported decode entry other front-door callers (the API feed/history
 // edges) use; decodeRun stays private. It is pure, side-effect-free, and

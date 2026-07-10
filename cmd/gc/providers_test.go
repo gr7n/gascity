@@ -34,6 +34,34 @@ func TestTmuxConfigFromSessionPreservesExplicitSocket(t *testing.T) {
 	}
 }
 
+func TestHybridRemoteMatcherUsesCommaSeparatedFragments(t *testing.T) {
+	match := hybridRemoteMatcher("k8s-canary, rig/web-worker ,director")
+
+	for _, name := range []string{
+		"k8s-canary",
+		"k8s-canary-gc-session-123",
+		"rig/web-worker-gc-session-456",
+		"director",
+	} {
+		if !match(name) {
+			t.Fatalf("match(%q) = false, want true", name)
+		}
+	}
+
+	for _, name := range []string{"local-worker", "rig/reviewer-gc-session-789", ""} {
+		if match(name) {
+			t.Fatalf("match(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestHybridRemoteMatcherEmptyPatternMatchesNothing(t *testing.T) {
+	match := hybridRemoteMatcher(" , ")
+	if match("k8s-canary") {
+		t.Fatal("empty pattern matched k8s-canary")
+	}
+}
+
 func TestSessionProviderContextForCityUsesTargetCityAndEnvOverride(t *testing.T) {
 	t.Setenv("GC_SESSION", "subprocess")
 

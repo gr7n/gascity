@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/coordclass"
+	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
@@ -35,7 +37,25 @@ type beadPolicyGraphStore struct {
 	applier beads.GraphApplyStore
 }
 
+type beadPolicyOrderRunSnapshotStore struct {
+	*beadPolicyStore
+	snapshot orderRunSnapshotReader
+}
+
+type beadPolicyGraphOrderRunSnapshotStore struct {
+	*beadPolicyGraphStore
+	snapshot orderRunSnapshotReader
+}
+
 var _ beads.ConditionalAssignmentReleaser = (*beadPolicyStore)(nil)
+
+type orderRunLastRunner interface {
+	LastOrderRun(name string) (time.Time, error)
+}
+
+type orderRunSnapshotReader interface {
+	LastOrderRuns() (map[string]time.Time, error)
+}
 
 func wrapStoreWithBeadPolicies(store beads.Store, cfg *config.City) beads.Store {
 	if store == nil {
@@ -46,9 +66,22 @@ func wrapStoreWithBeadPolicies(store beads.Store, cfg *config.City) beads.Store 
 		cfg:   cfg,
 	}
 	if applier, ok := beads.GraphApplyFor(store); ok {
-		return &beadPolicyGraphStore{
+		graphStore := &beadPolicyGraphStore{
 			beadPolicyStore: policyStore,
 			applier:         applier,
+		}
+		if snapshot, ok := store.(orderRunSnapshotReader); ok {
+			return &beadPolicyGraphOrderRunSnapshotStore{
+				beadPolicyGraphStore: graphStore,
+				snapshot:             snapshot,
+			}
+		}
+		return graphStore
+	}
+	if snapshot, ok := store.(orderRunSnapshotReader); ok {
+		return &beadPolicyOrderRunSnapshotStore{
+			beadPolicyStore: policyStore,
+			snapshot:        snapshot,
 		}
 	}
 	return policyStore
@@ -56,7 +89,11 @@ func wrapStoreWithBeadPolicies(store beads.Store, cfg *config.City) beads.Store 
 
 func unwrapBeadPolicyStore(store beads.Store) (beads.Store, *beadPolicyStore, bool) {
 	switch s := store.(type) {
+	case *beadPolicyGraphOrderRunSnapshotStore:
+		return s.Store, s.beadPolicyStore, true
 	case *beadPolicyGraphStore:
+		return s.Store, s.beadPolicyStore, true
+	case *beadPolicyOrderRunSnapshotStore:
 		return s.Store, s.beadPolicyStore, true
 	case *beadPolicyStore:
 		return s.Store, s, true
@@ -79,6 +116,21 @@ func (s *beadPolicyStore) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error)
 	return s.Store.Ready(expandPolicyReadyQuery(query...))
 }
 
+func (s *beadPolicyStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	if batch, ok := s.Store.(beads.DepBatchLister); ok {
+		return batch.DepListBatch(ids)
+	}
+	result := make(map[string][]beads.Dep, len(ids))
+	for _, id := range ids {
+		deps, err := s.DepList(id, "down")
+		if err != nil {
+			return nil, err
+		}
+		result[id] = deps
+	}
+	return result, nil
+}
+
 // Count implements beads.Counter with the same read-tier expansion as List.
 // The embedded Store interface does not promote optional capabilities, so
 // the delegation must be explicit. Inner stores without a Counter report
@@ -89,6 +141,23 @@ func (s *beadPolicyStore) Count(ctx context.Context, query beads.ListQuery, excl
 		return 0, fmt.Errorf("counting beads: policy-wrapped store: %w", beads.ErrCountUnsupported)
 	}
 	return counter.Count(ctx, expandPolicyReadTier(query), excludeTypes...)
+}
+
+func (s *beadPolicyStore) LastOrderRun(name string) (time.Time, error) {
+	if indexed, ok := s.Store.(orderRunLastRunner); ok {
+		return indexed.LastOrderRun(name)
+	}
+	return orders.LastOrderRunForStore(s.Store, name)
+}
+
+// LastOrderRuns preserves the wrapped store's batch order-run snapshot hot path.
+func (s *beadPolicyOrderRunSnapshotStore) LastOrderRuns() (map[string]time.Time, error) {
+	return s.snapshot.LastOrderRuns()
+}
+
+// LastOrderRuns preserves the wrapped graph store's batch order-run snapshot hot path.
+func (s *beadPolicyGraphOrderRunSnapshotStore) LastOrderRuns() (map[string]time.Time, error) {
+	return s.snapshot.LastOrderRuns()
 }
 
 func (s *beadPolicyStore) Handles() beads.StoreHandles {

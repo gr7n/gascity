@@ -328,13 +328,19 @@ func buildOrderRunFeedItems(state State, requestedScopeKind, requestedScopeRef s
 			continue
 		}
 
+		var runTimes map[string]time.Time
+		runTimesLoaded := false
 		for _, run := range runs {
 			scopeKind, scopeRef := orderTrackingScope(run.Scoped, cityScopeRef)
 			if !includeAllForCity && (scopeKind != requestedScopeKind || scopeRef != requestedScopeRef) {
 				continue
 			}
 
-			updatedAt := orderTrackingUpdatedAt(front, run)
+			if !runTimesLoaded {
+				runTimes = latestOrderRunTimes(front, info.ref)
+				runTimesLoaded = true
+			}
+			updatedAt := orderTrackingUpdatedAt(run, runTimes)
 			orderDef, ok := orderByScopedName[run.Scoped]
 			title := orderTrackingTitle(run.Scoped, orderDef, ok)
 			target := orderTrackingTarget(orderDef, ok, run)
@@ -369,20 +375,31 @@ func buildOrderRunFeedItems(state State, requestedScopeKind, requestedScopeRef s
 	}, nil
 }
 
-func orderTrackingUpdatedAt(front *orders.Store, run orders.OrderRun) time.Time {
-	updatedAt := run.CreatedAt
-	latest, found, err := front.LatestOpenRun(run.Scoped)
-	if err != nil && !found {
-		orderFeedLogf("api: order feed update lookup failed for %s bead %s: %v", run.Scoped, run.ID, err)
-		return updatedAt
+// latestOrderRunTimes returns the newest active order-run bead time per
+// scoped order name through the typed orders front door. The feed previously
+// resolved this with one LatestOpenRun call per tracked order, which fanned
+// out into a store query per order on every rebuild. A snapshot failure
+// degrades the same way: the feed falls back to each tracking run's CreatedAt.
+func latestOrderRunTimes(front *orders.Store, storeRef string) map[string]time.Time {
+	if front == nil {
+		return nil
+	}
+	latest, err := front.LatestOpenRunTimes()
+	if err != nil && len(latest) == 0 {
+		orderFeedLogf("api: order feed run scan failed for %s: %v", storeRef, err)
+		return nil
 	}
 	if err != nil {
-		orderFeedLogf("api: order feed update lookup partially failed for %s bead %s: %v", run.Scoped, run.ID, err)
+		orderFeedLogf("api: order feed run scan partially failed for %s: %v", storeRef, err)
 	}
-	if found && latest.CreatedAt.After(updatedAt) {
-		updatedAt = latest.CreatedAt
+	return latest
+}
+
+func orderTrackingUpdatedAt(run orders.OrderRun, runTimes map[string]time.Time) time.Time {
+	if t, ok := runTimes[run.Scoped]; ok && t.After(run.CreatedAt) {
+		return t
 	}
-	return updatedAt
+	return run.CreatedAt
 }
 
 func workflowProjectionScope(info workflowStoreInfo, root beads.Bead, cityScopeRef, requestedScopeKind, requestedScopeRef string) (string, string) {

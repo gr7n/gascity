@@ -54,6 +54,33 @@ mode = "on_demand"
 	}
 }
 
+func TestLoadWithIncludes_NamedSessionOperatorVisibility(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/city/city.toml"] = []byte(`
+[workspace]
+name = "test"
+
+[[agent]]
+name = "operator"
+
+[[named_session]]
+template = "operator"
+mode = "always"
+operator_visibility = "primary"
+`)
+	cfg, _, err := LoadWithIncludes(fs, "/city/city.toml")
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	sessions := userNamedSessions(cfg.NamedSessions)
+	if len(sessions) != 1 {
+		t.Fatalf("len(user NamedSessions) = %d, want 1", len(sessions))
+	}
+	if got := sessions[0].OperatorVisibility; got != "primary" {
+		t.Fatalf("OperatorVisibility = %q, want primary", got)
+	}
+}
+
 func TestLoadWithIncludes_AppendExtMsgDefaultRoutes(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Files["/city/city.toml"] = []byte(`

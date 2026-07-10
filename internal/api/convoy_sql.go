@@ -804,10 +804,10 @@ func buildDoltDSN(user, password, host string, port int, database string) string
 	return cfg.FormatDSN()
 }
 
-// prefetchedDepStore wraps a pre-fetched dep map to satisfy the beads.Store
-// interface for collectWorkflowDeps, which calls store.DepList().
+// prefetchedDepStore wraps a pre-fetched dep map to satisfy the dependency
+// read methods used by collectWorkflowDeps.
 type prefetchedDepStore struct {
-	beads.Store // embed nil Store — only DepList is called
+	beads.Store // embed nil Store — only dependency reads are called
 	deps        map[string][]beads.Dep
 }
 
@@ -823,6 +823,14 @@ func (s *prefetchedDepStore) DepList(id, direction string) ([]beads.Dep, error) 
 				result = append(result, d)
 			}
 		}
+	}
+	return result, nil
+}
+
+func (s *prefetchedDepStore) DepListBatch(ids []string) (map[string][]beads.Dep, error) {
+	result := make(map[string][]beads.Dep, len(ids))
+	for _, id := range ids {
+		result[id] = s.deps[id]
 	}
 	return result, nil
 }
