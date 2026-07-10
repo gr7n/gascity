@@ -20,6 +20,15 @@ func idleClaimTestCfg() *config.City {
 	}}}
 }
 
+func TestClaimNudgeForPromptDisabledAgentIsEmpty(t *testing.T) {
+	rejectsPrompt := false
+	cfg := idleClaimTestCfg()
+	cfg.Agents[0].AcceptsPrompt = &rejectsPrompt
+	if got := claimNudgeFor(cfg, idleClaimPoolSession()); got != "" {
+		t.Fatalf("claimNudgeFor = %q, want empty", got)
+	}
+}
+
 func idleClaimPoolSession() beads.Bead {
 	return beads.Bead{
 		ID:     "s-1",

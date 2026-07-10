@@ -425,6 +425,97 @@ func TestResolveWorkDir(t *testing.T) {
 	}
 }
 
+func TestEnsureSessionAcceptsPromptRejectsEffectiveNonInteractiveAgents(t *testing.T) {
+	rejectsPrompt := false
+	for _, tc := range []struct {
+		name       string
+		agent      config.Agent
+		wantDetail string
+	}{
+		{
+			name:       "explicit accepts_prompt false",
+			agent:      config.Agent{Name: "k8s-canary", AcceptsPrompt: &rejectsPrompt},
+			wantDetail: `agent "k8s-canary" has accepts_prompt=false`,
+		},
+		{
+			name: "legacy deterministic dispatcher",
+			agent: config.Agent{
+				Name:         config.ControlDispatcherAgentName,
+				StartCommand: config.ControlDispatcherStartCommand,
+			},
+			wantDetail: "deterministic control dispatcher",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.City{Agents: []config.Agent{tc.agent}}
+			store := beads.NewMemStore()
+			bead, err := store.Create(beads.Bead{
+				Type:   session.BeadType,
+				Title:  tc.agent.Name,
+				Labels: []string{session.LabelSession},
+				Metadata: map[string]string{
+					"template":     tc.agent.Name,
+					"session_name": tc.agent.Name,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			err = ensureSessionAcceptsPrompt(cfg, store, bead.ID)
+			if err == nil || !strings.Contains(err.Error(), tc.wantDetail) {
+				t.Fatalf("ensureSessionAcceptsPrompt error = %v, want %q", err, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestEnsureSessionAcceptsPromptAllowsProviderSessionAgentNameCollision(t *testing.T) {
+	rejectsPrompt := false
+	cfg := &config.City{Agents: []config.Agent{{Name: "router", AcceptsPrompt: &rejectsPrompt}}}
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Title:  "Direct router provider",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"template":                     "router",
+			"provider":                     "router",
+			"session_name":                 "router-provider-session",
+			session.SessionKindMetadataKey: "provider",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := ensureSessionAcceptsPrompt(cfg, store, bead.ID); err != nil {
+		t.Fatalf("ensureSessionAcceptsPrompt rejected direct provider session on agent-name collision: %v", err)
+	}
+}
+
+func TestEnsureSessionAcceptsPromptRejectsRemovedAgentBackedSession(t *testing.T) {
+	cfg := &config.City{Agents: []config.Agent{{Name: "friendly", StartCommand: "echo friendly"}}}
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Title:  "Removed implicit agent",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"template":       "friendly",
+			"agent_name":     "removed-router",
+			"provider":       "router",
+			"session_name":   "router-agent-session",
+			"session_origin": "manual",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	err = ensureSessionAcceptsPrompt(cfg, store, bead.ID)
+	if err == nil || !strings.Contains(err.Error(), `agent "removed-router" is no longer configured`) {
+		t.Fatalf("ensureSessionAcceptsPrompt error = %v, want removed-agent fail-closed error", err)
+	}
+}
+
 func TestCmdSessionNew_PoolTemplateUsesAliasBackedWorkDirIdentity(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_SESSION", "fake")

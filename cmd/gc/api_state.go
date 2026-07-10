@@ -1475,9 +1475,10 @@ func (cs *controllerState) WaitForAgentVisibility(ctx context.Context, qualified
 func (cs *controllerState) UpdateAgent(name string, patch api.AgentUpdate) error {
 	return cs.mutateAndPoke(func() error {
 		return cs.editor.UpdateAgent(name, configedit.AgentUpdate{
-			Provider:  patch.Provider,
-			Scope:     patch.Scope,
-			Suspended: patch.Suspended,
+			Provider:      patch.Provider,
+			Scope:         patch.Scope,
+			Suspended:     patch.Suspended,
+			AcceptsPrompt: patch.AcceptsPrompt,
 		})
 	})
 }
@@ -1574,6 +1575,7 @@ func (cs *controllerState) UpdateProvider(name string, patch api.ProviderUpdate)
 		return cs.editor.UpdateProvider(name, configedit.ProviderUpdate{
 			DisplayName:        patch.DisplayName,
 			Base:               patch.Base,
+			ImplicitAgent:      patch.ImplicitAgent,
 			Command:            patch.Command,
 			ACPCommand:         patch.ACPCommand,
 			Args:               patch.Args,

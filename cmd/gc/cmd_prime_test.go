@@ -349,6 +349,71 @@ path = "./rigs/bravo"
 	}
 }
 
+func TestDoPrimeStrictQualifiedImportedAgentResolvesRigAndConfiguredWorkDir(t *testing.T) {
+	clearGCEnv(t)
+
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(cityDir, "repos", "demo")
+	write := func(rel, data string) {
+		path := filepath.Join(cityDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+	write("pack.toml", "[pack]\nname = \"prompt-city\"\nschema = 2\n")
+	write("city.toml", `
+[workspace]
+name = "prompt-city"
+
+[[rigs]]
+name = "demo"
+
+[rigs.imports.project]
+source = "./packs/project"
+`)
+	write(".gc/site.toml", fmt.Sprintf(`
+workspace_name = "prompt-city"
+
+[[rig]]
+name = "demo"
+path = %q
+`, rigDir))
+	write("packs/project/pack.toml", "[pack]\nname = \"project\"\nschema = 2\n")
+	write("packs/project/agents/planner/agent.toml", `
+scope = "rig"
+work_dir = ".gc/rig-worktrees/{{.Rig}}/planners/{{.AgentBase}}"
+`)
+	write("packs/project/agents/planner/prompt.template.md", `rig={{.Rig}}
+rig_name={{.RigName}}
+work_dir={{.WorkDir}}
+route={{.Rig}}/{{.BindingName}}.planner
+`)
+	if err := os.MkdirAll(rigDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rigDir): %v", err)
+	}
+
+	t.Setenv("GC_CITY", cityDir)
+	var stdout, stderr bytes.Buffer
+	code := doPrimeWithMode([]string{"demo/project.planner"}, &stdout, &stderr, false, true)
+	if code != 0 {
+		t.Fatalf("doPrimeWithMode() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	wantWorkDir := filepath.Join(cityDir, ".gc", "rig-worktrees", "demo", "planners", "project.planner")
+	want := "rig=demo\n" +
+		"rig_name=demo\n" +
+		"work_dir=" + wantWorkDir + "\n" +
+		"route=demo/project.planner\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q; stderr=%q", got, want, stderr.String())
+	}
+	if _, err := os.Stat(wantWorkDir); !os.IsNotExist(err) {
+		t.Fatalf("manual prime created configured work_dir %q; stat error = %v", wantWorkDir, err)
+	}
+}
+
 func TestBuildPrimeContextPrefersGCAliasOverGCAgent(t *testing.T) {
 	// When GC_AGENT is a session bead ID, buildPrimeContext should prefer
 	// GC_ALIAS for AgentName so the prompt doesn't contain a bead ID.
@@ -762,6 +827,109 @@ prompt_template = "prompts/must-not-be-read.md"
 	}
 	if receipt.Version != "" || receipt.SHA != "" {
 		t.Fatalf("receipt = %+v, want empty receipt for deterministic control dispatcher", receipt)
+	}
+}
+
+func TestDoPrimeStrict_BundledControlDispatcherIdentitiesAreSilent(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(cityDir, "project")
+	if err := os.MkdirAll(rigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "test-city"
+
+[[rigs]]
+name = "project"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, ".gc", "site.toml"), []byte(`
+workspace_name = "test-city"
+
+[[rig]]
+name = "project"
+path = "`+rigDir+`"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinImportsFixture(t, cityDir, "core")
+	materializeBuiltinPacksForTest(t, cityDir)
+
+	t.Setenv("GC_CITY", cityDir)
+	for _, identity := range []string{
+		"core.control-dispatcher",
+		"project/core.control-dispatcher",
+	} {
+		t.Run(identity, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			receipt := session.PromptReceipt{Version: "stale", SHA: "stale"}
+			code := doPrimeWithHookFormatAndReceipt(
+				[]string{identity},
+				&stdout,
+				&stderr,
+				false,
+				"",
+				true,
+				&receipt,
+			)
+			if code != 0 {
+				t.Fatalf("doPrimeWithHookFormatAndReceipt(%q) = %d, want 0; stderr=%q", identity, code, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want no prompt for deterministic control dispatcher %q", stdout.String(), identity)
+			}
+			if receipt.Version != "" || receipt.SHA != "" {
+				t.Fatalf("receipt = %+v, want empty receipt for %q", receipt, identity)
+			}
+		})
+	}
+}
+
+func TestDoPrimeStrict_AcceptsPromptFalseIsSilentWithoutReadingTemplate(t *testing.T) {
+	clearGCEnv(t)
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "deterministic-city"
+
+[[agent]]
+name = "k8s-canary"
+start_command = "gr7n k8s canary"
+accepts_prompt = false
+prompt_template = "prompts/must-not-be-read.template.md"
+nudge = "must not be delivered"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+
+	var stdout, stderr bytes.Buffer
+	receipt := session.PromptReceipt{Version: "stale", SHA: "stale"}
+	code := doPrimeWithHookFormatAndReceipt(
+		[]string{"k8s-canary"},
+		&stdout,
+		&stderr,
+		false,
+		"",
+		true,
+		&receipt,
+	)
+	if code != 0 {
+		t.Fatalf("doPrimeWithHookFormatAndReceipt = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no prompt", stdout.String())
+	}
+	if receipt != (session.PromptReceipt{}) {
+		t.Fatalf("receipt = %+v, want empty", receipt)
 	}
 }
 

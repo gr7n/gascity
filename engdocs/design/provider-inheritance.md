@@ -103,7 +103,7 @@ supports_hooks = false          # optional tri-state override
 |---|---|---|---|
 | `base` | `*string` (presence-aware) | no | Name of the parent provider. Stored as a pointer so parse/compose/patch can distinguish *omitted* from *explicit empty*. Absent = no declaration (inherits any pack-level `base` during compose; triggers Phase A warning if legacy auto-inheritance matches). `""` (explicit empty) = standalone opt-out — no inheritance at all, silences Phase A warning, bypasses Phase A legacy-merge synthesis. `"<name>"` looks up custom first, then built-in (self-exclusion applies). `"builtin:<name>"` forces built-in lookup (recommended form). `"provider:<name>"` forces custom lookup. |
 | `args_append` | `[]string` | no | String list appended to the effective `args` of the resolved chain. Applied after that layer's `args` replacement. Inner-argv composition only — cannot wrap `Command`. |
-| capability-bool overrides (`supports_hooks`, `supports_acp`, `emits_permission_warning`) | `*bool` | no | Tri-state: absent = inherit; `true` = enable; `false` = explicitly disable. Serialized as optional TOML bool; internal representation is `*bool`. |
+| capability/catalog-bool overrides (`implicit_agent`, `supports_hooks`, `supports_acp`, `emits_permission_warning`) | `*bool` | no | Tri-state: absent = inherit; `true` = enable; `false` = explicitly disable. `implicit_agent` additionally defaults to enabled when no layer declares it. Serialized as optional TOML bool; internal representation is `*bool`. |
 
 Plus one changed field:
 
@@ -217,7 +217,7 @@ ancestor root→leaf through the same merge function.
 
 1. **Compose** (pack fragments + city overrides in
    [`compose.go`](../../internal/config/compose.go)): `Base`,
-   `ArgsAppend`, tri-state capability bools, `ResumeCommand`,
+   `ArgsAppend`, tri-state capability/catalog bools, `ResumeCommand`,
    `OptionsSchemaMerge` participate in `deepMergeProvider`.
 2. **Patch** ([`patch.go`](../../internal/config/patch.go)): all new
    fields added to `ProviderPatch`, `applyProviderPatch`, deep-copy.
@@ -258,7 +258,7 @@ loudly.
 |---|---|---|
 | Scalar strings | Non-zero child replaces parent. | Unchanged |
 | Scalar integers (`ReadyDelayMs`) | Non-zero child replaces parent. | Unchanged |
-| Tri-state capability booleans | `*bool`: nil = inherit; non-nil replaces. | **Changed (new `*bool`)** |
+| Tri-state capability/catalog booleans | `*bool`: nil = inherit; non-nil replaces. `implicit_agent` resolves nil to the compatibility default `true`. | **Changed (new `*bool`)** |
 | `Args` | Non-nil child replaces parent. `[] = clear`. Absent inherits. | Nil-vs-empty pinned |
 | `ArgsAppend` | Accumulated across chain: each layer's `args_append` extends the running list, applied after that layer's `args` replace. `[] = append nothing` (not a clear). | **New** |
 | `ProcessNames`, `PrintArgs` | Non-nil child replaces. `[]` clears. Absent inherits. | Nil-vs-empty pinned |

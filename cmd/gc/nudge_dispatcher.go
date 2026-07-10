@@ -184,6 +184,17 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store, sessStore
 		if !matched {
 			continue
 		}
+		liveTarget, promptDisabled, capabilityErr := prepareQueuedNudgeDeliveryTarget(target, store)
+		if capabilityErr != nil {
+			if firstErr == nil {
+				firstErr = capabilityErr
+			}
+			continue
+		}
+		target = liveTarget
+		if promptDisabled {
+			continue
+		}
 		obs, err := workerObserveNudgeTarget(target, sessStore, sp)
 		if err != nil {
 			if firstErr == nil {

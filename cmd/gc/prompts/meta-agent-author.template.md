@@ -94,6 +94,7 @@ verbatim — they get substituted at session-start time, not by you:
 - `{{ .ProviderKey }}`           "claude", "codex", etc.
 - `{{ .ProviderDisplayName }}`   "Claude Code", "Codex CLI", etc.
 - `{{ .RigName }}`               current rig name (empty for HQ agents)
+- `{{ .Rig }}`                   alias of RigName (matches work_dir templates)
 - `{{ .RigRoot }}`               absolute path to the current rig
 - `{{ .WorkDir }}`               agent's working directory
 - `{{ .DefaultBranch }}`         git default branch (e.g. "main")

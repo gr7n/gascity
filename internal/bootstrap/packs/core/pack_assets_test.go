@@ -41,6 +41,7 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	type agentFile struct {
 		Description       string   `toml:"description"`
 		StartCommand      string   `toml:"start_command"`
+		AcceptsPrompt     *bool    `toml:"accepts_prompt"`
 		PromptMode        string   `toml:"prompt_mode"`
 		ProcessNames      []string `toml:"process_names"`
 		MaxActiveSessions *int     `toml:"max_active_sessions"`
@@ -64,6 +65,9 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	wantStartCommand := `sh -c 'export GC_WORKFLOW_TRACE="${GC_WORKFLOW_TRACE:-${GC_CONTROL_DISPATCHER_TRACE_DEFAULT:-${GC_CITY}/.gc/runtime/control-dispatcher-trace.log}}"; trace_dir="${GC_WORKFLOW_TRACE%/*}"; if [ "$trace_dir" = "$GC_WORKFLOW_TRACE" ]; then trace_dir="."; elif [ -z "$trace_dir" ]; then trace_dir="/"; fi; mkdir -p "$trace_dir"; exec "${GC_BIN:-gc}" convoy control --serve --follow {{.Agent}}'`
 	if agent.StartCommand != wantStartCommand {
 		t.Fatalf("control-dispatcher start_command = %q, want templated dispatcher command", agent.StartCommand)
+	}
+	if agent.AcceptsPrompt == nil || *agent.AcceptsPrompt {
+		t.Fatalf("control-dispatcher accepts_prompt = %v, want false", agent.AcceptsPrompt)
 	}
 	if agent.PromptMode != "none" {
 		t.Fatalf("control-dispatcher prompt_mode = %q, want none", agent.PromptMode)

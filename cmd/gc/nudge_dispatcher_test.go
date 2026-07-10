@@ -22,6 +22,25 @@ func supervisorCfg() *config.City {
 	}
 }
 
+// stubDispatcherLiveConfig keeps these dispatcher-unit tests focused on
+// dispatch behavior while satisfying the production delivery boundary's live
+// config reload. Transition tests in cmd_nudge_test.go exercise the real
+// city.toml loader and true->false config changes end to end.
+func stubDispatcherLiveConfig(t *testing.T, cfg *config.City) {
+	t.Helper()
+	previous := nudgeLoadLiveCityConfig
+	nudgeLoadLiveCityConfig = func(string) (*config.City, error) {
+		return cfg, nil
+	}
+	t.Cleanup(func() { nudgeLoadLiveCityConfig = previous })
+}
+
+func supervisorCfgWithWorker(sessionTransport string) *config.City {
+	cfg := supervisorCfg()
+	cfg.Agents = []config.Agent{{Name: "worker", Provider: "codex", Session: sessionTransport}}
+	return cfg
+}
+
 func TestPingNudgeWakeSocketNoListenerIsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	// No listener — DialTimeout returns "no such file or directory". The
@@ -177,6 +196,8 @@ func TestDispatchAllQueuedNudgesDeliversAndAcks(t *testing.T) {
 	clearInheritedCityRoutingEnv(t)
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
+	cfg := supervisorCfgWithWorker("")
+	stubDispatcherLiveConfig(t, cfg)
 
 	// Set up a running session via the same fake-provider harness used by
 	// the per-session poller test, then enqueue a nudge for it.
@@ -201,7 +222,7 @@ func TestDispatchAllQueuedNudgesDeliversAndAcks(t *testing.T) {
 		t.Fatalf("loadSessionBeadSnapshot: %v", err)
 	}
 
-	delivered, err := dispatchAllQueuedNudges(dir, supervisorCfg(), store.Store, store.Store, fake, snapshot)
+	delivered, err := dispatchAllQueuedNudges(dir, cfg, store.Store, store.Store, fake, snapshot)
 	if err != nil {
 		t.Fatalf("dispatchAllQueuedNudges: %v", err)
 	}
@@ -248,6 +269,8 @@ func TestDispatchAllQueuedNudgesDeliversToIdleACPSession(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 
 	dir := t.TempDir()
+	cfg := supervisorCfgWithWorker("acp")
+	stubDispatcherLiveConfig(t, cfg)
 	store := openNudgeBeadStore(dir)
 	if store.Store == nil {
 		t.Fatal("openNudgeBeadStore returned nil")
@@ -284,7 +307,7 @@ func TestDispatchAllQueuedNudgesDeliversToIdleACPSession(t *testing.T) {
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{created})
 
-	delivered, err := dispatchAllQueuedNudges(dir, supervisorCfg(), store, store, fake, snapshot)
+	delivered, err := dispatchAllQueuedNudges(dir, cfg, store, store, fake, snapshot)
 	if err != nil {
 		t.Fatalf("dispatchAllQueuedNudges: %v", err)
 	}
@@ -345,6 +368,8 @@ func TestDispatchAllQueuedNudgesSkipsACPSessionWhenNotRunning(t *testing.T) {
 	disableManagedDoltRecoveryForTest(t)
 
 	dir := t.TempDir()
+	cfg := supervisorCfgWithWorker("acp")
+	stubDispatcherLiveConfig(t, cfg)
 	if err := enqueueQueuedNudge(dir, newQueuedNudge("worker", "msg", time.Now().Add(-time.Minute))); err != nil {
 		t.Fatalf("enqueueQueuedNudge: %v", err)
 	}
@@ -360,7 +385,7 @@ func TestDispatchAllQueuedNudgesSkipsACPSessionWhenNotRunning(t *testing.T) {
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{bead})
 	// Fake has no started session, so IsRunning("worker-session") is false.
-	delivered, err := dispatchAllQueuedNudges(dir, supervisorCfg(), nil, nil, runtime.NewFake(), snapshot)
+	delivered, err := dispatchAllQueuedNudges(dir, cfg, nil, nil, runtime.NewFake(), snapshot)
 	if err != nil {
 		t.Fatalf("dispatchAllQueuedNudges: %v", err)
 	}

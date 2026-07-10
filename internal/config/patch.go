@@ -47,6 +47,9 @@ type AgentPatch struct {
 	// Relative paths resolve against the declaring config file's directory
 	// (pack-safe). Paths prefixed with "//" resolve against the city root.
 	PromptTemplate *string `toml:"prompt_template,omitempty"`
+	// AcceptsPrompt overrides whether the agent can consume startup or
+	// interactive prompts.
+	AcceptsPrompt *bool `toml:"accepts_prompt,omitempty"`
 	// Session overrides the session transport ("acp" or "tmux").
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
@@ -230,6 +233,9 @@ type ProviderPatch struct {
 	//   &(&"")       = patch sets Base = "" (explicit opt-out)
 	//   &(&"builtin:codex") = patch sets Base to that value
 	Base **string `toml:"base,omitempty"`
+	// ImplicitAgent overrides provider-derived implicit agent creation while
+	// leaving the provider available to explicitly configured agents.
+	ImplicitAgent *bool `toml:"implicit_agent,omitempty"`
 	// Command overrides the provider command.
 	Command *string `toml:"command,omitempty"`
 	// ACPCommand overrides the provider command for ACP transport sessions.
@@ -463,6 +469,9 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 	}
 	if p.PromptTemplate != nil {
 		a.PromptTemplate = *p.PromptTemplate
+	}
+	if p.AcceptsPrompt != nil {
+		a.AcceptsPrompt = copyBoolPtr(p.AcceptsPrompt)
 	}
 	if p.Session != nil {
 		a.Session = *p.Session
@@ -739,6 +748,9 @@ func applyProviderPatch(cfg *City, patch *ProviderPatch) error {
 		if patch.Base != nil {
 			newSpec.Base = *patch.Base
 		}
+		if patch.ImplicitAgent != nil {
+			newSpec.ImplicitAgent = cloneBoolPtr(patch.ImplicitAgent)
+		}
 		if patch.Command != nil {
 			newSpec.Command = *patch.Command
 		}
@@ -784,6 +796,9 @@ func applyProviderPatch(cfg *City, patch *ProviderPatch) error {
 	// Deep merge: only set fields override.
 	if patch.Base != nil {
 		spec.Base = *patch.Base // outer nil handled above; *patch.Base may be nil (clear) or valid
+	}
+	if patch.ImplicitAgent != nil {
+		spec.ImplicitAgent = cloneBoolPtr(patch.ImplicitAgent)
 	}
 	if patch.Command != nil {
 		spec.Command = *patch.Command

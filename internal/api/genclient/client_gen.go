@@ -624,6 +624,9 @@ type AdapterEventPayload struct {
 
 // AgentCreateInputBody defines model for AgentCreateInputBody.
 type AgentCreateInputBody struct {
+	// AcceptsPrompt Whether the agent accepts startup and interactive prompts. Omit for the compatibility default (true).
+	AcceptsPrompt *bool `json:"accepts_prompt,omitempty"`
+
 	// Dir Working directory (rig name).
 	Dir *string `json:"dir,omitempty"`
 
@@ -662,6 +665,7 @@ type AgentOutputResponse struct {
 
 // AgentPatch defines model for AgentPatch.
 type AgentPatch struct {
+	AcceptsPrompt           *bool             `json:"AcceptsPrompt"`
 	AppendFragments         *[]string         `json:"AppendFragments"`
 	Args                    *[]string         `json:"Args"`
 	Attach                  *bool             `json:"Attach"`
@@ -716,6 +720,9 @@ type AgentPatch struct {
 
 // AgentPatchSetInputBody defines model for AgentPatchSetInputBody.
 type AgentPatchSetInputBody struct {
+	// AcceptsPrompt Override whether the agent accepts startup and interactive prompts.
+	AcceptsPrompt *bool `json:"accepts_prompt,omitempty"`
+
 	// Dir Agent directory scope.
 	Dir *string `json:"dir,omitempty"`
 
@@ -743,6 +750,7 @@ type AgentPatchSetInputBody struct {
 
 // AgentResponse defines model for AgentResponse.
 type AgentResponse struct {
+	AcceptsPrompt     bool         `json:"accepts_prompt"`
 	ActiveBead        *string      `json:"active_bead,omitempty"`
 	Activity          *string      `json:"activity,omitempty"`
 	Available         bool         `json:"available"`
@@ -767,6 +775,9 @@ type AgentResponse struct {
 
 // AgentUpdateInputBody defines model for AgentUpdateInputBody.
 type AgentUpdateInputBody struct {
+	// AcceptsPrompt Whether the agent accepts startup and interactive prompts.
+	AcceptsPrompt *bool `json:"accepts_prompt,omitempty"`
+
 	// Provider Provider name.
 	Provider *string `json:"provider,omitempty"`
 
@@ -779,6 +790,9 @@ type AgentUpdateInputBody struct {
 
 // AgentUpdateQualifiedInputBody defines model for AgentUpdateQualifiedInputBody.
 type AgentUpdateQualifiedInputBody struct {
+	// AcceptsPrompt Whether the agent accepts startup and interactive prompts.
+	AcceptsPrompt *bool `json:"accepts_prompt,omitempty"`
+
 	// Provider Provider name.
 	Provider *string `json:"provider,omitempty"`
 
@@ -804,12 +818,13 @@ type AnnotatedAgentResponse struct {
 
 // AnnotatedProviderResponse defines model for AnnotatedProviderResponse.
 type AnnotatedProviderResponse struct {
-	AcpArgs     *[]string          `json:"acp_args,omitempty"`
-	AcpCommand  *string            `json:"acp_command,omitempty"`
-	Args        *[]string          `json:"args,omitempty"`
-	Command     *string            `json:"command,omitempty"`
-	DisplayName *string            `json:"display_name,omitempty"`
-	Env         *map[string]string `json:"env,omitempty"`
+	AcpArgs       *[]string          `json:"acp_args,omitempty"`
+	AcpCommand    *string            `json:"acp_command,omitempty"`
+	Args          *[]string          `json:"args,omitempty"`
+	Command       *string            `json:"command,omitempty"`
+	DisplayName   *string            `json:"display_name,omitempty"`
+	Env           *map[string]string `json:"env,omitempty"`
+	ImplicitAgent *bool              `json:"implicit_agent,omitempty"`
 
 	// Origin Provider origin: builtin, city, or builtin+city.
 	Origin       string  `json:"origin"`
@@ -2566,6 +2581,9 @@ type ProviderCreateInputBody struct {
 	// Env Environment variables.
 	Env *map[string]string `json:"env,omitempty"`
 
+	// ImplicitAgent Whether this provider creates provider-named implicit agents. Omit to inherit the compatibility default (enabled).
+	ImplicitAgent *bool `json:"implicit_agent,omitempty"`
+
 	// Name Provider name.
 	Name string `json:"name"`
 
@@ -2614,6 +2632,7 @@ type ProviderPatch struct {
 	Command              *string           `json:"Command"`
 	Env                  map[string]string `json:"Env"`
 	EnvRemove            *[]string         `json:"EnvRemove"`
+	ImplicitAgent        *bool             `json:"ImplicitAgent"`
 	Name                 string            `json:"Name"`
 	OptionsSchemaMerge   *string           `json:"OptionsSchemaMerge"`
 	PromptFlag           *string           `json:"PromptFlag"`
@@ -2642,6 +2661,9 @@ type ProviderPatchSetInputBody struct {
 	// Env Override environment variables.
 	Env *map[string]string `json:"env,omitempty"`
 
+	// ImplicitAgent Override provider-derived implicit agent creation.
+	ImplicitAgent *bool `json:"implicit_agent,omitempty"`
+
 	// Name Provider name.
 	Name *string `json:"name,omitempty"`
 
@@ -2669,12 +2691,15 @@ type ProviderPublicListBody struct {
 
 // ProviderPublicResponse defines model for ProviderPublicResponse.
 type ProviderPublicResponse struct {
-	Builtin           bool                 `json:"builtin"`
-	CityLevel         bool                 `json:"city_level"`
-	DisplayName       *string              `json:"display_name,omitempty"`
-	EffectiveDefaults *map[string]string   `json:"effective_defaults,omitempty"`
-	Name              string               `json:"name"`
-	OptionsSchema     *[]ProviderOptionDTO `json:"options_schema,omitempty"`
+	Builtin           bool               `json:"builtin"`
+	CityLevel         bool               `json:"city_level"`
+	DisplayName       *string            `json:"display_name,omitempty"`
+	EffectiveDefaults *map[string]string `json:"effective_defaults,omitempty"`
+
+	// ImplicitAgent Whether this provider creates provider-named implicit agents at city and rig scope.
+	ImplicitAgent bool                 `json:"implicit_agent"`
+	Name          string               `json:"name"`
+	OptionsSchema *[]ProviderOptionDTO `json:"options_schema,omitempty"`
 }
 
 // ProviderReadiness defines model for ProviderReadiness.
@@ -2691,31 +2716,35 @@ type ProviderReadinessResponse struct {
 
 // ProviderResponse defines model for ProviderResponse.
 type ProviderResponse struct {
-	AcpArgs      *[]string          `json:"acp_args,omitempty"`
-	AcpCommand   *string            `json:"acp_command,omitempty"`
-	Args         *[]string          `json:"args,omitempty"`
-	Builtin      bool               `json:"builtin"`
-	CityLevel    bool               `json:"city_level"`
-	Command      *string            `json:"command,omitempty"`
-	DisplayName  *string            `json:"display_name,omitempty"`
-	Env          *map[string]string `json:"env,omitempty"`
-	Name         string             `json:"name"`
-	PromptFlag   *string            `json:"prompt_flag,omitempty"`
-	PromptMode   *string            `json:"prompt_mode,omitempty"`
-	ReadyDelayMs *int64             `json:"ready_delay_ms,omitempty"`
+	AcpArgs     *[]string          `json:"acp_args,omitempty"`
+	AcpCommand  *string            `json:"acp_command,omitempty"`
+	Args        *[]string          `json:"args,omitempty"`
+	Builtin     bool               `json:"builtin"`
+	CityLevel   bool               `json:"city_level"`
+	Command     *string            `json:"command,omitempty"`
+	DisplayName *string            `json:"display_name,omitempty"`
+	Env         *map[string]string `json:"env,omitempty"`
+
+	// ImplicitAgent Whether this provider creates provider-named implicit agents at city and rig scope.
+	ImplicitAgent bool    `json:"implicit_agent"`
+	Name          string  `json:"name"`
+	PromptFlag    *string `json:"prompt_flag,omitempty"`
+	PromptMode    *string `json:"prompt_mode,omitempty"`
+	ReadyDelayMs  *int64  `json:"ready_delay_ms,omitempty"`
 }
 
 // ProviderSpecJSON defines model for ProviderSpecJSON.
 type ProviderSpecJSON struct {
-	AcpArgs      *[]string          `json:"acp_args,omitempty"`
-	AcpCommand   *string            `json:"acp_command,omitempty"`
-	Args         *[]string          `json:"args,omitempty"`
-	Command      *string            `json:"command,omitempty"`
-	DisplayName  *string            `json:"display_name,omitempty"`
-	Env          *map[string]string `json:"env,omitempty"`
-	PromptFlag   *string            `json:"prompt_flag,omitempty"`
-	PromptMode   *string            `json:"prompt_mode,omitempty"`
-	ReadyDelayMs *int64             `json:"ready_delay_ms,omitempty"`
+	AcpArgs       *[]string          `json:"acp_args,omitempty"`
+	AcpCommand    *string            `json:"acp_command,omitempty"`
+	Args          *[]string          `json:"args,omitempty"`
+	Command       *string            `json:"command,omitempty"`
+	DisplayName   *string            `json:"display_name,omitempty"`
+	Env           *map[string]string `json:"env,omitempty"`
+	ImplicitAgent *bool              `json:"implicit_agent,omitempty"`
+	PromptFlag    *string            `json:"prompt_flag,omitempty"`
+	PromptMode    *string            `json:"prompt_mode,omitempty"`
+	ReadyDelayMs  *int64             `json:"ready_delay_ms,omitempty"`
 }
 
 // ProviderUpdateInputBody defines model for ProviderUpdateInputBody.
@@ -2743,6 +2772,9 @@ type ProviderUpdateInputBody struct {
 
 	// Env Environment variables.
 	Env *map[string]string `json:"env,omitempty"`
+
+	// ImplicitAgent Whether this provider creates provider-named implicit agents.
+	ImplicitAgent *bool `json:"implicit_agent,omitempty"`
 
 	// OptionDefaults Provider option defaults (e.g. model). Keys are merged on update.
 	OptionDefaults *map[string]string `json:"option_defaults,omitempty"`

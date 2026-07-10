@@ -363,6 +363,17 @@ Each MCP server is a separate file, so multiple packs' MCP servers merge cleanly
 
 ### Prompts and templates
 
+`accepts_prompt = false` marks an agent directory as a deterministic command
+worker rather than a conversational prompt consumer. It is inherited through
+normal agent composition and may be changed by agent patches or rig overrides.
+The runtime keeps process/lifecycle supervision but suppresses template
+rendering, startup nudges and trust-dialog automation, and rejects later
+interactive delivery. Omission defaults to `true` for compatibility.
+
+This capability is intentionally separate from `prompt_mode = "none"`, which
+means a prompt-capable provider receives its prompt by nudge rather than in its
+launch arguments.
+
 **`.template.` infix required for template processing ([#582](https://github.com/gastownhall/gascity/issues/582)).** `prompt.md` is plain markdown — no template engine runs. `prompt.template.md` goes through Go `text/template`. No more "everything is secretly a template."
 
 This applies to all file types, not just prompts. If a file needs template expansion, it has `.template.` in its name (e.g., `prompt.template.md`, `beads-health.template.toml`). If it doesn't, it doesn't.
@@ -563,7 +574,10 @@ A rig patch can undo a city-level patch for that one rig.
 
 - **Skill lifecycle:** Should agent-created skills auto-promote, stay local to the rig, or require explicit `gc skill promote`? Current design says explicit.
 - **Provider-named agents:** Must `agents/claude/` use `provider = "claude"`, or is naming just convention?
-- **Suppressing implicit agents:** How does a city say "I configure claude as a provider but don't want an implicit `claude` agent"?
+- **Resolved — suppressing implicit agents:** a provider sets
+  `implicit_agent = false`; it remains usable by explicit agents but contributes
+  no provider-named city or rig agents. Omission preserves the historical
+  enabled default, and provider descendants may re-enable it.
 - **Patch directory structure:** Flat `patches/` or namespaced by target pack?
 - **Patches vs. overrides naming:** This proposal unifies on "patches" everywhere. Alternative: unify on "overrides" everywhere. The key property is that the mechanism is the same regardless of scope.
 

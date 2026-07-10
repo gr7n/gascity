@@ -94,7 +94,7 @@ func legacySessionKind(metadata map[string]string) string {
 	if metadata == nil {
 		return ""
 	}
-	return strings.TrimSpace(metadata["real_world_app_session_kind"])
+	return strings.TrimSpace(metadata[session.SessionKindMetadataKey])
 }
 
 // sessionResumeHints builds the resume runtime hints. The interactive flag gates

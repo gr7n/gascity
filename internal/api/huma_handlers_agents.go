@@ -128,6 +128,7 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 				Pool:              ea.pool,
 				Provider:          provider,
 				DisplayName:       displayName,
+				AcceptsPrompt:     a.AcceptsPromptEnabled(),
 				Available:         available,
 				UnavailableReason: unavailableReason,
 				PackDerived:       packDerived,
@@ -256,6 +257,7 @@ func (s *Server) agentByName(name string) (*IndexOutput[agentResponse], error) {
 		Rig:               agentCfg.Dir,
 		Provider:          provider,
 		DisplayName:       displayName,
+		AcceptsPrompt:     agentCfg.AcceptsPromptEnabled(),
 		Available:         available,
 		UnavailableReason: unavailableReason,
 		PackDerived:       packDerived,
@@ -304,10 +306,11 @@ func (s *Server) humaHandleAgentCreate(ctx context.Context, input *AgentCreateIn
 	}
 
 	a := config.Agent{
-		Name:     input.Body.Name,
-		Dir:      input.Body.Dir,
-		Provider: input.Body.Provider,
-		Scope:    input.Body.Scope,
+		Name:          input.Body.Name,
+		Dir:           input.Body.Dir,
+		Provider:      input.Body.Provider,
+		Scope:         input.Body.Scope,
+		AcceptsPrompt: input.Body.AcceptsPrompt,
 	}
 
 	if err := sm.CreateAgent(a); err != nil {
@@ -352,21 +355,21 @@ func agentVisibilityRetryableError(err error) error {
 // humaHandleAgentUpdate is the Huma-typed handler for
 // PATCH /v0/city/{cityName}/agent/{base}.
 func (s *Server) humaHandleAgentUpdate(_ context.Context, input *AgentUpdateInput) (*OKResponse, error) {
-	return s.updateAgentByName(input.Name, input.Body.Provider, input.Body.Scope, input.Body.Suspended)
+	return s.updateAgentByName(input.Name, input.Body.Provider, input.Body.Scope, input.Body.Suspended, input.Body.AcceptsPrompt)
 }
 
 // humaHandleAgentUpdateQualified is the Huma-typed handler for
 // PATCH /v0/city/{cityName}/agent/{dir}/{base}.
 func (s *Server) humaHandleAgentUpdateQualified(_ context.Context, input *AgentUpdateQualifiedInput) (*OKResponse, error) {
-	return s.updateAgentByName(input.QualifiedName(), input.Body.Provider, input.Body.Scope, input.Body.Suspended)
+	return s.updateAgentByName(input.QualifiedName(), input.Body.Provider, input.Body.Scope, input.Body.Suspended, input.Body.AcceptsPrompt)
 }
 
-func (s *Server) updateAgentByName(name, provider, scope string, suspended *bool) (*OKResponse, error) {
+func (s *Server) updateAgentByName(name, provider, scope string, suspended, acceptsPrompt *bool) (*OKResponse, error) {
 	sm, ok := s.state.(StateMutator)
 	if !ok {
 		return nil, errMutationsNotSupported
 	}
-	patch := AgentUpdate{Provider: provider, Scope: scope, Suspended: suspended}
+	patch := AgentUpdate{Provider: provider, Scope: scope, Suspended: suspended, AcceptsPrompt: acceptsPrompt}
 	if err := sm.UpdateAgent(name, patch); err != nil {
 		return nil, mutationError(err)
 	}

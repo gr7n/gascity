@@ -2,6 +2,11 @@ package session
 
 import "strings"
 
+// SessionKindMetadataKey is the persisted discriminator for direct provider
+// versus configured agent sessions. It is projected onto Info.SessionKind so
+// decision paths do not crack raw bead metadata.
+const SessionKindMetadataKey = "real_world_app_session_kind"
+
 // UseAgentTemplateForProviderResolution reports whether a session should
 // resolve provider options through its agent template instead of treating the
 // persisted Template field as a raw provider name. The provider-name arguments

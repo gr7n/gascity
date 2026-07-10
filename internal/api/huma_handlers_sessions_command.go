@@ -105,6 +105,9 @@ func (s *Server) humaHandleSessionCreate(ctx context.Context, input *SessionCrea
 		return nil, apierr.Internal.Msg(err.Error())
 	}
 	agentCfg := createCtx.Agent
+	if err := ensureAgentCreateMessageAccepted(&agentCfg, body.Message); err != nil {
+		return nil, apierr.InvalidRequest.Msg("prompt_unsupported: " + err.Error())
+	}
 	alias = createCtx.Alias
 	explicitName := createCtx.ExplicitName
 	workDirQualifiedName := createCtx.Identity

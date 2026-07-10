@@ -6783,6 +6783,127 @@ func TestInjectImplicitAgents_CustomProvider(t *testing.T) {
 	}
 }
 
+func TestInjectImplicitAgents_ProviderCanOptOut(t *testing.T) {
+	disabled := false
+	cfg := &City{
+		Daemon: DaemonConfig{FormulaV2: boolPtr(true)},
+		Providers: map[string]ProviderSpec{
+			"codex":  {},
+			"router": {Command: "router", ImplicitAgent: &disabled},
+		},
+		Rigs: []Rig{{Name: "project", Path: "/tmp/project"}},
+	}
+
+	InjectImplicitAgents(cfg)
+
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("got %d agents, want 2 codex agents (city + rig)", len(cfg.Agents))
+	}
+	for _, a := range cfg.Agents {
+		if a.Provider == "router" || a.Name == "router" {
+			t.Fatalf("disabled provider produced implicit agent: %+v", a)
+		}
+		if a.Provider != "codex" || !a.Implicit {
+			t.Fatalf("unexpected surviving agent: %+v", a)
+		}
+	}
+}
+
+func TestAgentAcceptsPromptCompatibilityDefaultAndOptOut(t *testing.T) {
+	if !(&Agent{Name: "interactive"}).AcceptsPromptEnabled() {
+		t.Fatal("nil accepts_prompt must preserve compatibility default true")
+	}
+	falseValue := false
+	deterministic := &Agent{Name: "deterministic", AcceptsPrompt: &falseValue}
+	if deterministic.AcceptsPromptEnabled() {
+		t.Fatal("explicit accepts_prompt=false was ignored")
+	}
+	err := EnsureAgentAcceptsPrompt(deterministic)
+	if err == nil || !strings.Contains(err.Error(), `agent "deterministic" has accepts_prompt=false`) {
+		t.Fatalf("EnsureAgentAcceptsPrompt error = %v", err)
+	}
+}
+
+func TestAgentAcceptsPromptLegacyDeterministicDispatcherFallback(t *testing.T) {
+	explicitTrue := true
+	for _, acceptsPrompt := range []*bool{nil, &explicitTrue} {
+		dispatcher := &Agent{
+			Name:          ControlDispatcherAgentName,
+			StartCommand:  ControlDispatcherStartCommand,
+			AcceptsPrompt: acceptsPrompt,
+		}
+		if dispatcher.AcceptsPromptEnabled() {
+			t.Fatalf("AcceptsPromptEnabled() = true for legacy deterministic dispatcher with accepts_prompt=%v", acceptsPrompt)
+		}
+		err := EnsureAgentAcceptsPrompt(dispatcher)
+		if err == nil || !strings.Contains(err.Error(), "deterministic control dispatcher") {
+			t.Fatalf("EnsureAgentAcceptsPrompt error = %v, want deterministic dispatcher capability error", err)
+		}
+	}
+}
+
+func TestAgentBackedSessionPromptCapabilityFailsClosedWhenAgentRemoved(t *testing.T) {
+	if AgentBackedSessionAcceptsPrompt(nil) {
+		t.Fatal("AgentBackedSessionAcceptsPrompt(nil) = true, want fail-closed false")
+	}
+	err := EnsureAgentBackedSessionAcceptsPrompt(nil, "router")
+	if err == nil || !strings.Contains(err.Error(), `agent "router" is no longer configured`) {
+		t.Fatalf("EnsureAgentBackedSessionAcceptsPrompt error = %v, want removed-agent capability error", err)
+	}
+}
+
+func TestInjectImplicitAgents_ProviderOptOutPreservesExplicitAgents(t *testing.T) {
+	disabled := false
+	cfg := &City{
+		Daemon: DaemonConfig{FormulaV2: boolPtr(true)},
+		Providers: map[string]ProviderSpec{
+			"router": {Command: "router", ImplicitAgent: &disabled},
+		},
+		Rigs: []Rig{{Name: "project", Path: "/tmp/project"}},
+		Agents: []Agent{
+			{Name: "director", Provider: "router"},
+			{Name: "reviewer", Dir: "project", Provider: "router"},
+		},
+	}
+
+	InjectImplicitAgents(cfg)
+
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("got %d agents, want the 2 explicit agents only", len(cfg.Agents))
+	}
+	for _, a := range cfg.Agents {
+		if a.Implicit {
+			t.Fatalf("explicit agent was replaced or supplemented by an implicit agent: %+v", a)
+		}
+		if a.Provider != "router" {
+			t.Fatalf("explicit provider changed: %+v", a)
+		}
+	}
+}
+
+func TestInjectImplicitAgents_ProviderOptOutIsInheritedAndCanBeReenabled(t *testing.T) {
+	disabled := false
+	enabled := true
+	base := "provider:router-base"
+	cfg := &City{
+		Daemon: DaemonConfig{FormulaV2: boolPtr(true)},
+		Providers: map[string]ProviderSpec{
+			"router-base":    {Command: "router", ImplicitAgent: &disabled},
+			"router-child":   {Base: &base},
+			"router-enabled": {Base: &base, ImplicitAgent: &enabled},
+		},
+	}
+
+	InjectImplicitAgents(cfg)
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("got %d agents, want only the explicitly re-enabled descendant", len(cfg.Agents))
+	}
+	if got := cfg.Agents[0]; got.Name != "router-enabled" || !got.Implicit {
+		t.Fatalf("agent = %+v, want implicit router-enabled", got)
+	}
+}
+
 func TestInjectImplicitAgents_ExplicitWins(t *testing.T) {
 	cfg := &City{
 		Daemon: DaemonConfig{FormulaV2: boolPtr(true)},

@@ -374,6 +374,7 @@ func recordScalarProvenance(spec ProviderSpec, layer string, into map[string]str
 		}
 		into[key] = layer
 	}
+	setBool("implicit_agent", spec.ImplicitAgent)
 	setSlice := func(key string, value []string) {
 		if value == nil {
 			return

@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Prompt-consumer capability for deterministic workers.** Agent definitions,
+  patches, and rig overrides now accept `accepts_prompt = false`. The setting
+  suppresses prompt rendering and startup nudges, disables trust-dialog
+  automation, and makes session nudge/submit surfaces fail clearly while
+  retaining normal process and lifecycle supervision. Omission preserves the
+  historical interactive default. The bundled control dispatcher now declares
+  this capability explicitly while the legacy dispatcher detector remains a
+  compatibility fallback. Long-lived delivery workers re-read live agent
+  configuration before queued delivery and terminally withdraw matching prompt
+  text when a session opts out or its agent disappears; direct provider
+  sessions and other fenced sessions remain isolated while every continuation
+  generation of the revoked session is purged. Session-create messages are
+  rejected before mutation, and API submission capabilities now report the same
+  effective prompt policy enforced by nudge/submit/mail paths.
+
+- **Provider-local implicit-agent control.** Set `implicit_agent = false` on a
+  `[providers.<name>]` entry to keep a wrapper or router in the provider catalog
+  without synthesizing provider-named agents at city and rig scope. Explicit
+  agents and `workspace.provider` continue to use the provider. Omitted values
+  preserve the historical enabled default; descendants inherit the setting and
+  may explicitly re-enable it.
+
 ### Fixed
+
+- **Qualified imported-agent priming.** `gc prime --strict` now resolves an
+  imported agent's configured work directory even outside a managed launch and
+  exposes `{{.Rig}}` as the documented alias of `{{.RigName}}`. Prime remains
+  read-only and does not create the configured worktree.
 
 - **Pin the `beads` dependency to the stable v1.0.4.** v1.3.0 built against
   `beads v1.0.5`, which was subsequently withdrawn (demoted to a pre-release;

@@ -24,7 +24,8 @@ prompt dynamically customized to its deployment context.
 
 - **PromptContext**: The data available to templates during rendering.
   Includes CityRoot, AgentName (qualified: `rig/agent-1`),
-  TemplateName (config name: `agent` for pool template), RigName,
+  TemplateName (config name: `agent` for pool template), RigName (`Rig`
+  is its compatibility alias shared with work-directory templates),
   WorkDir, IssuePrefix, Branch, DefaultBranch, WorkQuery,
   AssignedInProgressQuery, AssignedReadyQuery, RoutedPoolQuery,
   SlingQuery, and custom Env vars from agent config.
@@ -163,6 +164,14 @@ Preferred defaults naming:
 append_fragments = ["safety"]
 ```
 
+An agent with `accepts_prompt = false` is outside the prompt pipeline. Template
+resolution must not read or render its prompt file, compose fragments, emit a
+prompt receipt, send a configured startup nudge, or enable trust-dialog
+automation. Prime returns an empty payload, and interactive nudge/submit
+surfaces return the shared capability error. The legacy control-dispatcher
+detector remains a compatibility fallback for old packs, but new deterministic
+workers should declare the capability explicitly.
+
 ### Template Variables
 
 | Variable | Source | Example |
@@ -171,6 +180,7 @@ append_fragments = ["safety"]
 | `AgentName` | Qualified agent name | `frontend/worker-1` |
 | `TemplateName` | Config template name | `worker` |
 | `RigName` | Rig name (empty for city agents) | `frontend` |
+| `Rig` | Alias of `RigName`, matching work_dir/session_setup templates | `frontend` |
 | `WorkDir` | Agent working directory | `/projects/frontend` |
 | `IssuePrefix` | Rig bead ID prefix | `FE` |
 | `Branch` | Current git branch | `feature-x` |

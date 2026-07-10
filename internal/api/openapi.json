@@ -50,6 +50,10 @@
       "AgentCreateInputBody": {
         "additionalProperties": false,
         "properties": {
+          "accepts_prompt": {
+            "description": "Whether the agent accepts startup and interactive prompts. Omit for the compatibility default (true).",
+            "type": "boolean"
+          },
           "dir": {
             "description": "Working directory (rig name).",
             "type": "string"
@@ -150,6 +154,12 @@
       "AgentPatch": {
         "additionalProperties": false,
         "properties": {
+          "AcceptsPrompt": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "AppendFragments": {
             "items": {
               "type": "string"
@@ -510,6 +520,7 @@
           "EnvRemove",
           "PreStart",
           "PromptTemplate",
+          "AcceptsPrompt",
           "Session",
           "Provider",
           "Upstream",
@@ -555,6 +566,10 @@
       "AgentPatchSetInputBody": {
         "additionalProperties": false,
         "properties": {
+          "accepts_prompt": {
+            "description": "Override whether the agent accepts startup and interactive prompts.",
+            "type": "boolean"
+          },
           "dir": {
             "description": "Agent directory scope.",
             "type": "string"
@@ -596,6 +611,9 @@
       "AgentResponse": {
         "additionalProperties": false,
         "properties": {
+          "accepts_prompt": {
+            "type": "boolean"
+          },
           "active_bead": {
             "type": "string"
           },
@@ -663,6 +681,7 @@
           "name",
           "running",
           "suspended",
+          "accepts_prompt",
           "pack_derived",
           "state",
           "available"
@@ -672,6 +691,10 @@
       "AgentUpdateInputBody": {
         "additionalProperties": false,
         "properties": {
+          "accepts_prompt": {
+            "description": "Whether the agent accepts startup and interactive prompts.",
+            "type": "boolean"
+          },
           "provider": {
             "description": "Provider name.",
             "type": "string"
@@ -690,6 +713,10 @@
       "AgentUpdateQualifiedInputBody": {
         "additionalProperties": false,
         "properties": {
+          "accepts_prompt": {
+            "description": "Whether the agent accepts startup and interactive prompts.",
+            "type": "boolean"
+          },
           "provider": {
             "description": "Provider name.",
             "type": "string"
@@ -770,6 +797,9 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "implicit_agent": {
+            "type": "boolean"
           },
           "origin": {
             "description": "Provider origin: builtin, city, or builtin+city.",
@@ -5524,6 +5554,10 @@
             "description": "Environment variables.",
             "type": "object"
           },
+          "implicit_agent": {
+            "description": "Whether this provider creates provider-named implicit agents. Omit to inherit the compatibility default (enabled).",
+            "type": "boolean"
+          },
           "name": {
             "description": "Provider name.",
             "minLength": 1,
@@ -5683,6 +5717,12 @@
               "null"
             ]
           },
+          "ImplicitAgent": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "Name": {
             "type": "string"
           },
@@ -5718,6 +5758,7 @@
         "required": [
           "Name",
           "Base",
+          "ImplicitAgent",
           "Command",
           "ACPCommand",
           "Args",
@@ -5775,6 +5816,10 @@
             },
             "description": "Override environment variables.",
             "type": "object"
+          },
+          "implicit_agent": {
+            "description": "Override provider-derived implicit agent creation.",
+            "type": "boolean"
           },
           "name": {
             "description": "Provider name.",
@@ -5843,6 +5888,10 @@
             },
             "type": "object"
           },
+          "implicit_agent": {
+            "description": "Whether this provider creates provider-named implicit agents at city and rig scope.",
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -5859,7 +5908,8 @@
         "required": [
           "name",
           "builtin",
-          "city_level"
+          "city_level",
+          "implicit_agent"
         ],
         "type": "object"
       },
@@ -5936,6 +5986,10 @@
             },
             "type": "object"
           },
+          "implicit_agent": {
+            "description": "Whether this provider creates provider-named implicit agents at city and rig scope.",
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -5953,7 +6007,8 @@
         "required": [
           "name",
           "builtin",
-          "city_level"
+          "city_level",
+          "implicit_agent"
         ],
         "type": "object"
       },
@@ -5989,6 +6044,9 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "implicit_agent": {
+            "type": "boolean"
           },
           "prompt_flag": {
             "type": "string"
@@ -6058,6 +6116,10 @@
             },
             "description": "Environment variables.",
             "type": "object"
+          },
+          "implicit_agent": {
+            "description": "Whether this provider creates provider-named implicit agents.",
+            "type": "boolean"
           },
           "option_defaults": {
             "additionalProperties": {

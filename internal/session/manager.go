@@ -128,6 +128,7 @@ type Info struct {
 	PoolSlot                string // pool_slot (raw; pool helpers parse it)
 	PoolManaged             bool   // pool_managed == "true"
 	SessionOrigin           string // session_origin (raw; resolved origin is a method)
+	SessionKind             string // real_world_app_session_kind (raw legacy/API discriminator)
 	DependencyOnly          bool   // dependency_only == "true"
 	// DependencyOnlyMetadata is the RAW dependency_only metadata, verbatim and
 	// UNTRIMMED. The pin-awake wake-reason display path (cmd/gc) compares it

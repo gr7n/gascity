@@ -1486,10 +1486,12 @@ func TestUpdateAgentSchema2LocalConventionAgentWritesAgentTOML(t *testing.T) {
 	if err := ed.CreateAgent(config.Agent{Name: "coder", Provider: "claude", Scope: "city"}); err != nil {
 		t.Fatalf("CreateAgent: %v", err)
 	}
+	rejectsPrompt := false
 	if err := ed.UpdateAgent("coder", configedit.AgentUpdate{
-		Provider:  "gemini",
-		Scope:     "city",
-		Suspended: boolPtrTest(true),
+		Provider:      "gemini",
+		Scope:         "city",
+		Suspended:     boolPtrTest(true),
+		AcceptsPrompt: &rejectsPrompt,
 	}); err != nil {
 		t.Fatalf("UpdateAgent: %v", err)
 	}
@@ -1503,14 +1505,15 @@ func TestUpdateAgentSchema2LocalConventionAgentWritesAgentTOML(t *testing.T) {
 		`provider = "gemini"`,
 		`scope = "city"`,
 		`suspended = true`,
+		`accepts_prompt = false`,
 	} {
 		if !strings.Contains(data, want) {
 			t.Fatalf("agent.toml = %q, want %s", data, want)
 		}
 	}
 	agent := findAgent(t, readExpandedTOML(t, path), "coder")
-	if agent.Provider != "gemini" || agent.Scope != "city" || !agent.Suspended {
-		t.Fatalf("expanded agent = %+v, want updated provider/scope/suspended", agent)
+	if agent.Provider != "gemini" || agent.Scope != "city" || !agent.Suspended || agent.AcceptsPrompt == nil || *agent.AcceptsPrompt {
+		t.Fatalf("expanded agent = %+v, want updated provider/scope/suspended/accepts_prompt", agent)
 	}
 }
 
@@ -2369,6 +2372,28 @@ func TestUpdateProvider_PreservesUnchangedFields(t *testing.T) {
 	}
 	if got.DisplayName != "Custom Agent" {
 		t.Errorf("display_name was lost: %q", got.DisplayName)
+	}
+}
+
+func TestUpdateProvider_ImplicitAgent(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTOML(t, dir, `[workspace]
+name = "test"
+
+[providers.custom]
+command = "custom"
+`)
+	ed := configedit.NewEditor(fsys.OSFS{}, path)
+	disabled := false
+
+	if err := ed.UpdateProvider("custom", configedit.ProviderUpdate{ImplicitAgent: &disabled}); err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+
+	cfg := readTOML(t, path)
+	spec := cfg.Providers["custom"]
+	if spec.ImplicitAgent == nil || *spec.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", spec.ImplicitAgent)
 	}
 }
 

@@ -226,3 +226,81 @@ suspended = true
 		t.Errorf("expected exactly 1 claude agent, got %d", count)
 	}
 }
+
+func TestLoadWithIncludes_ProviderCanSuppressImplicitAgentsAtEveryScope(t *testing.T) {
+	dir := t.TempDir()
+	cityTOML := `
+[workspace]
+name = "test"
+provider = "router"
+
+[providers.router]
+command = "router"
+implicit_agent = false
+
+[[rigs]]
+name = "one"
+path = "."
+
+[[rigs]]
+name = "two"
+path = "."
+
+[[agent]]
+name = "director"
+provider = "router"
+
+[[agent]]
+dir = "one"
+name = "reviewer"
+provider = "router"
+`
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte(cityTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("got %d agents, want only 2 explicit agents", len(cfg.Agents))
+	}
+	for _, a := range cfg.Agents {
+		if a.Implicit {
+			t.Fatalf("provider opt-out still produced implicit agent: %+v", a)
+		}
+		if a.Provider != "router" {
+			t.Fatalf("explicit role lost provider: %+v", a)
+		}
+	}
+	if _, ok := cfg.Providers["router"]; !ok {
+		t.Fatal("provider opt-out removed provider from catalog")
+	}
+}
+
+func TestLoadWithIncludes_AgentPatchCannotTargetSuppressedImplicitAgent(t *testing.T) {
+	dir := t.TempDir()
+	cityTOML := `
+[workspace]
+name = "test"
+
+[providers.router]
+command = "router"
+implicit_agent = false
+
+[[patches.agent]]
+name = "router"
+suspended = true
+`
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte(cityTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err == nil {
+		t.Fatal("expected stale agent patch to fail after provider suppresses its implicit agent")
+	}
+	if !strings.Contains(err.Error(), `agent "router" not found in merged config`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

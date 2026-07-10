@@ -258,6 +258,7 @@ func deepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 		Upstream:          src.Upstream,
 		InheritedProvider: src.InheritedProvider,
 		PromptTemplate:    src.PromptTemplate,
+		AcceptsPrompt:     src.AcceptsPrompt,
 		Nudge:             src.Nudge,
 		StartCommand:      src.StartCommand,
 		Lifecycle:         src.Lifecycle,
@@ -355,6 +356,10 @@ func deepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 	if src.EmitsPermissionWarning != nil {
 		v := *src.EmitsPermissionWarning
 		dst.EmitsPermissionWarning = &v
+	}
+	if src.AcceptsPrompt != nil {
+		v := *src.AcceptsPrompt
+		dst.AcceptsPrompt = &v
 	}
 	if src.HooksInstalled != nil {
 		v := *src.HooksInstalled

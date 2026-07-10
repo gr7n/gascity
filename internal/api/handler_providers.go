@@ -10,18 +10,19 @@ import (
 // (Command, Args, PromptMode, PromptFlag, ReadyDelayMs, Env) live here
 // only.
 type providerResponse struct {
-	Name         string            `json:"name"`
-	DisplayName  string            `json:"display_name,omitempty"`
-	Command      string            `json:"command,omitempty"`
-	ACPCommand   string            `json:"acp_command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-	ACPArgs      *[]string         `json:"acp_args,omitempty"`
-	PromptMode   string            `json:"prompt_mode,omitempty"`
-	PromptFlag   string            `json:"prompt_flag,omitempty"`
-	ReadyDelayMs int               `json:"ready_delay_ms,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Builtin      bool              `json:"builtin"`
-	CityLevel    bool              `json:"city_level"`
+	Name          string            `json:"name"`
+	DisplayName   string            `json:"display_name,omitempty"`
+	Command       string            `json:"command,omitempty"`
+	ACPCommand    string            `json:"acp_command,omitempty"`
+	Args          []string          `json:"args,omitempty"`
+	ACPArgs       *[]string         `json:"acp_args,omitempty"`
+	PromptMode    string            `json:"prompt_mode,omitempty"`
+	PromptFlag    string            `json:"prompt_flag,omitempty"`
+	ReadyDelayMs  int               `json:"ready_delay_ms,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Builtin       bool              `json:"builtin"`
+	CityLevel     bool              `json:"city_level"`
+	ImplicitAgent bool              `json:"implicit_agent" doc:"Whether this provider creates provider-named implicit agents at city and rig scope."`
 }
 
 type providerOptionDTO struct {
@@ -37,20 +38,21 @@ type optionChoiceDTO struct {
 	Label string `json:"label"`
 }
 
-func providerFromSpec(name string, spec config.ProviderSpec, builtin, cityLevel bool) providerResponse {
+func providerFromSpec(name string, spec, effective config.ProviderSpec, builtin, cityLevel bool) providerResponse {
 	return providerResponse{
-		Name:         name,
-		DisplayName:  spec.DisplayName,
-		Command:      spec.Command,
-		ACPCommand:   spec.ACPCommand,
-		Args:         spec.Args,
-		ACPArgs:      optionalStringSlice(spec.ACPArgs),
-		PromptMode:   spec.PromptMode,
-		PromptFlag:   spec.PromptFlag,
-		ReadyDelayMs: spec.ReadyDelayMs,
-		Env:          spec.Env,
-		Builtin:      builtin,
-		CityLevel:    cityLevel,
+		Name:          name,
+		DisplayName:   spec.DisplayName,
+		Command:       spec.Command,
+		ACPCommand:    spec.ACPCommand,
+		Args:          spec.Args,
+		ACPArgs:       optionalStringSlice(spec.ACPArgs),
+		PromptMode:    spec.PromptMode,
+		PromptFlag:    spec.PromptFlag,
+		ReadyDelayMs:  spec.ReadyDelayMs,
+		Env:           spec.Env,
+		Builtin:       builtin,
+		CityLevel:     cityLevel,
+		ImplicitAgent: providerSpecImplicitAgentEnabled(effective),
 	}
 }
 
@@ -69,10 +71,11 @@ func optionalStringSlice(values []string) *[]string {
 // OptionDefaults (including inherited builtins).
 func toProviderPublicResponse(name string, spec config.ProviderSpec, builtin, cityLevel bool) ProviderPublicResponse {
 	resp := ProviderPublicResponse{
-		Name:        name,
-		DisplayName: spec.DisplayName,
-		Builtin:     builtin,
-		CityLevel:   cityLevel,
+		Name:          name,
+		DisplayName:   spec.DisplayName,
+		Builtin:       builtin,
+		CityLevel:     cityLevel,
+		ImplicitAgent: providerSpecImplicitAgentEnabled(spec),
 	}
 	if len(spec.OptionsSchema) > 0 {
 		resp.OptionsSchema = make([]providerOptionDTO, len(spec.OptionsSchema))
@@ -92,6 +95,10 @@ func toProviderPublicResponse(name string, spec config.ProviderSpec, builtin, ci
 		resp.EffectiveDefaults = config.ComputeEffectiveDefaults(spec.OptionsSchema, spec.OptionDefaults, nil)
 	}
 	return resp
+}
+
+func providerSpecImplicitAgentEnabled(spec config.ProviderSpec) bool {
+	return spec.ImplicitAgent == nil || *spec.ImplicitAgent
 }
 
 // isBuiltinProvider checks if a name is a known builtin provider.

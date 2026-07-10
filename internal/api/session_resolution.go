@@ -599,6 +599,9 @@ func (s *Server) resolveSessionIDMaterializingNamedWithContext(ctx context.Conte
 }
 
 func (s *Server) submitMessageToSession(ctx context.Context, store beads.Store, id, message string, intent session.SubmitIntent) (session.SubmitOutcome, error) {
+	if err := s.ensureSessionAcceptsPrompt(store, id); err != nil {
+		return session.SubmitOutcome{}, err
+	}
 	handle, err := s.workerHandleForSession(store, id)
 	if err != nil {
 		return session.SubmitOutcome{}, err
@@ -617,12 +620,35 @@ func (s *Server) submitMessageToSession(ctx context.Context, store beads.Store, 
 // for system-driven messages that should respect wait-idle behavior when the
 // runtime supports it.
 func (s *Server) sendBackgroundMessageToSession(ctx context.Context, store beads.Store, id, message string) error {
+	if err := s.ensureSessionAcceptsPrompt(store, id); err != nil {
+		return err
+	}
 	handle, err := s.workerHandleForSession(store, id)
 	if err != nil {
 		return err
 	}
 	_, err = handle.Nudge(ctx, worker.NudgeRequest{Text: message})
 	return err
+}
+
+func (s *Server) ensureSessionAcceptsPrompt(store beads.Store, id string) error {
+	if store == nil || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	cfg := s.state.Config()
+	if cfg == nil {
+		return nil
+	}
+	bead, err := store.Get(id)
+	if err != nil {
+		return err
+	}
+	info := session.InfoFromPersistedBead(bead)
+	agent, agentBacked := promptCapabilityAgentForSession(info, bead.Metadata, cfg)
+	if !agentBacked {
+		return nil
+	}
+	return config.EnsureAgentBackedSessionAcceptsPrompt(agent, firstNonEmptyString(info.AgentName, info.Template, info.Alias, info.CommonName))
 }
 
 // sendUserMessageToSession keeps POST /messages as a compatibility alias for

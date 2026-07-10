@@ -28,6 +28,7 @@ type ProviderPublicResponse struct {
 	DisplayName       string              `json:"display_name,omitempty"`
 	Builtin           bool                `json:"builtin"`
 	CityLevel         bool                `json:"city_level"`
+	ImplicitAgent     bool                `json:"implicit_agent" doc:"Whether this provider creates provider-named implicit agents at city and rig scope."`
 	OptionsSchema     []providerOptionDTO `json:"options_schema,omitempty"`
 	EffectiveDefaults map[string]string   `json:"effective_defaults,omitempty"`
 }
@@ -60,6 +61,7 @@ type ProviderCreateInput struct {
 		Name               string            `json:"name" doc:"Provider name." minLength:"1"`
 		DisplayName        string            `json:"display_name,omitempty" doc:"Human-readable display name."`
 		Base               *string           `json:"base,omitempty" doc:"Optional provider base for inheritance."`
+		ImplicitAgent      *bool             `json:"implicit_agent,omitempty" doc:"Whether this provider creates provider-named implicit agents. Omit to inherit the compatibility default (enabled)."`
 		Command            string            `json:"command,omitempty" doc:"Provider command binary. Omit for base-only descendants."`
 		ACPCommand         string            `json:"acp_command,omitempty" doc:"ACP transport command binary override."`
 		Args               []string          `json:"args,omitempty" doc:"Command arguments."`
@@ -81,6 +83,7 @@ type ProviderUpdateInput struct {
 	Body struct {
 		DisplayName        *string           `json:"display_name,omitempty" doc:"Human-readable display name."`
 		Base               *string           `json:"base,omitempty" doc:"Provider base for inheritance."`
+		ImplicitAgent      *bool             `json:"implicit_agent,omitempty" doc:"Whether this provider creates provider-named implicit agents."`
 		Command            *string           `json:"command,omitempty" doc:"Provider command binary."`
 		ACPCommand         *string           `json:"acp_command,omitempty" doc:"ACP transport command binary override."`
 		Args               []string          `json:"args,omitempty" doc:"Command arguments."`

@@ -483,6 +483,7 @@ func TestApplyPatches_RigNotFound(t *testing.T) {
 }
 
 func TestApplyPatches_ProviderDeepMerge(t *testing.T) {
+	disabled := false
 	cfg := &City{
 		Providers: map[string]ProviderSpec{
 			"custom": {
@@ -497,12 +498,13 @@ func TestApplyPatches_ProviderDeepMerge(t *testing.T) {
 	err := ApplyPatches(cfg, Patches{
 		Providers: []ProviderPatch{
 			{
-				Name:       "custom",
-				Command:    ptrStr("new-agent"),
-				ACPCommand: ptrStr("new-agent-acp"),
-				ACPArgs:    []string{"rpc", "--stdio"},
-				Env:        map[string]string{"KEY2": "val2"},
-				EnvRemove:  []string{"KEY"},
+				Name:          "custom",
+				Command:       ptrStr("new-agent"),
+				ACPCommand:    ptrStr("new-agent-acp"),
+				ACPArgs:       []string{"rpc", "--stdio"},
+				ImplicitAgent: &disabled,
+				Env:           map[string]string{"KEY2": "val2"},
+				EnvRemove:     []string{"KEY"},
 			},
 		},
 	})
@@ -522,6 +524,9 @@ func TestApplyPatches_ProviderDeepMerge(t *testing.T) {
 	if p.PromptMode != "arg" {
 		t.Errorf("PromptMode = %q, want %q (unchanged)", p.PromptMode, "arg")
 	}
+	if p.ImplicitAgent == nil || *p.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", p.ImplicitAgent)
+	}
 	if p.Env["KEY2"] != "val2" {
 		t.Errorf("KEY2 = %q, want %q", p.Env["KEY2"], "val2")
 	}
@@ -531,6 +536,7 @@ func TestApplyPatches_ProviderDeepMerge(t *testing.T) {
 }
 
 func TestApplyPatches_ProviderReplace(t *testing.T) {
+	disabled := false
 	cfg := &City{
 		Providers: map[string]ProviderSpec{
 			"custom": {
@@ -545,11 +551,12 @@ func TestApplyPatches_ProviderReplace(t *testing.T) {
 	err := ApplyPatches(cfg, Patches{
 		Providers: []ProviderPatch{
 			{
-				Name:       "custom",
-				Replace:    true,
-				Command:    ptrStr("new-agent"),
-				ACPCommand: ptrStr("new-agent-acp"),
-				ACPArgs:    []string{"rpc"},
+				Name:          "custom",
+				Replace:       true,
+				Command:       ptrStr("new-agent"),
+				ACPCommand:    ptrStr("new-agent-acp"),
+				ACPArgs:       []string{"rpc"},
+				ImplicitAgent: &disabled,
 			},
 		},
 	})
@@ -565,6 +572,9 @@ func TestApplyPatches_ProviderReplace(t *testing.T) {
 	}
 	if got := strings.Join(p.ACPArgs, " "); got != "rpc" {
 		t.Errorf("ACPArgs = %q, want %q", got, "rpc")
+	}
+	if p.ImplicitAgent == nil || *p.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", p.ImplicitAgent)
 	}
 	// Replace clears fields not in patch.
 	if p.PromptMode != "" {

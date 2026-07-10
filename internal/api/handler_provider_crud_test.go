@@ -84,6 +84,26 @@ func TestHandleProviderCreate_PersistsOptionDefaults(t *testing.T) {
 	}
 }
 
+func TestHandleProviderCreate_PersistsImplicitAgentOptOut(t *testing.T) {
+	fs := newFakeMutatorState(t)
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	req := newPostRequest(cityURL(fs, "/providers"), strings.NewReader(
+		`{"name":"router","command":"router","implicit_agent":false}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	spec := fs.cfg.Providers["router"]
+	if spec.ImplicitAgent == nil || *spec.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", spec.ImplicitAgent)
+	}
+}
+
 func TestHandleProviderUpdate_OptionDefaultsMergeNotReplace(t *testing.T) {
 	fs := newFakeMutatorState(t)
 	fs.cfg.Providers["custom"] = config.ProviderSpec{
@@ -166,6 +186,28 @@ func TestHandleProviderUpdate_UpdatesACPTransportOverrides(t *testing.T) {
 	}
 }
 
+func TestHandleProviderUpdate_UpdatesImplicitAgentSetting(t *testing.T) {
+	fs := newFakeMutatorState(t)
+	fs.cfg.Providers["custom"] = fs.cfg.Providers["test-agent"]
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	req := httptest.NewRequest(http.MethodPatch, cityURL(fs, "/provider/custom"), strings.NewReader(
+		`{"implicit_agent":false}`))
+	req.Header.Set("X-GC-Request", "true")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	spec := fs.cfg.Providers["custom"]
+	if spec.ImplicitAgent == nil || *spec.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", spec.ImplicitAgent)
+	}
+}
+
 func TestHandleProviderGet_IncludesACPTransportOverrides(t *testing.T) {
 	fs := newFakeState(t)
 	fs.cfg.Providers["custom"] = config.ProviderSpec{
@@ -193,6 +235,62 @@ func TestHandleProviderGet_IncludesACPTransportOverrides(t *testing.T) {
 	if resp.ACPArgs == nil || len(*resp.ACPArgs) != 2 || (*resp.ACPArgs)[0] != "rpc" || (*resp.ACPArgs)[1] != "--stdio" {
 		t.Fatalf("ACPArgs = %#v, want [rpc --stdio]", resp.ACPArgs)
 	}
+}
+
+func TestHandleProviderGet_ReportsEffectiveImplicitAgentSetting(t *testing.T) {
+	fs := newFakeState(t)
+	disabled := false
+	base := "provider:base"
+	fs.cfg.Providers["base"] = config.ProviderSpec{Command: "router", ImplicitAgent: &disabled}
+	fs.cfg.Providers["child"] = config.ProviderSpec{Base: &base}
+	h := newTestCityHandler(t, fs)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(fs, "/provider/child"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp providerResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ImplicitAgent {
+		t.Fatal("ImplicitAgent = true, want inherited false")
+	}
+}
+
+func TestHandleProviderPublicList_ReportsImplicitAgentWithoutRemovingProvider(t *testing.T) {
+	fs := newFakeState(t)
+	disabled := false
+	fs.cfg.Providers["router"] = config.ProviderSpec{Command: "router", ImplicitAgent: &disabled}
+	h := newTestCityHandler(t, fs)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(fs, "/providers/public"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Items []ProviderPublicResponse `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	for _, item := range resp.Items {
+		if item.Name == "router" {
+			if item.ImplicitAgent {
+				t.Fatal("router ImplicitAgent = true, want false")
+			}
+			return
+		}
+	}
+	t.Fatal("suppressed implicit-agent provider disappeared from provider catalog")
 }
 
 func TestHandleProviderGetPreservesExplicitEmptyACPArgs(t *testing.T) {

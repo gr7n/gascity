@@ -205,6 +205,7 @@ func TestInfoFromPersistedBeadProjectsIdentityPoolNamedCluster(t *testing.T) {
 		"pool_slot":                  "3",
 		"pool_managed":               "true",
 		"session_origin":             "ephemeral",
+		SessionKindMetadataKey:       "agent",
 		"dependency_only":            "true",
 		"manual_session":             "true",
 	})
@@ -215,6 +216,7 @@ func TestInfoFromPersistedBeadProjectsIdentityPoolNamedCluster(t *testing.T) {
 		{"CommonName", info.CommonName, "worker"},
 		{"PoolSlot", info.PoolSlot, "3"},
 		{"SessionOrigin", info.SessionOrigin, "ephemeral"},
+		{"SessionKind", info.SessionKind, "agent"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
@@ -232,7 +234,7 @@ func TestInfoFromPersistedBeadProjectsIdentityPoolNamedCluster(t *testing.T) {
 	bare := InfoFromPersistedBead(sessionBeadFixture("s-bare", "open", map[string]string{"state": "active"}))
 	if bare.ConfiguredNamedSession || bare.PoolManaged || bare.DependencyOnly || bare.ManualSession ||
 		bare.ConfiguredNamedIdentity != "" || bare.ConfiguredNamedMode != "" || bare.CommonName != "" ||
-		bare.PoolSlot != "" || bare.SessionOrigin != "" {
+		bare.PoolSlot != "" || bare.SessionOrigin != "" || bare.SessionKind != "" {
 		t.Errorf("unset cluster projected non-zero: %+v", bare)
 	}
 }

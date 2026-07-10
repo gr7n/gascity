@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/promptmeta"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
+	workdirutil "github.com/gastownhall/gascity/internal/workdir"
 	"github.com/spf13/cobra"
 )
 
@@ -297,9 +298,9 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 			if isAgentEffectivelySuspended(cfg, &a) {
 				continue
 			}
-			// Deterministic control dispatchers are subprocess workers, not model
-			// sessions. Their prompt_template is intentionally irrelevant, just as
-			// it is on the managed startup path in resolveTemplate.
+			// Prompt-disabled agents (including legacy auto-detected control
+			// dispatchers) are subprocess workers, not model sessions. Their
+			// prompt_template is intentionally irrelevant, just as on managed start.
 			if suppressStartupPromptForAgent(&a) {
 				continue
 			}
@@ -331,9 +332,8 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 			return 0
 		}
 		if suppressStartupPromptForAgent(&a) {
-			// Keep `gc prime` aligned with managed startup: this identity runs
-			// `gc convoy control --serve` directly and must never acquire the
-			// graph-worker, pool-worker, or generic model persona.
+			// Keep `gc prime` aligned with managed startup: deterministic command
+			// workers must never acquire a rendered or generic model persona.
 			setPrimePromptReceipt(receiptOut, "", "")
 			return 0
 		}
@@ -825,9 +825,15 @@ func buildPrimeContextForBeads(cityPath, cityName string, a *config.Agent, rigs 
 		ctx.AgentName = a.QualifiedName()
 	}
 
-	// Working directory.
+	// Working directory. Managed sessions publish their concrete directory in
+	// GC_DIR. For an explicit/manual prime, derive the same configured path the
+	// session launcher will use without creating it as a side effect.
 	if gcDir := os.Getenv("GC_DIR"); gcDir != "" {
 		ctx.WorkDir = gcDir
+	} else if workDir, err := workdirutil.ResolveWorkDirPathStrict(cityPath, cityName, a.QualifiedName(), *a, rigs); err != nil {
+		fmt.Fprintf(stderr, "gc prime: resolving work_dir for agent %q: %v\n", a.QualifiedName(), err) //nolint:errcheck // best-effort context warning
+	} else {
+		ctx.WorkDir = workDir
 	}
 
 	// Rig context.

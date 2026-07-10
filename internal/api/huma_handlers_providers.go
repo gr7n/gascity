@@ -46,6 +46,8 @@ func (s *Server) resolveAllProviders() []resolvedProvider {
 		} else if base, ok := builtins[spec.Command]; ok {
 			merged = config.MergeProviderOverBuiltin(base, spec)
 		}
+		implicitAgent := config.ProviderImplicitAgentEnabled(name, cfg.Providers)
+		merged.ImplicitAgent = &implicitAgent
 		out = append(out, resolvedProvider{
 			Name:      name,
 			Spec:      spec,
@@ -78,7 +80,7 @@ func (s *Server) humaHandleProviderList(_ context.Context, _ *ProviderListInput)
 	resolved := s.resolveAllProviders()
 	providers := make([]providerResponse, 0, len(resolved))
 	for _, p := range resolved {
-		providers = append(providers, providerFromSpec(p.Name, p.Spec, p.Builtin, p.CityLevel))
+		providers = append(providers, providerFromSpec(p.Name, p.Spec, p.Merged, p.Builtin, p.CityLevel))
 	}
 	return &ListOutput[providerResponse]{
 		Index: s.latestIndex(),
@@ -111,9 +113,12 @@ func (s *Server) humaHandleProviderGet(_ context.Context, input *ProviderGetInpu
 	// Check city-level first.
 	if spec, ok := cfg.Providers[name]; ok {
 		_, isBuiltin := builtins[name]
+		effective := spec
+		implicitAgent := config.ProviderImplicitAgentEnabled(name, cfg.Providers)
+		effective.ImplicitAgent = &implicitAgent
 		return &IndexOutput[providerResponse]{
 			Index: s.latestIndex(),
-			Body:  providerFromSpec(name, spec, isBuiltin, true),
+			Body:  providerFromSpec(name, spec, effective, isBuiltin, true),
 		}, nil
 	}
 
@@ -121,7 +126,7 @@ func (s *Server) humaHandleProviderGet(_ context.Context, input *ProviderGetInpu
 	if spec, ok := builtins[name]; ok {
 		return &IndexOutput[providerResponse]{
 			Index: s.latestIndex(),
-			Body:  providerFromSpec(name, spec, true, false),
+			Body:  providerFromSpec(name, spec, spec, true, false),
 		}, nil
 	}
 
@@ -137,16 +142,17 @@ func (s *Server) humaHandleProviderCreate(_ context.Context, input *ProviderCrea
 	}
 
 	spec := config.ProviderSpec{
-		DisplayName: input.Body.DisplayName,
-		Base:        input.Body.Base,
-		Command:     input.Body.Command,
-		ACPCommand:  input.Body.ACPCommand,
-		Args:        input.Body.Args,
-		ACPArgs:     input.Body.ACPArgs,
-		ArgsAppend:  input.Body.ArgsAppend,
-		PromptMode:  input.Body.PromptMode,
-		PromptFlag:  input.Body.PromptFlag,
-		Env:         input.Body.Env,
+		DisplayName:   input.Body.DisplayName,
+		Base:          input.Body.Base,
+		ImplicitAgent: input.Body.ImplicitAgent,
+		Command:       input.Body.Command,
+		ACPCommand:    input.Body.ACPCommand,
+		Args:          input.Body.Args,
+		ACPArgs:       input.Body.ACPArgs,
+		ArgsAppend:    input.Body.ArgsAppend,
+		PromptMode:    input.Body.PromptMode,
+		PromptFlag:    input.Body.PromptFlag,
+		Env:           input.Body.Env,
 	}
 	if input.Body.ReadyDelayMs != 0 {
 		spec.ReadyDelayMs = input.Body.ReadyDelayMs
@@ -176,6 +182,7 @@ func (s *Server) humaHandleProviderUpdate(_ context.Context, input *ProviderUpda
 
 	patch := ProviderUpdate{
 		DisplayName:        input.Body.DisplayName,
+		ImplicitAgent:      input.Body.ImplicitAgent,
 		Command:            input.Body.Command,
 		ACPCommand:         input.Body.ACPCommand,
 		Args:               input.Body.Args,

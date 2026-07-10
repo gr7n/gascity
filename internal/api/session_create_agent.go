@@ -16,6 +16,17 @@ type agentCreateContext struct {
 	WorkDir      string
 }
 
+// ensureAgentCreateMessageAccepted gates the optional create-time message at
+// the same effective capability boundary as submit/message/nudge. Creating a
+// command-worker session without a message remains valid; accepting and then
+// silently dropping an initial_message is not.
+func ensureAgentCreateMessageAccepted(agent *config.Agent, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return nil
+	}
+	return config.EnsureAgentAcceptsPrompt(agent)
+}
+
 func (s *Server) resolveAgentCreateContext(template, alias string) (agentCreateContext, error) {
 	cfg := s.state.Config()
 	if cfg == nil {

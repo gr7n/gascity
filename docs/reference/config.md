@@ -87,6 +87,7 @@ Agent defines a configured agent in the city.
 | `suspended` | boolean |  |  | Suspended prevents the reconciler from spawning this agent. Toggle with gc agent suspend/resume. |
 | `pre_start` | []string |  |  | PreStart is a list of shell commands run before session creation. Commands run on the target filesystem: locally for tmux, inside the pod/container for exec providers. Template variables same as session_setup. On failure, the last 4 KiB of the command's stdout/stderr is included in the error and may appear in controller and reconciler logs; avoid set -x or echoing secrets in setup commands. |
 | `prompt_template` | string |  |  | PromptTemplate is the path to this agent's prompt template file. Relative paths resolve against the city directory. |
+| `accepts_prompt` | boolean |  | `true` | AcceptsPrompt controls whether this agent is an interactive prompt consumer. Nil preserves the compatibility default (true). False marks a deterministic command worker: startup prompt rendering/delivery, startup nudges, trust-dialog automation, and later interactive messages are all suppressed or rejected while lifecycle/process supervision remains active. |
 | `nudge` | string |  |  | Nudge is text typed into the agent's tmux session after startup. Used for CLI agents that don't accept command-line prompts. |
 | `session` | string |  |  | Session overrides the session transport for this agent. "" (default) uses the city-level session provider (typically tmux). "acp" uses the Agent Client Protocol (JSON-RPC over stdio). The agent's resolved provider must have supports_acp = true. Enum: `acp` |
 | `provider` | string |  |  | Provider names the provider preset to use for this agent. |
@@ -167,6 +168,7 @@ AgentOverride modifies a pack-stamped agent for a specific rig.
 | `env_remove` | []string |  |  | EnvRemove lists env var keys to remove. |
 | `pre_start` | []string |  |  | PreStart overrides the agent's pre_start commands. |
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
+| `accepts_prompt` | boolean |  |  | AcceptsPrompt overrides whether the agent can consume startup or interactive prompts. Nil inherits the pack-defined/default behavior. |
 | `session` | string |  |  | Session overrides the session transport ("acp"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
@@ -224,6 +226,7 @@ AgentPatch modifies an existing agent identified by (Dir, Name).
 | `env_remove` | []string |  |  | EnvRemove lists env var keys to remove after merging. |
 | `pre_start` | []string |  |  | PreStart overrides the agent's pre_start commands. |
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
+| `accepts_prompt` | boolean |  |  | AcceptsPrompt overrides whether the agent can consume startup or interactive prompts. |
 | `session` | string |  |  | Session overrides the session transport ("acp" or "tmux"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
@@ -651,6 +654,7 @@ ProviderPatch modifies an existing provider identified by Name.
 |-------|------|----------|---------|-------------|
 | `name` | string | **yes** |  | Name is the targeting key (required). Must match an existing provider's name. |
 | `base` | string |  |  | Base overrides the provider's inheritance parent (presence-aware). Pointer to a pointer so the patch can distinguish "no change" (double-nil) from "clear to inherit default" (single-nil value in outer pointer) from "set to explicit empty opt-out" (value "" in inner pointer) from "set to &lt;name&gt;". Callers use:   nil          = patch does not touch Base   &(*string)(nil) = patch clears Base to absent   &(&"")       = patch sets Base = "" (explicit opt-out)   &(&"builtin:codex") = patch sets Base to that value |
+| `implicit_agent` | boolean |  |  | ImplicitAgent overrides provider-derived implicit agent creation while leaving the provider available to explicitly configured agents. |
 | `command` | string |  |  | Command overrides the provider command. |
 | `acp_command` | string |  |  | ACPCommand overrides the provider command for ACP transport sessions. |
 | `args` | []string |  |  | Args overrides the provider args. |
@@ -672,6 +676,7 @@ ProviderSpec defines a named provider's startup parameters.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `base` | string |  |  | Base names the parent provider this spec inherits from. Supported forms:   "&lt;name&gt;"          - custom first (self-excluded), then built-in   "builtin:&lt;name&gt;"  - force built-in lookup   "provider:&lt;name&gt;" - force custom lookup   ""                - explicit standalone opt-out   nil               - field absent; no explicit declaration |
+| `implicit_agent` | boolean |  | `true` | ImplicitAgent controls whether this provider contributes provider-named implicit agents at city and rig scope. Nil preserves the compatibility default (enabled); false keeps the provider available to explicit agents and as the workspace default without manufacturing a work role for it. The setting is inherited across provider base chains. |
 | `args_append` | []string |  |  | ArgsAppend accumulates extra args after each layer's Args replacement. |
 | `options_schema_merge` | string |  |  | OptionsSchemaMerge controls OptionsSchema merge mode across the chain: "replace" (default) or "by_key". Enum: `replace`, `by_key` |
 | `display_name` | string |  |  | DisplayName is the human-readable name shown in UI and logs. |

@@ -231,10 +231,10 @@ func lookupProvider(name string, cityProviders map[string]ProviderSpec, lookPath
 // when non-nil. Map fields (Env, PermissionModes) merge additively (city keys
 // override base keys).
 //
-// Capability bools (EmitsPermissionWarning, SupportsACP, SupportsHooks)
-// are tri-state *bool: nil = inherit base, &true = enable, &false =
-// explicit disable. A child that sets `supports_hooks = false` now
-// suppresses the feature even when inherited from a built-in with &true.
+// Capability and catalog bools (ImplicitAgent, EmitsPermissionWarning,
+// SupportsACP, SupportsHooks) are tri-state *bool: nil = inherit base,
+// &true = enable, &false = explicit disable. A child that sets one false
+// suppresses the inherited feature.
 func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 	result := base
 
@@ -248,6 +248,9 @@ func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 	}
 	if city.OptionsSchemaMerge != "" {
 		result.OptionsSchemaMerge = city.OptionsSchemaMerge
+	}
+	if city.ImplicitAgent != nil {
+		result.ImplicitAgent = cloneBoolPtr(city.ImplicitAgent)
 	}
 
 	// Scalar fields: override if city defines them.
@@ -619,6 +622,7 @@ func detectProviderName(lookPath LookPathFunc) (string, error) {
 func specToResolved(name string, spec *ProviderSpec) *ResolvedProvider {
 	rp := &ResolvedProvider{
 		Name:                   name,
+		ImplicitAgent:          implicitAgentEnabled(spec.ImplicitAgent),
 		Command:                spec.Command,
 		PromptMode:             spec.PromptMode,
 		PromptFlag:             spec.PromptFlag,
@@ -835,6 +839,10 @@ func resolvedChainToSpec(r ResolvedProvider, leaf ProviderSpec) ProviderSpec {
 	}
 	// Tri-state *bool: preserve from leaf if set; else fold from the
 	// resolved value only when some chain layer explicitly contributed it.
+	if leaf.ImplicitAgent == nil && providerBoolFieldSet(r, "implicit_agent") {
+		v := r.ImplicitAgent
+		out.ImplicitAgent = &v
+	}
 	if leaf.EmitsPermissionWarning == nil && providerBoolFieldSet(r, "emits_permission_warning") {
 		v := r.EmitsPermissionWarning
 		out.EmitsPermissionWarning = &v

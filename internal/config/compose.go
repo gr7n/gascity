@@ -1190,6 +1190,11 @@ func deepMergeProvider(base, frag ProviderSpec, name string, fragMeta toml.MetaD
 	}
 	scalars := []scalarField{
 		{
+			"implicit_agent",
+			func() bool { return base.ImplicitAgent != nil },
+			func() { result.ImplicitAgent = cloneBoolPtr(frag.ImplicitAgent) },
+		},
+		{
 			"display_name",
 			func() bool { return base.DisplayName != "" },
 			func() { result.DisplayName = frag.DisplayName },

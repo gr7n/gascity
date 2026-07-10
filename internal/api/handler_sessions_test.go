@@ -2683,6 +2683,88 @@ func TestHandleSessionCreateAsyncAcceptsInlineMessage(t *testing.T) {
 	}
 }
 
+func configurePromptDisabledCreateAgent(fs *fakeState, legacyDispatcher bool) string {
+	if legacyDispatcher {
+		fs.cfg.Agents = []config.Agent{{
+			Name:         config.ControlDispatcherAgentName,
+			Dir:          "myrig",
+			StartCommand: config.ControlDispatcherStartCommandFor("myrig/" + config.ControlDispatcherAgentName),
+		}}
+		fs.cfg.NamedSessions = nil
+		return "myrig/" + config.ControlDispatcherAgentName
+	}
+	rejectsPrompt := false
+	fs.cfg.Agents[0].AcceptsPrompt = &rejectsPrompt
+	return "myrig/worker"
+}
+
+func assertNoSessionBeads(t *testing.T, store beads.Store) {
+	t.Helper()
+	items, err := store.ListByLabel(session.LabelSession, 0)
+	if err != nil {
+		t.Fatalf("ListByLabel: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("session bead count = %d, want 0 before rejected create", len(items))
+	}
+}
+
+func TestSessionCreateHandlersRejectPromptDisabledInitialMessageBeforeMutation(t *testing.T) {
+	for _, legacyDispatcher := range []bool{false, true} {
+		capabilityName := "explicit accepts_prompt=false"
+		if legacyDispatcher {
+			capabilityName = "legacy deterministic dispatcher"
+		}
+		t.Run("legacy endpoint "+capabilityName, func(t *testing.T) {
+			fs := newSessionFakeState(t)
+			target := configurePromptDisabledCreateAgent(fs, legacyDispatcher)
+			srv := New(fs)
+			req := newPostRequest("/v0/sessions", strings.NewReader(fmt.Sprintf(`{"kind":"agent","name":%q,"message":"must not be stored"}`, target)))
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "cannot receive interactive messages") {
+				t.Fatalf("body = %q, want effective prompt capability error", rec.Body.String())
+			}
+			assertNoSessionBeads(t, fs.cityBeadStore)
+		})
+
+		t.Run("Huma endpoint "+capabilityName, func(t *testing.T) {
+			fs := newSessionFakeState(t)
+			target := configurePromptDisabledCreateAgent(fs, legacyDispatcher)
+			srv := New(fs)
+			_, err := srv.humaHandleSessionCreate(context.Background(), &SessionCreateInput{
+				Body: sessionCreateBody{Kind: "agent", Name: target, Message: "must not be stored"},
+			})
+			if err == nil || !strings.Contains(err.Error(), "cannot receive interactive messages") {
+				t.Fatalf("humaHandleSessionCreate error = %v, want effective prompt capability error", err)
+			}
+			assertNoSessionBeads(t, fs.cityBeadStore)
+		})
+	}
+}
+
+func TestLegacySessionCreatePromptDisabledWithoutMessageReportsNoSubmissionCapabilities(t *testing.T) {
+	fs := newSessionFakeState(t)
+	target := configurePromptDisabledCreateAgent(fs, false)
+	srv := New(fs)
+	req := newPostRequest("/v0/sessions", strings.NewReader(fmt.Sprintf(`{"kind":"agent","name":%q}`, target)))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.SubmissionCapabilities.SupportsFollowUp || resp.SubmissionCapabilities.SupportsInterruptNow {
+		t.Fatalf("submission_capabilities = %+v, want both false for prompt-disabled command session", resp.SubmissionCapabilities)
+	}
+}
+
 func TestHandleSessionCreateRejectsAlwaysNamedSessionTarget(t *testing.T) {
 	fs := newSessionFakeState(t)
 	fs.cfg.Agents = []config.Agent{{

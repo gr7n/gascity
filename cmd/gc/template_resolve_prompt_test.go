@@ -290,6 +290,71 @@ func TestResolveTemplateControlDispatcherSuppressesStartupPrompt(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateAcceptsPromptFalseSuppressesAllStartupInteraction(t *testing.T) {
+	cityPath := t.TempDir()
+	fakeFS := fsys.NewFake()
+	acceptDialogs := true
+	params := &agentBuildParams{
+		fs:        fakeFS,
+		cityName:  "deterministic-city",
+		cityPath:  cityPath,
+		workspace: &config.Workspace{Name: "deterministic-city", Provider: "router"},
+		providers: map[string]config.ProviderSpec{
+			"router": {
+				Command:              "router",
+				PromptMode:           "arg",
+				ProcessNames:         []string{"router"},
+				AcceptStartupDialogs: &acceptDialogs,
+			},
+		},
+		lookPath:   func(string) (string, error) { return "/usr/bin/router", nil },
+		beaconTime: testBeaconTime,
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	rejectsPrompt := false
+	agentCfg := &config.Agent{
+		Name:         "k8s-canary",
+		Provider:     "router",
+		StartCommand: "gr7n k8s canary",
+		// Deliberately missing: prompt-disabled agents must not even read the
+		// prompt asset during template resolution.
+		PromptTemplate: "prompts/must-not-be-read.template.md",
+		AcceptsPrompt:  &rejectsPrompt,
+		Nudge:          "configured startup nudge",
+		ProcessNames:   []string{"gr7n"},
+	}
+	if config.IsDeterministicControlDispatcher(agentCfg) {
+		t.Fatal("test agent unexpectedly matched the legacy control-dispatcher detector")
+	}
+
+	tp, err := resolveTemplate(params, agentCfg, agentCfg.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if tp.Prompt != "" {
+		t.Fatalf("Prompt = %q, want empty for accepts_prompt=false", tp.Prompt)
+	}
+	if tp.PromptReceipt == nil || *tp.PromptReceipt != (session.PromptReceipt{}) {
+		t.Fatalf("PromptReceipt = %+v, want prompt-less receipt", tp.PromptReceipt)
+	}
+	cfg := templateParamsToConfig(tp)
+	if cfg.PromptSuffix != "" || cfg.Nudge != "" {
+		t.Fatalf("startup delivery = suffix:%q nudge:%q, want both empty", cfg.PromptSuffix, cfg.Nudge)
+	}
+	if cfg.AcceptStartupDialogs == nil || *cfg.AcceptStartupDialogs {
+		t.Fatalf("AcceptStartupDialogs = %v, want false", cfg.AcceptStartupDialogs)
+	}
+	if !reflect.DeepEqual(cfg.ProcessNames, []string{"gr7n"}) {
+		t.Fatalf("ProcessNames = %v, want [gr7n]", cfg.ProcessNames)
+	}
+	for _, call := range fakeFS.Calls {
+		if call.Method == "ReadFile" && call.Path == filepath.Join(cityPath, agentCfg.PromptTemplate) {
+			t.Fatalf("prompt-disabled template was read: %+v", call)
+		}
+	}
+}
+
 func TestResolveTemplateExplicitControlDispatcherKeepsStartupPrompt(t *testing.T) {
 	cityPath := t.TempDir()
 	fakeFS := fsys.NewFake()

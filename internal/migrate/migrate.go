@@ -63,6 +63,7 @@ type agentFile struct {
 	Scope                  string            `toml:"scope,omitempty"`
 	Suspended              bool              `toml:"suspended,omitempty"`
 	PreStart               []string          `toml:"pre_start,omitempty"`
+	AcceptsPrompt          *bool             `toml:"accepts_prompt,omitempty"`
 	Nudge                  string            `toml:"nudge,omitempty"`
 	Session                string            `toml:"session,omitempty"`
 	Provider               string            `toml:"provider,omitempty"`
@@ -918,6 +919,7 @@ func agentConfigFromAgent(agent config.Agent) agentFile {
 		Scope:                  agent.Scope,
 		Suspended:              agent.Suspended,
 		PreStart:               agent.PreStart,
+		AcceptsPrompt:          agent.AcceptsPrompt,
 		Nudge:                  agent.Nudge,
 		Session:                agent.Session,
 		Provider:               agent.Provider,
@@ -970,6 +972,7 @@ func isZeroAgentConfig(cfg agentFile) bool {
 		cfg.Scope == "" &&
 		!cfg.Suspended &&
 		len(cfg.PreStart) == 0 &&
+		cfg.AcceptsPrompt == nil &&
 		cfg.Nudge == "" &&
 		cfg.Session == "" &&
 		cfg.Provider == "" &&

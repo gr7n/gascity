@@ -31,6 +31,7 @@ max_active_sessions = 1
 name = "worker"
 dir = "frontend"
 suspended = true
+accepts_prompt = false
 work_query = "bd ready --label=frontend"
 sling_query = "bd update {} --set-metadata gc.routed_to=frontend/worker"
 `)
@@ -75,6 +76,14 @@ sling_query = "bd update {} --set-metadata gc.routed_to=frontend/worker"
 	}
 	if worker.WorkQuery != "bd ready --label=frontend" || worker.SlingQuery == "" {
 		t.Fatalf("worker routing fields = %+v", worker)
+	}
+	if worker.AcceptsPrompt {
+		t.Fatalf("worker AcceptsPrompt = true, want false")
+	}
+	for _, item := range userAgents {
+		if item.QualifiedName == "mayor" && !item.AcceptsPrompt {
+			t.Fatal("legacy/default mayor AcceptsPrompt = false, want compatibility default true")
+		}
 	}
 }
 

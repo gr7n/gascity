@@ -48,6 +48,11 @@
           "type": "string",
           "description": "PromptTemplate is the path to this agent's prompt template file.\nRelative paths resolve against the city directory."
         },
+        "accepts_prompt": {
+          "type": "boolean",
+          "description": "AcceptsPrompt controls whether this agent is an interactive prompt\nconsumer. Nil preserves the compatibility default (true). False marks a\ndeterministic command worker: startup prompt rendering/delivery, startup\nnudges, trust-dialog automation, and later interactive messages are all\nsuppressed or rejected while lifecycle/process supervision remains active.",
+          "default": true
+        },
         "nudge": {
           "type": "string",
           "description": "Nudge is text typed into the agent's tmux session after startup.\nUsed for CLI agents that don't accept command-line prompts."
@@ -414,6 +419,10 @@
         "prompt_template": {
           "type": "string",
           "description": "PromptTemplate overrides the prompt template path.\nRelative paths resolve against the declaring config file's directory\n(pack-safe). Paths prefixed with \"//\" resolve against the city root."
+        },
+        "accepts_prompt": {
+          "type": "boolean",
+          "description": "AcceptsPrompt overrides whether the agent can consume startup or\ninteractive prompts."
         },
         "session": {
           "type": "string",
@@ -1114,6 +1123,11 @@
         "base": {
           "type": "string",
           "description": "Base names the parent provider this spec inherits from. Supported\nforms:\n  \"\u003cname\u003e\"          - custom first (self-excluded), then built-in\n  \"builtin:\u003cname\u003e\"  - force built-in lookup\n  \"provider:\u003cname\u003e\" - force custom lookup\n  \"\"                - explicit standalone opt-out\n  nil               - field absent; no explicit declaration"
+        },
+        "implicit_agent": {
+          "type": "boolean",
+          "description": "ImplicitAgent controls whether this provider contributes provider-named\nimplicit agents at city and rig scope. Nil preserves the compatibility\ndefault (enabled); false keeps the provider available to explicit agents\nand as the workspace default without manufacturing a work role for it.\nThe setting is inherited across provider base chains.",
+          "default": true
         },
         "args_append": {
           "items": {

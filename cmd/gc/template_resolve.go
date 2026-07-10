@@ -62,6 +62,10 @@ type TemplateParams struct {
 	// prompt rendering (for example, a legacy/test-constructed value); a non-nil
 	// zero value is an observed prompt-less launch and clears stale provenance.
 	PromptReceipt *session.PromptReceipt
+	// PromptDisabled prevents transient initial-message overrides from
+	// bypassing accepts_prompt=false (or legacy deterministic-dispatcher)
+	// startup suppression.
+	PromptDisabled bool
 	// Env is the merged environment (passthrough + provider + agent + passthrough vars).
 	Env map[string]string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
@@ -338,54 +342,57 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 
 	// Step 9: Render prompt with beacon.
 	var prompt string
-	// Merge fragment sources: V1 global_fragments + inject_fragments,
-	// per-agent append_fragments, imported-pack [agent_defaults].append_fragments,
-	// then city-level [agent_defaults].append_fragments.
-	fragments := effectivePromptFragments(
-		p.globalFragments,
-		cfgAgent.InjectFragments,
-		cfgAgent.AppendFragments,
-		cfgAgent.InheritedAppendFragments,
-		p.appendFragments,
-	)
-	providerKey, providerDisplayName := providerInfoForAgent(cfgAgent, p.workspace, p.providers)
-	packDirs := p.packDirs
-	if p.city != nil {
-		packDirs = p.city.PackDirsForRig(rigName)
-	}
-	beadsCfg := config.BeadsConfig{}
-	if p.city != nil {
-		beadsCfg = p.city.Beads
-	}
-	renderedPrompt := renderPromptWithMeta(p.fs, p.cityPath, p.cityName, cfgAgent.PromptTemplate, PromptContext{
-		CityRoot:                p.cityPath,
-		AgentName:               qualifiedName,
-		TemplateName:            cfgAgent.Name,
-		BindingName:             cfgAgent.BindingName,
-		BindingPrefix:           cfgAgent.BindingPrefix(),
-		RigName:                 rigName,
-		RigRoot:                 rigRoot,
-		WorkDir:                 workDir,
-		IssuePrefix:             findRigPrefix(rigName, p.rigs),
-		DefaultBranch:           defaultBranchForRig(rigName, p.rigs, workDir),
-		AssignedInProgressQuery: expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "assigned_in_progress_query", cfgAgent.EffectiveAssignedInProgressQueryForBeads(beadsCfg), p.stderr),
-		AssignedReadyQuery:      expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "assigned_ready_query", cfgAgent.EffectiveAssignedReadyQueryForBeads(beadsCfg), p.stderr),
-		RoutedPoolQuery:         expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "routed_pool_query", cfgAgent.EffectiveRoutedPoolQueryForBeads(beadsCfg), p.stderr),
-		WorkQuery:               expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "work_query", cfgAgent.EffectiveWorkQueryForBeads(beadsCfg), p.stderr),
-		SlingQuery:              expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "sling_query", cfgAgent.EffectiveSlingQuery(), p.stderr),
-		ProviderKey:             providerKey,
-		ProviderDisplayName:     providerDisplayName,
-		InstructionsFile:        instructionsFileForAgent(cfgAgent, p.workspace, p.providers),
-		Env:                     cfgAgent.Env,
-	}, p.sessionTemplate, p.stderr, packDirs, fragments, p.beadStore)
-	prompt = renderedPrompt.Text
-	promptReceipt := &session.PromptReceipt{
-		Version: renderedPrompt.Version,
-		SHA:     renderedPrompt.SHA,
+	suppressStartupPrompt := suppressStartupPromptForAgent(cfgAgent)
+	promptReceipt := &session.PromptReceipt{}
+	if !suppressStartupPrompt {
+		// Merge fragment sources: V1 global_fragments + inject_fragments,
+		// per-agent append_fragments, imported-pack
+		// [agent_defaults].append_fragments, then city-level defaults.
+		fragments := effectivePromptFragments(
+			p.globalFragments,
+			cfgAgent.InjectFragments,
+			cfgAgent.AppendFragments,
+			cfgAgent.InheritedAppendFragments,
+			p.appendFragments,
+		)
+		providerKey, providerDisplayName := providerInfoForAgent(cfgAgent, p.workspace, p.providers)
+		packDirs := p.packDirs
+		if p.city != nil {
+			packDirs = p.city.PackDirsForRig(rigName)
+		}
+		beadsCfg := config.BeadsConfig{}
+		if p.city != nil {
+			beadsCfg = p.city.Beads
+		}
+		renderedPrompt := renderPromptWithMeta(p.fs, p.cityPath, p.cityName, cfgAgent.PromptTemplate, PromptContext{
+			CityRoot:                p.cityPath,
+			AgentName:               qualifiedName,
+			TemplateName:            cfgAgent.Name,
+			BindingName:             cfgAgent.BindingName,
+			BindingPrefix:           cfgAgent.BindingPrefix(),
+			RigName:                 rigName,
+			RigRoot:                 rigRoot,
+			WorkDir:                 workDir,
+			IssuePrefix:             findRigPrefix(rigName, p.rigs),
+			DefaultBranch:           defaultBranchForRig(rigName, p.rigs, workDir),
+			AssignedInProgressQuery: expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "assigned_in_progress_query", cfgAgent.EffectiveAssignedInProgressQueryForBeads(beadsCfg), p.stderr),
+			AssignedReadyQuery:      expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "assigned_ready_query", cfgAgent.EffectiveAssignedReadyQueryForBeads(beadsCfg), p.stderr),
+			RoutedPoolQuery:         expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "routed_pool_query", cfgAgent.EffectiveRoutedPoolQueryForBeads(beadsCfg), p.stderr),
+			WorkQuery:               expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "work_query", cfgAgent.EffectiveWorkQueryForBeads(beadsCfg), p.stderr),
+			SlingQuery:              expandAgentCommandTemplate(p.cityPath, p.cityName, cfgAgent, p.rigs, "sling_query", cfgAgent.EffectiveSlingQuery(), p.stderr),
+			ProviderKey:             providerKey,
+			ProviderDisplayName:     providerDisplayName,
+			InstructionsFile:        instructionsFileForAgent(cfgAgent, p.workspace, p.providers),
+			Env:                     cfgAgent.Env,
+		}, p.sessionTemplate, p.stderr, packDirs, fragments, p.beadStore)
+		prompt = renderedPrompt.Text
+		promptReceipt = &session.PromptReceipt{
+			Version: renderedPrompt.Version,
+			SHA:     renderedPrompt.SHA,
+		}
 	}
 	hasHooks := config.AgentHasHooks(cfgAgent, p.workspace, resolved.Name, p.providers)
 	beacon := runtime.FormatBeaconAt(p.cityName, qualifiedName, !hasHooks, p.beaconTime)
-	suppressStartupPrompt := suppressStartupPromptForAgent(cfgAgent)
 	switch {
 	case suppressStartupPrompt:
 		prompt = ""
@@ -649,9 +656,10 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	nudge := cfgAgent.Nudge
 	acceptStartupDialogs := resolved.AcceptStartupDialogs
 	if suppressStartupPrompt {
-		// Deterministic control-dispatcher workers are subprocesses, not
-		// interactive model providers. Keep ProcessNames for liveness without
-		// routing startup through prompt, nudge, or trust-dialog handling.
+		// Prompt-disabled agents (and legacy auto-detected control dispatchers)
+		// are subprocesses, not interactive model providers. Keep ProcessNames
+		// for liveness without routing startup through prompt, nudge, or
+		// trust-dialog handling.
 		nudge = ""
 		accept := false
 		acceptStartupDialogs = &accept
@@ -681,6 +689,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		Command:          command,
 		Prompt:           prompt,
 		PromptReceipt:    promptReceipt,
+		PromptDisabled:   suppressStartupPrompt,
 		Env:              env,
 		Upstream:         cfgAgent.Upstream,
 		Hints:            hints,
@@ -738,7 +747,7 @@ func appendKimiHookConfigArg(command string) string {
 }
 
 func suppressStartupPromptForAgent(cfgAgent *config.Agent) bool {
-	return config.IsDeterministicControlDispatcher(cfgAgent)
+	return !cfgAgent.AcceptsPromptEnabled()
 }
 
 func sessionBackendEnvWithError(cityPath, rigRoot string, rigs []config.Rig) (map[string]string, error) {

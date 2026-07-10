@@ -56,14 +56,15 @@ func (s *Server) humaHandleAgentPatchSet(_ context.Context, input *AgentPatchSet
 	}
 
 	patch := config.AgentPatch{
-		Dir:       input.Body.Dir,
-		Name:      input.Body.Name,
-		Provider:  input.Body.Provider,
-		WorkDir:   input.Body.WorkDir,
-		TmuxAlias: input.Body.TmuxAlias,
-		Scope:     input.Body.Scope,
-		Suspended: input.Body.Suspended,
-		Env:       input.Body.Env,
+		Dir:           input.Body.Dir,
+		Name:          input.Body.Name,
+		Provider:      input.Body.Provider,
+		WorkDir:       input.Body.WorkDir,
+		TmuxAlias:     input.Body.TmuxAlias,
+		Scope:         input.Body.Scope,
+		Suspended:     input.Body.Suspended,
+		AcceptsPrompt: input.Body.AcceptsPrompt,
+		Env:           input.Body.Env,
 	}
 
 	if patch.Name == "" {
@@ -224,6 +225,7 @@ func (s *Server) humaHandleProviderPatchSet(_ context.Context, input *ProviderPa
 
 	patch := config.ProviderPatch{
 		Name:                 input.Body.Name,
+		ImplicitAgent:        input.Body.ImplicitAgent,
 		Command:              input.Body.Command,
 		ACPCommand:           input.Body.ACPCommand,
 		Args:                 input.Body.Args,

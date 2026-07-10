@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -51,6 +52,74 @@ func TestHandleSessionSubmitDefaultsToProviderDefaultBehavior(t *testing.T) {
 	}
 	if success.Intent != string(session.SubmitIntentDefault) {
 		t.Fatalf("intent = %q, want %q", success.Intent, session.SubmitIntentDefault)
+	}
+}
+
+func TestHandleSessionSubmitRejectsAcceptsPromptFalse(t *testing.T) {
+	fs := newSessionFakeState(t)
+	rejectsPrompt := false
+	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{
+		Name:          "default",
+		AcceptsPrompt: &rejectsPrompt,
+	})
+	h := newTestCityHandler(t, fs)
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Deterministic")
+	if err := fs.cityBeadStore.SetMetadata(info.ID, "agent_name", "default"); err != nil {
+		t.Fatalf("SetMetadata(agent_name): %v", err)
+	}
+
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, rec.Body)
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success != nil {
+		t.Fatalf("submit unexpectedly succeeded: %+v", success)
+	}
+	if failure == nil || failure.ErrorCode != "submit_failed" || !strings.Contains(failure.ErrorMessage, `agent "default" has accepts_prompt=false`) {
+		t.Fatalf("failure = %+v, want explicit prompt capability error", failure)
+	}
+}
+
+func TestHandleSessionSubmitRejectsLegacyDeterministicDispatcher(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{
+		Name:         config.ControlDispatcherAgentName,
+		StartCommand: config.ControlDispatcherStartCommand,
+	})
+	h := newTestCityHandler(t, fs)
+	mgr := session.NewManagerWithOptions(fs.cityBeadStore, fs.sp)
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+		Template: config.ControlDispatcherAgentName,
+		Title:    "Legacy Dispatcher",
+		Command:  config.ControlDispatcherStartCommand,
+		WorkDir:  t.TempDir(),
+		Provider: "command",
+		Hints:    runtime.Config{},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := fs.cityBeadStore.SetMetadata(info.ID, "agent_name", config.ControlDispatcherAgentName); err != nil {
+		t.Fatalf("SetMetadata(agent_name): %v", err)
+	}
+
+	req := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, rec.Body)
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success != nil {
+		t.Fatalf("submit unexpectedly succeeded: %+v", success)
+	}
+	if failure == nil || failure.ErrorCode != "submit_failed" || !strings.Contains(failure.ErrorMessage, "deterministic control dispatcher") {
+		t.Fatalf("failure = %+v, want effective legacy dispatcher capability error", failure)
 	}
 }
 
@@ -321,6 +390,136 @@ func TestHandleSessionGetIncludesSubmissionCapabilities(t *testing.T) {
 	}
 	if !resp.SubmissionCapabilities.SupportsInterruptNow {
 		t.Fatal("SupportsInterruptNow = false, want true")
+	}
+}
+
+func TestHandleSessionGetZerosSubmissionCapabilitiesForPromptDisabledAgent(t *testing.T) {
+	fs := newSessionFakeState(t)
+	rejectsPrompt := false
+	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{
+		Name:          "default",
+		AcceptsPrompt: &rejectsPrompt,
+	})
+	h := newTestCityHandler(t, fs)
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Prompt Disabled Capabilities")
+	if err := fs.cityBeadStore.Update(info.ID, beads.UpdateOpts{
+		Metadata: map[string]string{"agent_name": "default", "pool_managed": "true", "pool_slot": "1"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID, nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.SubmissionCapabilities.SupportsFollowUp || resp.SubmissionCapabilities.SupportsInterruptNow {
+		t.Fatalf("submission_capabilities = %+v, want both false for prompt-disabled agent", resp.SubmissionCapabilities)
+	}
+}
+
+func TestProviderSessionAgentNameCollisionRemainsInteractiveAndCapable(t *testing.T) {
+	fs := newSessionFakeState(t)
+	rejectsPrompt := false
+	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{Name: "default", AcceptsPrompt: &rejectsPrompt})
+	h := newTestCityHandler(t, fs)
+	// createTestSession intentionally models a direct provider session:
+	// session_origin=manual and no agent_name, even though its Template
+	// ("default") collides with the configured prompt-disabled agent above.
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Provider Collision")
+	if err := fs.cityBeadStore.Update(info.ID, beads.UpdateOpts{
+		Metadata: map[string]string{
+			"pool_managed":                 "true",
+			"pool_slot":                    "1",
+			"session_origin":               "",
+			session.SessionKindMetadataKey: "provider",
+		},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	getRec := httptest.NewRecorder()
+	getReq := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID, nil)
+	h.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d; body: %s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+	var resp sessionResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.SubmissionCapabilities.SupportsFollowUp || !resp.SubmissionCapabilities.SupportsInterruptNow {
+		t.Fatalf("submission_capabilities = %+v, want provider session capabilities preserved despite agent-name collision", resp.SubmissionCapabilities)
+	}
+
+	submitReq := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"provider input"}`))
+	submitRec := httptest.NewRecorder()
+	h.ServeHTTP(submitRec, submitReq)
+	if submitRec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", submitRec.Code, http.StatusAccepted, submitRec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, submitRec.Body)
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success == nil {
+		t.Fatalf("provider collision submit failed: %+v", failure)
+	}
+}
+
+func TestRemovedAgentBackedSessionRejectsSubmitAndZerosCapabilities(t *testing.T) {
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{Name: "friendly", StartCommand: "echo friendly"})
+	h := newTestCityHandler(t, fs)
+	mgr := session.NewManagerWithOptions(fs.cityBeadStore, fs.sp)
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+		Template: "friendly",
+		Title:    "Removed Agent",
+		Command:  "router",
+		WorkDir:  t.TempDir(),
+		Provider: "router",
+		Hints:    runtime.Config{},
+		ExtraMeta: map[string]string{
+			"agent_name":     "removed-router",
+			"session_origin": "manual",
+			"pool_managed":   "true",
+			"pool_slot":      "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	getRec := httptest.NewRecorder()
+	getReq := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID, nil)
+	h.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d; body: %s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+	var resp sessionResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.SubmissionCapabilities.SupportsFollowUp || resp.SubmissionCapabilities.SupportsInterruptNow {
+		t.Fatalf("submission_capabilities = %+v, want removed agent-backed session fail-closed", resp.SubmissionCapabilities)
+	}
+
+	submitReq := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"must reject"}`))
+	submitRec := httptest.NewRecorder()
+	h.ServeHTTP(submitRec, submitReq)
+	if submitRec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d; body: %s", submitRec.Code, http.StatusAccepted, submitRec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, submitRec.Body)
+	success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+	if success != nil {
+		t.Fatalf("submit unexpectedly succeeded: %+v", success)
+	}
+	if failure == nil || !strings.Contains(failure.ErrorMessage, `agent "removed-router" is no longer configured`) {
+		t.Fatalf("failure = %+v, want removed-agent fail-closed capability error", failure)
 	}
 }
 

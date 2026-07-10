@@ -85,7 +85,15 @@ const (
 	nudgePollFreeOSInterval = 30 * time.Second
 )
 
-var errNudgeSessionFenceMismatch = errors.New("queued nudge session fence mismatch")
+var (
+	errNudgeSessionFenceMismatch     = errors.New("queued nudge session fence mismatch")
+	errNudgeTargetNoLongerConfigured = errors.New("queued nudge target is no longer configured")
+)
+
+const (
+	promptDisabledQueuedNudgeReason = "accepts-prompt-disabled"
+	targetRemovedQueuedNudgeReason  = "agent-no-longer-configured"
+)
 
 var (
 	// Test seams for cmd_nudge_test.go. Tests that replace these package
@@ -94,6 +102,7 @@ var (
 	nudgePokeController                      = pokeController
 	nudgeObserveTarget                       = workerObserveNudgeTarget
 	nudgeWithdrawQueuedWaitNudges            = withdrawQueuedWaitNudges
+	nudgeLoadLiveCityConfig                  = loadLiveCityConfigForNudgeDelivery
 	nudgeWarningWriter             io.Writer = os.Stderr
 )
 
@@ -122,6 +131,15 @@ type nudgeTarget struct {
 	sessionID         string
 	continuationEpoch string
 	sessionName       string
+	// providerSession distinguishes direct kind=provider/manual sessions from
+	// configured agent sessions when Template happens to equal an agent name.
+	// Provider sessions do not inherit that agent's prompt capability and must
+	// bypass live agent disappearance/opt-out withdrawal.
+	providerSession bool
+	// agentBacked remains true even if its configured agent later disappears.
+	// Direct nudge/mail delivery uses it to fail closed instead of treating the
+	// parsed identity placeholder as an interactive provider session.
+	agentBacked bool
 }
 
 type nudgeStatusJSON struct {
@@ -444,6 +462,22 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		fmt.Fprintf(stderr, "gc nudge drain: %v\n", err) //nolint:errcheck
 		return 1
 	}
+	liveTarget, promptDisabled, err := prepareQueuedNudgeDeliveryTarget(target, nil)
+	if err != nil {
+		if inject {
+			fmt.Fprintf(stderr, "gc nudge drain: validating prompt capability: %v\n", err) //nolint:errcheck
+			return 0
+		}
+		fmt.Fprintf(stderr, "gc nudge drain: validating prompt capability: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	target = liveTarget
+	if promptDisabled {
+		if inject {
+			return 0
+		}
+		return 1
+	}
 
 	now := time.Now()
 	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, now)
@@ -496,6 +530,23 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		}
 	}
 	if len(items) == 0 {
+		if inject {
+			return 0
+		}
+		return 1
+	}
+	liveTarget, promptDisabled, err = prepareQueuedNudgeDeliveryTarget(target, deliveryStore.Store)
+	if err != nil {
+		_ = releaseQueuedNudgeClaims(target.cityPath, queuedNudgeIDs(items))
+		if inject {
+			fmt.Fprintf(stderr, "gc nudge drain: revalidating prompt capability: %v\n", err) //nolint:errcheck
+			return 0
+		}
+		fmt.Fprintf(stderr, "gc nudge drain: revalidating prompt capability: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	target = liveTarget
+	if promptDisabled {
 		if inject {
 			return 0
 		}
@@ -644,9 +695,6 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 		fmt.Fprintf(stderr, "gc nudge poll: opening city store for %q\n", target.agentKey()) //nolint:errcheck
 		return 1
 	}
-	// Session-class store for the observe read (nudgeObserveTarget); the raw
-	// nudges store keeps flowing to the queue-delivery path. Identity today.
-	sessStore := cliSessionStore(store.Store, target.cfg, target.cityPath)
 	var missingSince time.Time
 	var lastFreeOS time.Time
 	for {
@@ -659,6 +707,26 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 			debug.FreeOSMemory()
 			lastFreeOS = now
 		}
+		liveTarget, promptDisabled, capabilityErr := prepareQueuedNudgeDeliveryTarget(target, store.Store)
+		if capabilityErr != nil {
+			fmt.Fprintf(stderr, "gc nudge poll: %v\n", capabilityErr) //nolint:errcheck
+			now := time.Now()
+			if shouldKeepNudgePollerAlive(target, missingSince, now) {
+				if missingSince.IsZero() {
+					missingSince = now
+				}
+				time.Sleep(interval)
+				continue
+			}
+			return 1
+		}
+		target = liveTarget
+		if promptDisabled {
+			return 0
+		}
+		// Session-class store for the observe read (nudgeObserveTarget); the raw
+		// nudges store keeps flowing to the queue-delivery path. Identity today.
+		sessStore := cliSessionStore(store.Store, target.cfg, target.cityPath)
 		obs, err := nudgeObserveTarget(target, sessStore, sp)
 		if err != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", err) //nolint:errcheck
@@ -722,6 +790,12 @@ func deliverSessionNudge(target nudgeTarget, message string, mode nudgeDeliveryM
 }
 
 func deliverSessionNudgeWithWorker(target nudgeTarget, store beads.Store, sp runtime.Provider, message string, mode nudgeDeliveryMode, jsonOutput bool, stdout, stderr io.Writer) int {
+	liveTarget, err := prepareDirectInteractiveNudgeTarget(target)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session nudge: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	target = liveTarget
 	if mode == nudgeDeliveryQueue {
 		return queueSessionNudgeWithWorker(target, store, sp, message, mode, jsonOutput, stdout, stderr)
 	}
@@ -1064,6 +1138,11 @@ func sendMailNotifyWithProvider(target nudgeTarget, sp runtime.Provider) error {
 }
 
 func sendMailNotifyWithWorker(target nudgeTarget, store beads.Store, sp runtime.Provider, sender string) error {
+	liveTarget, err := prepareDirectInteractiveNudgeTarget(target)
+	if err != nil {
+		return err
+	}
+	target = liveTarget
 	msg := fmt.Sprintf("You have mail from %s", sender)
 	now := time.Now()
 	// Session-class store for the observe/handle reads and the last-nudge stamp
@@ -1160,6 +1239,8 @@ type nudgeTargetFields struct {
 	transport         string
 	provider          string
 	continuationEpoch string
+	providerSession   bool
+	agentBacked       bool
 }
 
 // resolveNudgeTargetFromSessionInfo reads the session attributes buildNudgeTarget
@@ -1172,6 +1253,21 @@ func resolveNudgeTargetFromSessionInfo(cityPath string, cfg *config.City, i sess
 	if sessionName == "" {
 		sessionName = sessionNameFromBeadID(i.ID)
 	}
+	templateAgent, templateFound := resolveAgentIdentity(cfg, strings.TrimSpace(i.Template), "")
+	classificationMetadata := map[string]string{
+		"agent_name":     strings.TrimSpace(i.AgentName),
+		"session_origin": strings.TrimSpace(i.SessionOrigin),
+	}
+	if i.ConfiguredNamedSession {
+		classificationMetadata[session.NamedSessionMetadataKey] = "true"
+	}
+	providerSession := !session.UseAgentTemplateForProviderResolution(
+		i.SessionKind,
+		classificationMetadata,
+		i.Provider,
+		templateAgent.Provider,
+		templateFound,
+	)
 	return buildNudgeTarget(cityPath, cfg, nudgeTargetFields{
 		sessionID:         i.ID,
 		sessionName:       sessionName,
@@ -1183,6 +1279,8 @@ func resolveNudgeTargetFromSessionInfo(cityPath string, cfg *config.City, i sess
 		transport:         strings.TrimSpace(i.TransportMetadata),
 		provider:          strings.TrimSpace(i.Provider),
 		continuationEpoch: strings.TrimSpace(i.ContinuationEpoch),
+		providerSession:   providerSession,
+		agentBacked:       !providerSession,
 	})
 }
 
@@ -1201,9 +1299,26 @@ func buildNudgeTarget(cityPath string, cfg *config.City, f nudgeTargetFields) nu
 		sessionID:         f.sessionID,
 		continuationEpoch: f.continuationEpoch,
 		sessionName:       f.sessionName,
+		providerSession:   f.providerSession,
+		agentBacked:       f.agentBacked,
 	}
 	target.agent = parseNudgeAgentIdentity(identity)
-	for _, candidate := range []string{f.agentName, f.template, f.commonName} {
+	var agentCandidates []string
+	switch {
+	case strings.TrimSpace(f.agentName) != "":
+		// Persisted agent_name is authoritative. If it disappeared, do not
+		// rebound the session through a colliding template/common name.
+		agentCandidates = []string{f.agentName}
+	case strings.TrimSpace(f.template) != "":
+		// Template is authoritative for legacy agent sessions lacking agent_name.
+		agentCandidates = []string{f.template}
+	default:
+		agentCandidates = []string{f.commonName}
+	}
+	for _, candidate := range agentCandidates {
+		if f.providerSession {
+			break
+		}
 		if candidate == "" {
 			continue
 		}
@@ -1234,6 +1349,209 @@ func buildNudgeTarget(cityPath string, cfg *config.City, f nudgeTargetFields) nu
 		target.identity = f.sessionName
 	}
 	return target
+}
+
+// loadLiveCityConfigForNudgeDelivery reloads the composed city without
+// refreshing builtin-pack files. Long-lived pollers must observe capability
+// changes from disk on every delivery attempt, while builtin materialization
+// remains owned by normal controller/config reload paths.
+func loadLiveCityConfigForNudgeDelivery(cityPath string) (*config.City, error) {
+	return loadCityConfigWithoutBuiltinPackRefresh(cityPath, io.Discard)
+}
+
+// resolveLiveNudgeTarget replaces the target's captured agent/config snapshot
+// with the current composed city definition. Synthetic lower-level tests may
+// construct a target without cfg; every production queued-delivery target is
+// created from a loaded city and therefore takes the live reload path.
+func resolveLiveNudgeTarget(target nudgeTarget) (nudgeTarget, error) {
+	// Direct provider sessions are not governed by a configured agent's
+	// accepts_prompt lifecycle. In particular, a provider session may share its
+	// template/name with a prompt-disabled agent. Preserve the captured provider
+	// target and bypass agent reload/disappearance withdrawal entirely.
+	if target.providerSession {
+		return target, nil
+	}
+	if target.cfg == nil {
+		return target, nil
+	}
+	if strings.TrimSpace(target.cityPath) == "" {
+		return nudgeTarget{}, fmt.Errorf("reloading queued nudge target %q: city path is empty", target.agentKey())
+	}
+	cfg, err := nudgeLoadLiveCityConfig(target.cityPath)
+	if err != nil {
+		return nudgeTarget{}, fmt.Errorf("reloading queued nudge target %q: %w", target.agentKey(), err)
+	}
+
+	var found config.Agent
+	foundOK := false
+	seen := make(map[string]bool, 2)
+	for _, candidate := range []string{target.identity, target.agent.QualifiedName()} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		if agent, ok := resolveAgentIdentity(cfg, candidate, ""); ok {
+			found = agent
+			foundOK = true
+			break
+		}
+	}
+	if !foundOK {
+		return nudgeTarget{}, fmt.Errorf("reloading queued nudge target %q: %w", target.agentKey(), errNudgeTargetNoLongerConfigured)
+	}
+
+	target.cfg = cfg
+	target.cityName = loadedCityName(cfg, target.cityPath)
+	target.agent = found
+	target.identity = found.QualifiedName()
+	if target.transport == "" {
+		target.transport = found.Session
+	}
+	if resolved, resolveErr := config.ResolveProvider(&found, &cfg.Workspace, cfg.Providers, exec.LookPath); resolveErr == nil {
+		if resolved.Name == "" {
+			resolved.Name = fallbackProviderName(found.Provider, cfg)
+		}
+		target.resolved = resolved
+	}
+	return target, nil
+}
+
+// prepareQueuedNudgeDeliveryTarget is the capability boundary shared by hook
+// drain, the sidecar poller, and the controller dispatcher. A prompt-disabled
+// transition atomically removes all matching pending/in-flight prompt text
+// before returning; callers must treat disabled=true as a terminal no-delivery
+// result, not as a retryable error.
+func prepareQueuedNudgeDeliveryTarget(target nudgeTarget, store beads.Store) (nudgeTarget, bool, error) {
+	live, err := resolveLiveNudgeTarget(target)
+	if err != nil {
+		// A successful config reload that no longer contains the target is a
+		// durable capability transition (including implicit_agent=true->false),
+		// not a transient reload failure. Withdraw with the captured identity
+		// keys so removed implicit agents cannot strand prompt text forever.
+		if errors.Is(err, errNudgeTargetNoLongerConfigured) {
+			if _, withdrawErr := withdrawQueuedNudgesForNonInteractiveTarget(target.cityPath, target, store, time.Now(), targetRemovedQueuedNudgeReason); withdrawErr != nil {
+				return nudgeTarget{}, true, withdrawErr
+			}
+			return target, true, nil
+		}
+		return nudgeTarget{}, false, err
+	}
+	if live.providerSession {
+		return live, false, nil
+	}
+	if live.agent.AcceptsPromptEnabled() {
+		return live, false, nil
+	}
+	if _, err := withdrawQueuedNudgesForNonInteractiveTarget(live.cityPath, live, store, time.Now(), promptDisabledQueuedNudgeReason); err != nil {
+		return nudgeTarget{}, true, err
+	}
+	return live, true, nil
+}
+
+// prepareDirectInteractiveNudgeTarget applies the live configured-agent
+// capability boundary to immediate nudge and mail delivery. Direct provider
+// sessions are explicitly exempt; synthetic targets without persisted
+// agent-backed identity retain the direct Agent capability check.
+func prepareDirectInteractiveNudgeTarget(target nudgeTarget) (nudgeTarget, error) {
+	if target.providerSession {
+		return target, nil
+	}
+	if target.agentBacked {
+		live, err := resolveLiveNudgeTarget(target)
+		if err != nil {
+			if errors.Is(err, errNudgeTargetNoLongerConfigured) {
+				return nudgeTarget{}, config.EnsureAgentBackedSessionAcceptsPrompt(nil, target.agentKey())
+			}
+			return nudgeTarget{}, err
+		}
+		if err := config.EnsureAgentBackedSessionAcceptsPrompt(&live.agent, live.agentKey()); err != nil {
+			return nudgeTarget{}, err
+		}
+		return live, nil
+	}
+	if err := config.EnsureAgentAcceptsPrompt(&target.agent); err != nil {
+		return nudgeTarget{}, err
+	}
+	return target, nil
+}
+
+// withdrawQueuedNudgesForNonInteractiveTarget makes the queue transition authoritative:
+// matching prompt text is removed under the queue lock even when the backing
+// audit bead cannot be stamped. Audit-bead convergence is best-effort and emits
+// an ID-only warning, so a persistent bead-store failure cannot strand or
+// repeatedly expose prompt text in Pending/InFlight.
+func withdrawQueuedNudgesForNonInteractiveTarget(cityPath string, target nudgeTarget, store beads.Store, now time.Time, reason string) (int, error) {
+	if strings.TrimSpace(cityPath) == "" {
+		return 0, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		return 0, errors.New("withdrawing queued nudges: terminal reason is empty")
+	}
+	ownedStore := false
+	if store == nil {
+		opened := openNudgeBeadStore(cityPath)
+		store = opened.Store
+		ownedStore = true
+	}
+	if ownedStore {
+		defer closeBeadStoreHandle(store) //nolint:errcheck // best-effort
+	}
+	nudgeStore := beads.NudgesStore{Store: store}
+	var front *nudgequeue.Store
+	if store != nil {
+		front = nudgeFrontDoor(nudgeStore)
+	}
+
+	var withdrawn []queuedNudge
+	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
+		deadline := noMaintenanceDeadline()
+		if err := recoverExpiredInFlightNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+		if err := pruneExpiredQueuedNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+		if err := pruneDeadQueuedNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+
+		filter := func(items []queuedNudge) []queuedNudge {
+			kept := items[:0]
+			for _, item := range items {
+				// Agent keys can be shared by multiple concrete sessions and even
+				// by a direct provider session whose template collides with an
+				// agent. SessionID is the isolation fence: preserve another concrete
+				// session's prompt, but purge every continuation generation of the
+				// revoked session. Legacy unfenced items remain agent-level.
+				otherSession := item.SessionID != "" && item.SessionID != target.sessionID
+				if !target.matchesQueueAgent(item.Agent) || otherSession {
+					kept = append(kept, item)
+					continue
+				}
+				item.LastAttemptAt = now.UTC()
+				item.LastError = reason
+				item.ClaimedAt = time.Time{}
+				item.LeaseUntil = time.Time{}
+				withdrawn = append(withdrawn, item)
+			}
+			return kept
+		}
+		state.Pending = filter(state.Pending)
+		state.InFlight = filter(state.InFlight)
+		sortQueuedNudges(state)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	for _, item := range withdrawn {
+		if err := markQueuedNudgeTerminal(nudgeStore, item, "failed", reason, "delivery-withdrawn", now); err != nil && nudgeWarningWriter != nil {
+			fmt.Fprintf(nudgeWarningWriter, "gc nudge: warning: marking non-interactive nudge %q terminal: %v\n", item.ID, err) //nolint:errcheck
+		}
+	}
+	return len(withdrawn), nil
 }
 
 func parseNudgeAgentIdentity(identity string) config.Agent {
@@ -1270,6 +1588,16 @@ func parseNudgeDeliveryMode(raw string) (nudgeDeliveryMode, error) {
 }
 
 func tryDeliverQueuedNudgesByPoller(target nudgeTarget, store, sessStore beads.Store, sp runtime.Provider, quiescence time.Duration, obs worker.LiveObservation) (bool, error) {
+	// Re-resolve from live city config before touching the queue. A captured
+	// accepts_prompt=true snapshot must not survive a later config opt-out.
+	liveTarget, promptDisabled, err := prepareQueuedNudgeDeliveryTarget(target, store)
+	if err != nil {
+		return false, err
+	}
+	target = liveTarget
+	if promptDisabled {
+		return false, nil
+	}
 	matches, err := nudgeTargetLiveGenerationMatches(target, obs, sp)
 	if err != nil || !matches {
 		return false, err
@@ -1327,6 +1655,19 @@ func tryDeliverQueuedNudgesByPoller(target nudgeTarget, store, sessStore beads.S
 		}
 	}
 	if len(items) == 0 {
+		return false, bookkeepErr
+	}
+	// Close the claim-to-send TOCTOU window: config can change after the first
+	// reload and after queue claim. Re-resolve immediately before constructing
+	// or handing prompt text to a runtime. A disabled result withdraws these
+	// in-flight items (and any concurrent matching enqueue) authoritatively.
+	liveTarget, promptDisabled, capabilityErr := prepareQueuedNudgeDeliveryTarget(target, deliveryStore)
+	if capabilityErr != nil {
+		releaseErr := releaseQueuedNudgeClaims(target.cityPath, queuedNudgeIDs(items))
+		return false, errors.Join(bookkeepErr, capabilityErr, releaseErr)
+	}
+	target = liveTarget
+	if promptDisabled {
 		return false, bookkeepErr
 	}
 	var msg string

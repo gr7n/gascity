@@ -53,6 +53,18 @@ base = "builtin:codex"
 If you substituted `claude` above, skip this step — `gc init` already
 registered it.)
 
+A provider registration normally also creates provider-named implicit agents
+at city and rig scope. If an entry represents only a wrapper or routing harness,
+set `implicit_agent = false` on that provider. It stays registered and explicit
+roles can still use it; only the automatically synthesized provider-named roles
+are omitted.
+
+If a role is a deterministic command rather than a conversation, put
+`accepts_prompt = false` in its `agent.toml`. Gas City will still supervise the
+process, but it will not render or send a startup prompt and will reject later
+nudge/submit attempts. Do not use `prompt_mode = "none"` for that purpose:
+`none` is a prompt delivery mode that can still send the prompt as a nudge.
+
 The agent needs a prompt. With no agent named, `gc prime` falls back to a
 generic worker prompt useful for a single-shot CLI invocation:
 

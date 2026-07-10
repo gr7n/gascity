@@ -1114,6 +1114,7 @@ func TestAgentConfigFromAgentCoversPersistedFields(t *testing.T) {
 		Suspended:              true,
 		PreStart:               []string{"pre-cmd"},
 		PromptTemplate:         "prompts/worker.md",
+		AcceptsPrompt:          &trueVal,
 		Nudge:                  "nudge text",
 		Session:                "acp",
 		Provider:               "claude",

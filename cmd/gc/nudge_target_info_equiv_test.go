@@ -224,6 +224,7 @@ func TestNudgeTargetFromSessionInfoFullGolden(t *testing.T) {
 		sessionID:         "ga-full",
 		continuationEpoch: "3",
 		sessionName:       "worker-session",
+		agentBacked:       true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("full nudgeTarget mismatch:\n got=%#v\nwant=%#v", got, want)

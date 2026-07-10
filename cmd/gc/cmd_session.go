@@ -2469,6 +2469,10 @@ func cmdSessionSubmit(args []string, intent session.SubmitIntent, jsonOutput boo
 		fmt.Fprintf(stderr, "gc session submit: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	if err := ensureSessionAcceptsPrompt(cfg, sessStore, sessionID); err != nil {
+		fmt.Fprintf(stderr, "gc session submit: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 
 	sp := newSessionProvider()
 	handle, err := workerHandleForSessionWithConfig(cityPath, sessStore, sp, cfg, sessionID)
@@ -2485,6 +2489,58 @@ func cmdSessionSubmit(args []string, intent session.SubmitIntent, jsonOutput boo
 		return 1
 	}
 	return emitSessionSubmitResult(stdout, stderr, target, intent, outcome.Queued, jsonOutput)
+}
+
+func ensureSessionAcceptsPrompt(cfg *config.City, store beads.Store, sessionID string) error {
+	if cfg == nil || store == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	bead, err := store.Get(sessionID)
+	if err != nil {
+		return err
+	}
+	info := session.InfoFromPersistedBead(bead)
+	template := normalizedSessionTemplateInfo(info, cfg)
+	templateAgent := findAgentByTemplate(cfg, template)
+	templateProvider := ""
+	templateFound := templateAgent != nil
+	if templateFound {
+		templateProvider = templateAgent.Provider
+	}
+	classificationMetadata := map[string]string{
+		"agent_name":     strings.TrimSpace(info.AgentName),
+		"session_origin": strings.TrimSpace(info.SessionOrigin),
+	}
+	if info.ConfiguredNamedSession {
+		classificationMetadata[session.NamedSessionMetadataKey] = "true"
+	}
+	if !session.UseAgentTemplateForProviderResolution(
+		info.SessionKind,
+		classificationMetadata,
+		info.Provider,
+		templateProvider,
+		templateFound,
+	) {
+		return nil
+	}
+	var agent *config.Agent
+	if identity := strings.TrimSpace(info.AgentName); identity != "" {
+		agent = findAgentByTemplate(cfg, identity)
+	} else if identity := strings.TrimSpace(info.Template); identity != "" {
+		// Template is authoritative for legacy agent sessions lacking the newer
+		// agent_name marker; do not rebound a removed template through alias.
+		agent = findAgentByTemplate(cfg, identity)
+	} else {
+		for _, candidate := range []string{info.Alias, info.CommonName} {
+			if candidate = strings.TrimSpace(candidate); candidate != "" {
+				if found := findAgentByTemplate(cfg, candidate); found != nil {
+					agent = found
+					break
+				}
+			}
+		}
+	}
+	return config.EnsureAgentBackedSessionAcceptsPrompt(agent, firstNonEmpty(info.AgentName, info.Template, info.Alias, info.CommonName))
 }
 
 func emitSessionSubmitResult(stdout, stderr io.Writer, target string, intent session.SubmitIntent, queued, jsonOutput bool) int {

@@ -50,15 +50,16 @@ type configRigResponse struct {
 }
 
 type providerSpecJSON struct {
-	DisplayName  string            `json:"display_name,omitempty"`
-	Command      string            `json:"command,omitempty"`
-	ACPCommand   string            `json:"acp_command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-	ACPArgs      *[]string         `json:"acp_args,omitempty"`
-	PromptMode   string            `json:"prompt_mode,omitempty"`
-	PromptFlag   string            `json:"prompt_flag,omitempty"`
-	ReadyDelayMs int               `json:"ready_delay_ms,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
+	DisplayName   string            `json:"display_name,omitempty"`
+	ImplicitAgent *bool             `json:"implicit_agent,omitempty"`
+	Command       string            `json:"command,omitempty"`
+	ACPCommand    string            `json:"acp_command,omitempty"`
+	Args          []string          `json:"args,omitempty"`
+	ACPArgs       *[]string         `json:"acp_args,omitempty"`
+	PromptMode    string            `json:"prompt_mode,omitempty"`
+	PromptFlag    string            `json:"prompt_flag,omitempty"`
+	ReadyDelayMs  int               `json:"ready_delay_ms,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
 }
 
 type configPatchesResponse struct {
@@ -72,15 +73,16 @@ type configPatchesResponse struct {
 // surfaces stay in lock-step.
 func providerSpecJSONFrom(spec config.ProviderSpec) providerSpecJSON {
 	return providerSpecJSON{
-		DisplayName:  spec.DisplayName,
-		Command:      spec.Command,
-		ACPCommand:   spec.ACPCommand,
-		Args:         spec.Args,
-		ACPArgs:      optionalStringSlice(spec.ACPArgs),
-		PromptMode:   spec.PromptMode,
-		PromptFlag:   spec.PromptFlag,
-		ReadyDelayMs: spec.ReadyDelayMs,
-		Env:          spec.Env,
+		DisplayName:   spec.DisplayName,
+		ImplicitAgent: spec.ImplicitAgent,
+		Command:       spec.Command,
+		ACPCommand:    spec.ACPCommand,
+		Args:          spec.Args,
+		ACPArgs:       optionalStringSlice(spec.ACPArgs),
+		PromptMode:    spec.PromptMode,
+		PromptFlag:    spec.PromptFlag,
+		ReadyDelayMs:  spec.ReadyDelayMs,
+		Env:           spec.Env,
 	}
 }
 

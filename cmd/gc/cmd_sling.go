@@ -1496,6 +1496,17 @@ func buildSlingNudgeTarget(agent config.Agent, cityName, cityPath string, cfg *c
 
 func deliverSlingNudge(target nudgeTarget, sp runtime.Provider, store beads.Store, cityPath string, stdout, stderr io.Writer) {
 	const msg = "Work slung. Check your hook."
+	if !target.agent.AcceptsPromptEnabled() {
+		// Routing work to a deterministic command worker is valid, but typing a
+		// chat-style wake message into that process is not. Ask the controller to
+		// reconcile so scale/wake policy can start the command from durable work.
+		if err := slingPokeController(cityPath); err != nil {
+			fmt.Fprintf(stderr, "gc sling: agent %q has accepts_prompt=false; controller poke failed: %v\n", target.agent.QualifiedName(), err) //nolint:errcheck
+		} else {
+			fmt.Fprintf(stdout, "Agent %q does not accept prompts — poked controller for wake\n", target.agent.QualifiedName()) //nolint:errcheck
+		}
+		return
+	}
 	// Session observation/handle and the last-nudge-delivered stamp route to the
 	// session coordination-class store (derived from the target's cfg+cityPath); the
 	// queued-nudge enqueue below stays on the passed store (nudges class). Identity

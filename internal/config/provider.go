@@ -55,6 +55,12 @@ type ProviderSpec struct {
 	//   ""                - explicit standalone opt-out
 	//   nil               - field absent; no explicit declaration
 	Base *string `toml:"base,omitempty"`
+	// ImplicitAgent controls whether this provider contributes provider-named
+	// implicit agents at city and rig scope. Nil preserves the compatibility
+	// default (enabled); false keeps the provider available to explicit agents
+	// and as the workspace default without manufacturing a work role for it.
+	// The setting is inherited across provider base chains.
+	ImplicitAgent *bool `toml:"implicit_agent,omitempty" jsonschema:"default=true"`
 	// ArgsAppend accumulates extra args after each layer's Args replacement.
 	ArgsAppend []string `toml:"args_append,omitempty"`
 	// OptionsSchemaMerge controls OptionsSchema merge mode across the
@@ -212,7 +218,10 @@ type ResolvedProvider struct {
 	// Chain records the resolved ancestry from leaf (index 0) to root.
 	Chain []HopIdentity
 	// Provenance records per-field and per-map-key layer attribution.
-	Provenance             ProviderProvenance
+	Provenance ProviderProvenance
+	// ImplicitAgent is the effective provider-catalog setting. It defaults to
+	// true when no layer declares implicit_agent.
+	ImplicitAgent          bool
 	Command                string
 	Lifecycle              string
 	Args                   []string

@@ -48,6 +48,9 @@ type agentResponse struct {
 
 	Provider    string `json:"provider,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+	// AcceptsPrompt is always present so clients can distinguish deterministic
+	// command workers from interactive model agents.
+	AcceptsPrompt bool `json:"accepts_prompt"`
 
 	// PackDerived reports whether this agent originates from an imported
 	// pack. When true, the agent cannot be mutated directly (a direct

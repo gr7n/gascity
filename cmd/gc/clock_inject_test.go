@@ -95,14 +95,14 @@ func TestCmdNudgeDrainInjectClockAndNudgeSingleJSONDocument(t *testing.T) {
 				t.Fatalf("openCityStoreAt: %v", err)
 			}
 			created, err := store.Create(beads.Bead{
-				Title:  "Session: worker",
+				Title:  "Session: mayor",
 				Type:   session.BeadType,
 				Status: "open",
 				Labels: []string{session.LabelSession},
 				Metadata: map[string]string{
-					"session_name": "worker-session",
-					"agent_name":   "worker",
-					"template":     "worker",
+					"session_name": "mayor-session",
+					"agent_name":   "mayor",
+					"template":     "mayor",
 					"state":        string(session.StateActive),
 				},
 			})
@@ -110,7 +110,7 @@ func TestCmdNudgeDrainInjectClockAndNudgeSingleJSONDocument(t *testing.T) {
 				t.Fatalf("store.Create session: %v", err)
 			}
 
-			item := newQueuedNudgeWithOptions("worker", "check hook output", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
+			item := newQueuedNudgeWithOptions("mayor", "check hook output", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
 				SessionID: created.ID,
 			})
 			if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {

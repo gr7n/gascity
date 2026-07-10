@@ -48,6 +48,8 @@ func (s *activeBeadQueryStore) List(query beads.ListQuery) ([]beads.Bead, error)
 
 func TestAgentList(t *testing.T) {
 	state := newFakeState(t)
+	rejectsPrompt := false
+	state.cfg.Agents[0].AcceptsPrompt = &rejectsPrompt
 	state.sp.Start(context.Background(), "myrig--worker", runtime.Config{}) //nolint:errcheck
 	srv := New(state)
 	h := newTestCityHandlerWith(t, state, srv)
@@ -69,6 +71,9 @@ func TestAgentList(t *testing.T) {
 	}
 	if resp.Total != 1 {
 		t.Errorf("Total = %d, want 1", resp.Total)
+	}
+	if resp.Items[0].AcceptsPrompt {
+		t.Error("AcceptsPrompt = true, want false")
 	}
 }
 

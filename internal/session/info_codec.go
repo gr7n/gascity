@@ -95,6 +95,7 @@ var infoKeyCodec = []infoKeySpec{
 	{"pool_slot", func(i *Info, v string) { i.PoolSlot = v }},
 	{"pool_managed", func(i *Info, v string) { i.PoolManaged = strings.TrimSpace(v) == "true" }},
 	{"session_origin", func(i *Info, v string) { i.SessionOrigin = v }},
+	{SessionKindMetadataKey, func(i *Info, v string) { i.SessionKind = v }},
 	{"dependency_only", func(i *Info, v string) {
 		i.DependencyOnly = strings.TrimSpace(v) == "true"
 		i.DependencyOnlyMetadata = v

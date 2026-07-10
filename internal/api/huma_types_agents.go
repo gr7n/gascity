@@ -57,10 +57,11 @@ func (i *AgentGetQualifiedInput) QualifiedName() string {
 type AgentCreateInput struct {
 	CityScope
 	Body struct {
-		Name     string `json:"name" doc:"Agent name." minLength:"1" example:"deacon-1"`
-		Dir      string `json:"dir,omitempty" doc:"Working directory (rig name)."`
-		Provider string `json:"provider" doc:"Provider name." minLength:"1" example:"claude"`
-		Scope    string `json:"scope,omitempty" doc:"Agent scope."`
+		Name          string `json:"name" doc:"Agent name." minLength:"1" example:"deacon-1"`
+		Dir           string `json:"dir,omitempty" doc:"Working directory (rig name)."`
+		Provider      string `json:"provider" doc:"Provider name." minLength:"1" example:"claude"`
+		Scope         string `json:"scope,omitempty" doc:"Agent scope."`
+		AcceptsPrompt *bool  `json:"accepts_prompt,omitempty" doc:"Whether the agent accepts startup and interactive prompts. Omit for the compatibility default (true)."`
 	}
 }
 
@@ -69,9 +70,10 @@ type AgentUpdateInput struct {
 	CityScope
 	Name string `path:"base" doc:"Agent name (unqualified)."`
 	Body struct {
-		Provider  string `json:"provider,omitempty" doc:"Provider name."`
-		Scope     string `json:"scope,omitempty" doc:"Agent scope."`
-		Suspended *bool  `json:"suspended,omitempty" doc:"Whether agent is suspended."`
+		Provider      string `json:"provider,omitempty" doc:"Provider name."`
+		Scope         string `json:"scope,omitempty" doc:"Agent scope."`
+		Suspended     *bool  `json:"suspended,omitempty" doc:"Whether agent is suspended."`
+		AcceptsPrompt *bool  `json:"accepts_prompt,omitempty" doc:"Whether the agent accepts startup and interactive prompts."`
 	}
 }
 
@@ -82,9 +84,10 @@ type AgentUpdateQualifiedInput struct {
 	Dir  string `path:"dir" doc:"Agent directory (rig name)."`
 	Base string `path:"base" doc:"Agent base name."`
 	Body struct {
-		Provider  string `json:"provider,omitempty" doc:"Provider name."`
-		Scope     string `json:"scope,omitempty" doc:"Agent scope."`
-		Suspended *bool  `json:"suspended,omitempty" doc:"Whether agent is suspended."`
+		Provider      string `json:"provider,omitempty" doc:"Provider name."`
+		Scope         string `json:"scope,omitempty" doc:"Agent scope."`
+		Suspended     *bool  `json:"suspended,omitempty" doc:"Whether agent is suspended."`
+		AcceptsPrompt *bool  `json:"accepts_prompt,omitempty" doc:"Whether the agent accepts startup and interactive prompts."`
 	}
 }
 

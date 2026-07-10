@@ -1007,7 +1007,7 @@ func buildPreparedStartWithWorkDirResolver(
 	// Schema overrides were already applied in the block above (before coreHash).
 	// resolveSessionCommand only adds --resume/--session-id which are not schema
 	// flags, so the overrides don't need to be re-applied.
-	if msg, ok := sessionOverrides["initial_message"]; ok && msg != "" && (firstStart || forceFresh) {
+	if msg, ok := sessionOverrides["initial_message"]; ok && msg != "" && (firstStart || forceFresh) && !tp.PromptDisabled {
 		if tp.ResolvedProvider != nil && tp.ResolvedProvider.PromptMode == "none" {
 			agentCfg.Nudge = appendInitialMessageToStartupNudge(agentCfg.Nudge, msg)
 		} else {

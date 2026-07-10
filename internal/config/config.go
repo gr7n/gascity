@@ -721,6 +721,9 @@ type AgentOverride struct {
 	// Relative paths resolve against the declaring config file's directory
 	// (pack-safe). Paths prefixed with "//" resolve against the city root.
 	PromptTemplate *string `toml:"prompt_template,omitempty"`
+	// AcceptsPrompt overrides whether the agent can consume startup or
+	// interactive prompts. Nil inherits the pack-defined/default behavior.
+	AcceptsPrompt *bool `toml:"accepts_prompt,omitempty"`
 	// Session overrides the session transport ("acp").
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
@@ -2997,6 +3000,12 @@ type Agent struct {
 	// PromptTemplate is the path to this agent's prompt template file.
 	// Relative paths resolve against the city directory.
 	PromptTemplate string `toml:"prompt_template,omitempty"`
+	// AcceptsPrompt controls whether this agent is an interactive prompt
+	// consumer. Nil preserves the compatibility default (true). False marks a
+	// deterministic command worker: startup prompt rendering/delivery, startup
+	// nudges, trust-dialog automation, and later interactive messages are all
+	// suppressed or rejected while lifecycle/process supervision remains active.
+	AcceptsPrompt *bool `toml:"accepts_prompt,omitempty" jsonschema:"default=true"`
 	// Nudge is text typed into the agent's tmux session after startup.
 	// Used for CLI agents that don't accept command-line prompts.
 	Nudge string `toml:"nudge,omitempty"`
@@ -3324,6 +3333,7 @@ func (a Agent) Clone() Agent {
 	out.MaxActiveSessions = copyIntPtr(a.MaxActiveSessions)
 	out.MinActiveSessions = copyIntPtr(a.MinActiveSessions)
 	out.EmitsPermissionWarning = copyBoolPtr(a.EmitsPermissionWarning)
+	out.AcceptsPrompt = copyBoolPtr(a.AcceptsPrompt)
 	out.HooksInstalled = copyBoolPtr(a.HooksInstalled)
 	out.InjectAssignedSkills = copyBoolPtr(a.InjectAssignedSkills)
 	out.Attach = copyBoolPtr(a.Attach)
@@ -3434,20 +3444,70 @@ func (a *Agent) AttachEnabled() bool {
 	return a.Attach == nil || *a.Attach
 }
 
+// AcceptsPromptEnabled reports the agent's effective interactive capability.
+// Prompt acceptance predates the explicit field, so nil normally defaults to
+// true. Legacy deterministic control dispatchers predate accepts_prompt and are
+// command workers, however, so their recognizable providerless command shape
+// remains prompt-disabled even when the field is omitted (or explicitly true).
+// Keep every startup and post-start interactive surface on this helper.
+func (a *Agent) AcceptsPromptEnabled() bool {
+	return a == nil || (!IsDeterministicControlDispatcher(a) && (a.AcceptsPrompt == nil || *a.AcceptsPrompt))
+}
+
+// EnsureAgentAcceptsPrompt returns a stable capability error for interactive
+// delivery surfaces. Centralizing the wording keeps CLI and API behavior in
+// lockstep and prevents deterministic workers from being treated as chats.
+func EnsureAgentAcceptsPrompt(a *Agent) error {
+	if a.AcceptsPromptEnabled() {
+		return nil
+	}
+	name := strings.TrimSpace(a.QualifiedName())
+	if name == "" {
+		name = "<unknown>"
+	}
+	if IsDeterministicControlDispatcher(a) {
+		return fmt.Errorf("agent %q is a deterministic control dispatcher and cannot receive interactive messages", name)
+	}
+	return fmt.Errorf("agent %q has accepts_prompt=false and cannot receive interactive messages", name)
+}
+
+// AgentBackedSessionAcceptsPrompt is the fail-closed capability projection for
+// a session already classified as agent-backed. A nil agent means the session's
+// configured target disappeared (for example implicit_agent=true->false) and
+// must not silently become an unrestricted provider session.
+func AgentBackedSessionAcceptsPrompt(a *Agent) bool {
+	return a != nil && a.AcceptsPromptEnabled()
+}
+
+// EnsureAgentBackedSessionAcceptsPrompt is the enforcement sibling of
+// AgentBackedSessionAcceptsPrompt. identity is used only when the configured
+// agent no longer resolves; callers must first exempt genuine provider-backed
+// sessions with session.UseAgentTemplateForProviderResolution.
+func EnsureAgentBackedSessionAcceptsPrompt(a *Agent, identity string) error {
+	if a != nil {
+		return EnsureAgentAcceptsPrompt(a)
+	}
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		identity = "<unknown>"
+	}
+	return fmt.Errorf("agent %q is no longer configured and cannot receive interactive messages", identity)
+}
+
 // InjectImplicitAgents adds on-demand agents for each explicitly configured
 // provider at both city scope and each rig scope. A provider is configured
-// only when it appears in cfg.Providers; workspace.provider selects the
-// default from that catalog but does not create a catalog entry. Pool min=0,
-// max=-1 (unlimited) so they are available as sling targets without an
-// explicit [[agent]] entry. Explicit agents always win — if city.toml defines
-// [[agent]] name="claude" (or a rig-scoped equivalent), no implicit agent is
-// added for that scope.
+// only when it appears in cfg.Providers and participates only when its
+// effective implicit_agent setting is enabled (the compatibility default).
+// workspace.provider selects the default from that catalog but does not create
+// a catalog entry. Explicit agents always win — if city.toml defines [[agent]]
+// name="claude" (or a rig-scoped equivalent), no implicit agent is added for
+// that scope.
 // agentKey identifies an agent by its rig directory and name.
 type agentKey struct{ dir, name string }
 
-// InjectImplicitAgents adds implicit agent entries for configured providers
-// that lack an explicit [[agent]] entry, enabling auto-materialization of
-// sling targets without requiring manual agent declarations.
+// InjectImplicitAgents adds implicit agent entries for eligible configured
+// providers that lack an explicit [[agent]] entry, enabling
+// auto-materialization of sling targets without requiring manual declarations.
 func InjectImplicitAgents(cfg *City) {
 	// Build set of existing agent keys (dir, name).
 	existing := make(map[agentKey]bool, len(cfg.Agents))
@@ -3463,6 +3523,16 @@ func InjectImplicitAgents(cfg *City) {
 	// Deterministic order: built-in providers first (in canonical order),
 	// then any custom providers in sorted order.
 	providers := configuredProviderOrder(configured)
+	enabledProviders := providers[:0]
+	for _, name := range providers {
+		if ProviderImplicitAgentEnabled(name, configured) {
+			enabledProviders = append(enabledProviders, name)
+		}
+	}
+	providers = enabledProviders
+	if len(providers) == 0 {
+		return
+	}
 
 	// Implicit agents default to the core pack's pool-worker prompt when
 	// the core pack is composed (it resolves from the user-global cache,
@@ -3521,6 +3591,16 @@ func implicitAgentIdentities(cfg *City) map[agentKey]bool {
 		return nil
 	}
 	providers := configuredProviderOrder(configured)
+	enabledProviders := providers[:0]
+	for _, name := range providers {
+		if ProviderImplicitAgentEnabled(name, configured) {
+			enabledProviders = append(enabledProviders, name)
+		}
+	}
+	providers = enabledProviders
+	if len(providers) == 0 {
+		return nil
+	}
 
 	existing := make(map[agentKey]bool, len(cfg.Agents))
 	for _, a := range cfg.Agents {
@@ -3541,6 +3621,27 @@ func implicitAgentIdentities(cfg *City) map[agentKey]bool {
 		}
 	}
 	return result
+}
+
+// ProviderImplicitAgentEnabled resolves the provider's inheritance chain and
+// returns its effective implicit-agent setting. An invalid chain remains
+// compatibility-enabled here so injection does not hide the provider; the
+// normal eager provider-cache build reports the chain error during config
+// load.
+func ProviderImplicitAgentEnabled(name string, providers map[string]ProviderSpec) bool {
+	spec, ok := providers[name]
+	if !ok {
+		return false
+	}
+	resolved, err := resolveCustomProviderForValidation(name, spec, providers)
+	if err != nil {
+		return implicitAgentEnabled(spec.ImplicitAgent)
+	}
+	return resolved.ImplicitAgent
+}
+
+func implicitAgentEnabled(value *bool) bool {
+	return value == nil || *value
 }
 
 // ApplyAgentDefaults applies [agent_defaults] values to all agents that

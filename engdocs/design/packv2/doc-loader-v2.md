@@ -670,11 +670,14 @@ gone; scripts live next to the manifests that use them (`commands/<id>/`,
 
 ### 17. Inject implicit agents (built-in providers)
 
-Same as V1: create implicit agents for **configured providers only** (the
-city's `[providers]` entries plus the builtin provider matching
-`workspace.provider`, plus the control-dispatcher when enabled). Not
-every built-in provider gets an implicit agent — only those the city has
-explicitly configured or referenced. This logic is unchanged from V1.
+Create implicit agents for **configured providers only** when the provider's
+effective `implicit_agent` setting is enabled. Omission is the
+backward-compatible default (`true`); `false` keeps the provider in the catalog
+and available to explicit agents while suppressing provider-named city and rig
+agents. The tri-state value follows provider-base inheritance, so a descendant
+can explicitly re-enable it. Not every built-in provider gets an implicit
+agent — only those the city has explicitly configured or referenced and not
+opted out.
 
 ### 18. Apply agent defaults
 

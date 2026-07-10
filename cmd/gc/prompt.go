@@ -319,7 +319,7 @@ func effectivePromptFragments(global, inject, appendFragments, inherited, defaul
 // buildTemplateData merges Env (lower priority) with SDK fields (higher
 // priority) into a single map for template execution.
 func buildTemplateData(ctx PromptContext) map[string]string {
-	m := make(map[string]string, len(ctx.Env)+19)
+	m := make(map[string]string, len(ctx.Env)+20)
 	for k, v := range ctx.Env {
 		m[k] = v
 	}
@@ -329,6 +329,10 @@ func buildTemplateData(ctx PromptContext) map[string]string {
 	m["TemplateName"] = ctx.TemplateName
 	m["BindingName"] = ctx.BindingName
 	m["BindingPrefix"] = ctx.BindingPrefix
+	// Rig is the PathContext spelling used by work_dir, session_setup, and
+	// other agent templates. Keep it as an alias of RigName so a prompt and
+	// its configured work_dir render the same concrete rig identity.
+	m["Rig"] = ctx.RigName
 	m["RigName"] = ctx.RigName
 	m["RigRoot"] = ctx.RigRoot
 	m["WorkDir"] = ctx.WorkDir

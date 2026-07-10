@@ -19,7 +19,7 @@ func TestHandleAgentCreate(t *testing.T) {
 	fs := newFakeMutatorState(t)
 	h := newTestCityHandler(t, fs)
 
-	body := `{"name":"coder","provider":"claude"}`
+	body := `{"name":"coder","provider":"claude","accepts_prompt":false}`
 	req := newPostRequest(cityURL(fs, "/agents"), strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -31,7 +31,7 @@ func TestHandleAgentCreate(t *testing.T) {
 	// Verify agent was added.
 	found := false
 	for _, a := range fs.cfg.Agents {
-		if a.Name == "coder" && a.Provider == "claude" {
+		if a.Name == "coder" && a.Provider == "claude" && a.AcceptsPrompt != nil && !*a.AcceptsPrompt {
 			found = true
 		}
 	}
@@ -258,7 +258,7 @@ func TestHandleAgentUpdate(t *testing.T) {
 	fs := newFakeMutatorState(t)
 	h := newTestCityHandler(t, fs)
 
-	body := `{"provider":"gemini"}`
+	body := `{"provider":"gemini","accepts_prompt":false}`
 	req := httptest.NewRequest("PATCH", cityURL(fs, "/agent/myrig/worker"), strings.NewReader(body))
 	req.Header.Set("X-GC-Request", "true")
 	w := httptest.NewRecorder()
@@ -273,6 +273,9 @@ func TestHandleAgentUpdate(t *testing.T) {
 		if a.Name == "worker" && a.Dir == "myrig" {
 			if a.Provider != "gemini" {
 				t.Errorf("provider = %q, want %q", a.Provider, "gemini")
+			}
+			if a.AcceptsPrompt == nil || *a.AcceptsPrompt {
+				t.Errorf("accepts_prompt = %v, want false", a.AcceptsPrompt)
 			}
 			return
 		}

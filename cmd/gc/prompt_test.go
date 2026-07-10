@@ -567,6 +567,9 @@ func TestBuildTemplateData(t *testing.T) {
 	if data["BindingPrefix"] != "dep." {
 		t.Errorf("BindingPrefix = %q, want %q", data["BindingPrefix"], "dep.")
 	}
+	if data["Rig"] != "a" || data["RigName"] != "a" {
+		t.Errorf("rig aliases = Rig:%q RigName:%q, want both %q", data["Rig"], data["RigName"], "a")
+	}
 	if data["DefaultBranch"] != "main" {
 		t.Errorf("DefaultBranch = %q, want %q", data["DefaultBranch"], "main")
 	}

@@ -145,6 +145,72 @@ func sessionToResponse(info session.Info, cfg *config.City) sessionResponse {
 	return r
 }
 
+// promptCapabilityAgentForSession classifies the persisted session first, then
+// resolves its current configured agent if it is agent-backed. The bool remains
+// true when that agent disappeared so enforcement and response projection can
+// fail closed. Genuine provider sessions return (nil, false), including
+// provider/agent name collisions.
+func promptCapabilityAgentForSession(info session.Info, metadata map[string]string, cfg *config.City) (*config.Agent, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	templateAgent, templateFound := findAgent(cfg, info.Template)
+	if !session.UseAgentTemplateForProviderResolution(
+		legacySessionKind(metadata),
+		metadata,
+		info.Provider,
+		templateAgent.Provider,
+		templateFound,
+	) {
+		return nil, false
+	}
+	// AgentName is the persisted concrete/canonical identity. Once present it
+	// is authoritative: if it disappeared, do not rebound the session to a
+	// different prompt-enabled agent through a colliding template/alias.
+	if identity := strings.TrimSpace(info.AgentName); identity != "" {
+		if agent, ok := findAgent(cfg, identity); ok {
+			return &agent, true
+		}
+		return nil, true
+	}
+	// Template is authoritative for legacy agent sessions that predate
+	// agent_name. Alias/CommonName are last-resort identities only when neither
+	// canonical field was persisted.
+	if identity := strings.TrimSpace(info.Template); identity != "" {
+		if agent, ok := findAgent(cfg, identity); ok {
+			return &agent, true
+		}
+		return nil, true
+	}
+	for _, candidate := range []string{info.Alias, info.CommonName} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if agent, ok := findAgent(cfg, candidate); ok {
+			return &agent, true
+		}
+	}
+	return nil, true
+}
+
+// submissionCapabilitiesForSessionResponse applies configured interactive
+// capability to the runtime-derived submit affordances. Metadata can describe
+// how a runtime would queue or interrupt input, but a prompt-disabled command
+// worker must advertise neither affordance. This keeps UI truth aligned with
+// the submit/message enforcement boundary, including legacy deterministic
+// dispatchers whose accepts_prompt field is absent.
+func submissionCapabilitiesForSessionResponse(info session.Info, metadata map[string]string, cfg *config.City, capabilities session.SubmissionCapabilities) session.SubmissionCapabilities {
+	if cfg == nil {
+		return capabilities
+	}
+	agent, agentBacked := promptCapabilityAgentForSession(info, metadata, cfg)
+	if agentBacked && !config.AgentBackedSessionAcceptsPrompt(agent) {
+		return session.SubmissionCapabilities{}
+	}
+	return capabilities
+}
+
 // sessionResponseWithReason builds a session response from session.Info plus the
 // persisted-response projection (status + metadata). It is the keystone of the
 // session-response path: scalar fields come from Info, and the
@@ -203,7 +269,12 @@ func sessionResponseWithReason(info session.Info, pr session.PersistedResponse, 
 	r.Reason = session.LifecycleDisplayReasonWithLiveness(pr.Status, pr.Metadata, time.Now().UTC(), info.SessionName, isRunning)
 	r.ConfiguredNamedSession = strings.TrimSpace(pr.Metadata[apiNamedSessionMetadataKey]) == "true"
 	applyNamedSessionOperatorProjection(&r, pr, cfg)
-	r.SubmissionCapabilities = session.SubmissionCapabilitiesForMetadata(pr.Metadata, hasDeferredQueue)
+	r.SubmissionCapabilities = submissionCapabilitiesForSessionResponse(
+		info,
+		pr.Metadata,
+		cfg,
+		session.SubmissionCapabilitiesForMetadata(pr.Metadata, hasDeferredQueue),
+	)
 	// Expose only real_world_app_* prefixed metadata keys to API consumers.
 	// Internal fields (session_key, command, work_dir, etc.) are redacted.
 	r.Metadata = filterMetadata(pr.Metadata)

@@ -2742,6 +2742,7 @@ func (ov *AgentOverride) toAgentPatch() *AgentPatch {
 		EnvRemove:               ov.EnvRemove,
 		PreStart:                ov.PreStart,
 		PromptTemplate:          ov.PromptTemplate,
+		AcceptsPrompt:           ov.AcceptsPrompt,
 		Session:                 ov.Session,
 		Provider:                ov.Provider,
 		Upstream:                ov.Upstream,

@@ -308,6 +308,10 @@ func (f *fakeMutatorState) UpdateAgent(name string, patch AgentUpdate) error {
 			if patch.Suspended != nil {
 				f.cfg.Agents[i].Suspended = *patch.Suspended
 			}
+			if patch.AcceptsPrompt != nil {
+				value := *patch.AcceptsPrompt
+				f.cfg.Agents[i].AcceptsPrompt = &value
+			}
 			return nil
 		}
 	}
@@ -385,6 +389,10 @@ func (f *fakeMutatorState) UpdateProvider(name string, patch ProviderUpdate) err
 	}
 	if patch.Base != nil {
 		spec.Base = *patch.Base
+	}
+	if patch.ImplicitAgent != nil {
+		value := *patch.ImplicitAgent
+		spec.ImplicitAgent = &value
 	}
 	if patch.Command != nil {
 		spec.Command = *patch.Command

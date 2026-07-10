@@ -26,6 +26,463 @@ import (
 
 func intPtrNudge(n int) *int { return &n }
 
+func TestDeliverSessionNudgeRejectsAcceptsPromptFalse(t *testing.T) {
+	rejectsPrompt := false
+	target := nudgeTarget{
+		agent: config.Agent{Name: "k8s-canary", AcceptsPrompt: &rejectsPrompt},
+	}
+	for _, mode := range []nudgeDeliveryMode{nudgeDeliveryImmediate, nudgeDeliveryQueue} {
+		t.Run(string(mode), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := deliverSessionNudgeWithWorker(target, nil, runtime.NewFake(), "hello", mode, false, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("code = %d, want 1", code)
+			}
+			if !strings.Contains(stderr.String(), `agent "k8s-canary" has accepts_prompt=false`) {
+				t.Fatalf("stderr = %q, want explicit capability error", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+}
+
+func TestQueuedNudgePollerPromptDisabledIsTerminalNoDelivery(t *testing.T) {
+	rejectsPrompt := false
+	target := nudgeTarget{
+		agent: config.Agent{Name: "k8s-canary", AcceptsPrompt: &rejectsPrompt},
+	}
+	delivered, err := tryDeliverQueuedNudgesByPoller(
+		target,
+		nil,
+		nil,
+		runtime.NewFake(),
+		0,
+		worker.LiveObservation{Running: true},
+	)
+	if delivered {
+		t.Fatal("delivered = true, want false")
+	}
+	if err != nil {
+		t.Fatalf("error = %v, want terminal no-delivery without retryable error", err)
+	}
+}
+
+func writeQueuedNudgeCapabilityCity(t *testing.T, cityPath string, acceptsPrompt *bool) *config.City {
+	t.Helper()
+	acceptsLine := ""
+	if acceptsPrompt != nil {
+		acceptsLine = fmt.Sprintf("accepts_prompt = %t\n", *acceptsPrompt)
+	}
+	cityTOML := fmt.Sprintf(`[workspace]
+name = "test-city"
+
+[[agent]]
+name = "worker"
+start_command = "echo worker"
+%s`, acceptsLine)
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(cityTOML), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	cfg, err := loadCityConfigWithoutBuiltinPackRefresh(cityPath)
+	if err != nil {
+		t.Fatalf("loadCityConfigWithoutBuiltinPackRefresh: %v", err)
+	}
+	return cfg
+}
+
+func assertNoRuntimePromptCalls(t *testing.T, fake *runtime.Fake) {
+	t.Helper()
+	for _, call := range fake.SnapshotCalls() {
+		if call.Method == "Nudge" || call.Method == "NudgeNow" {
+			t.Fatalf("runtime prompt delivery occurred: %+v", call)
+		}
+	}
+}
+
+func assertWorkerNudgeQueueTextWithdrawn(t *testing.T, cityPath, secret string) {
+	t.Helper()
+	pending, inFlight, dead, err := listQueuedNudges(cityPath, "worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending/inFlight/dead = %d/%d/%d, want 0/0/0 after terminal withdrawal", len(pending), len(inFlight), len(dead))
+	}
+	raw, err := os.ReadFile(nudgequeue.StatePath(cityPath))
+	if err != nil {
+		t.Fatalf("ReadFile(queue state): %v", err)
+	}
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("withdrawn prompt text remains in queue state: %q", raw)
+	}
+}
+
+func TestQueuedNudgePollerReloadsTrueToFalseAndWithdrawsBeforeDelivery(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	accepts := true
+	capturedCfg := writeQueuedNudgeCapabilityCity(t, dir, &accepts)
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+
+	const secret = "SECRET_PROMPT_MUST_BE_WITHDRAWN"
+	item := newQueuedNudge("worker", secret, time.Now().Add(-time.Minute))
+	if err := enqueueQueuedNudgeWithStore(dir, store, item); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+
+	accepts = false
+	_ = writeQueuedNudgeCapabilityCity(t, dir, &accepts)
+	fake := runtime.NewFake()
+	target := nudgeTarget{
+		cityPath:    dir,
+		cfg:         capturedCfg,
+		identity:    "worker",
+		agent:       capturedCfg.Agents[0],
+		resolved:    &config.ResolvedProvider{Name: "command"},
+		sessionName: "worker-session",
+	}
+
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store.Store, store.Store, fake, 0, worker.LiveObservation{Running: true})
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if delivered {
+		t.Fatal("delivered = true, want false after live accepts_prompt opt-out")
+	}
+	assertNoRuntimePromptCalls(t, fake)
+	assertWorkerNudgeQueueTextWithdrawn(t, dir, secret)
+
+	bead, ok, err := findAnyQueuedNudgeBead(store, item.ID)
+	if err != nil || !ok {
+		t.Fatalf("findAnyQueuedNudgeBead = %v, ok=%v", err, ok)
+	}
+	if bead.Status != "closed" || bead.Metadata["state"] != "failed" {
+		t.Fatalf("terminal bead status/state = %q/%q, want closed/failed", bead.Status, bead.Metadata["state"])
+	}
+	if got := bead.Metadata["terminal_reason"]; got != promptDisabledQueuedNudgeReason {
+		t.Fatalf("terminal_reason = %q, want %q", got, promptDisabledQueuedNudgeReason)
+	}
+	if got := bead.Metadata["commit_boundary"]; got != "delivery-withdrawn" {
+		t.Fatalf("commit_boundary = %q, want delivery-withdrawn", got)
+	}
+}
+
+func TestQueuedNudgePollerRechecksCapabilityAfterClaimBeforeSend(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	accepts, rejects := true, false
+	cfgAccepts := &config.City{Agents: []config.Agent{{Name: "worker", StartCommand: "echo worker", AcceptsPrompt: &accepts}}}
+	cfgRejects := &config.City{Agents: []config.Agent{{Name: "worker", StartCommand: "echo worker", AcceptsPrompt: &rejects}}}
+
+	previousLoader := nudgeLoadLiveCityConfig
+	loads := 0
+	nudgeLoadLiveCityConfig = func(string) (*config.City, error) {
+		loads++
+		if loads == 1 {
+			return cfgAccepts, nil
+		}
+		return cfgRejects, nil
+	}
+	t.Cleanup(func() { nudgeLoadLiveCityConfig = previousLoader })
+
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+	const secret = "CLAIMED_SECRET_MUST_NOT_REACH_RUNTIME"
+	if err := enqueueQueuedNudgeWithStore(dir, store, newQueuedNudge("worker", secret, time.Now().Add(-time.Minute))); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+	target := nudgeTarget{
+		cityPath:    dir,
+		cfg:         cfgAccepts,
+		identity:    "worker",
+		agent:       cfgAccepts.Agents[0],
+		resolved:    &config.ResolvedProvider{Name: "command"},
+		sessionName: "worker-session",
+	}
+	fake := runtime.NewFake()
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store.Store, store.Store, fake, 0, worker.LiveObservation{Running: true})
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if delivered {
+		t.Fatal("delivered = true, want false after post-claim capability opt-out")
+	}
+	if loads < 2 {
+		t.Fatalf("live config loads = %d, want at least 2 (pre-claim and pre-send)", loads)
+	}
+	assertNoRuntimePromptCalls(t, fake)
+	assertWorkerNudgeQueueTextWithdrawn(t, dir, secret)
+}
+
+func TestQueuedNudgePollerWithdrawsWhenLiveAgentWasRemoved(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	accepts := true
+	capturedCfg := writeQueuedNudgeCapabilityCity(t, dir, &accepts)
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte("[workspace]\nname = \"test-city\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+	const secret = "REMOVED_AGENT_SECRET_MUST_BE_WITHDRAWN"
+	item := newQueuedNudge("worker", secret, time.Now().Add(-time.Minute))
+	if err := enqueueQueuedNudgeWithStore(dir, store, item); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+	target := nudgeTarget{cityPath: dir, cfg: capturedCfg, identity: "worker", agent: capturedCfg.Agents[0], sessionName: "worker-session"}
+	fake := runtime.NewFake()
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store.Store, store.Store, fake, 0, worker.LiveObservation{Running: true})
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if delivered {
+		t.Fatal("delivered = true, want false for removed live agent")
+	}
+	assertNoRuntimePromptCalls(t, fake)
+	assertWorkerNudgeQueueTextWithdrawn(t, dir, secret)
+	bead, ok, err := findAnyQueuedNudgeBead(store, item.ID)
+	if err != nil || !ok {
+		t.Fatalf("findAnyQueuedNudgeBead = %v, ok=%v", err, ok)
+	}
+	if got := bead.Metadata["terminal_reason"]; got != targetRemovedQueuedNudgeReason {
+		t.Fatalf("terminal_reason = %q, want %q", got, targetRemovedQueuedNudgeReason)
+	}
+}
+
+func TestQueuedNudgeProviderSessionAgentNameCollisionBypassesAgentWithdrawal(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	rejectsPrompt := false
+	cfg := &config.City{Agents: []config.Agent{{Name: "router", AcceptsPrompt: &rejectsPrompt}}}
+	target := resolveNudgeTargetFromSessionInfo(dir, cfg, session.Info{
+		Template:    "router",
+		Provider:    "router",
+		SessionName: "router-provider-session",
+		SessionKind: "provider",
+	})
+	if !target.providerSession {
+		t.Fatal("providerSession = false, want direct provider classification despite same-named configured agent")
+	}
+
+	previousLoader := nudgeLoadLiveCityConfig
+	loaderCalled := false
+	nudgeLoadLiveCityConfig = func(string) (*config.City, error) {
+		loaderCalled = true
+		return nil, errors.New("provider session must not reload agent capability")
+	}
+	t.Cleanup(func() { nudgeLoadLiveCityConfig = previousLoader })
+
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+	const message = "provider session remains interactive"
+	if err := enqueueQueuedNudgeWithStore(dir, store, newQueuedNudge("router", message, time.Now().Add(-time.Minute))); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+	fake := runtime.NewFake()
+	if err := fake.Start(context.Background(), target.sessionName, runtime.Config{}); err != nil {
+		t.Fatalf("fake.Start: %v", err)
+	}
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store.Store, store.Store, fake, 0, worker.LiveObservation{Running: true})
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if !delivered {
+		t.Fatal("delivered = false, want provider-session queued input delivered")
+	}
+	if loaderCalled {
+		t.Fatal("live configured-agent capability loader called for direct provider session")
+	}
+	var deliveredMessages []string
+	for _, call := range fake.SnapshotCalls() {
+		if call.Method == "Nudge" {
+			deliveredMessages = append(deliveredMessages, call.Message)
+		}
+	}
+	if len(deliveredMessages) != 1 || !strings.Contains(deliveredMessages[0], message) {
+		t.Fatalf("delivered messages = %q, want one containing %q", deliveredMessages, message)
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, "router", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending/inFlight/dead = %d/%d/%d, want delivered queue empty", len(pending), len(inFlight), len(dead))
+	}
+}
+
+func TestPromptDisabledWithdrawalRespectsSessionFenceAndPreservesProviderQueue(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+	now := time.Now().Add(-time.Minute)
+	disabledItem := newQueuedNudgeWithOptions("router", "withdraw disabled agent prompt", "session", now, queuedNudgeOptions{
+		SessionID:         "agent-session",
+		ContinuationEpoch: "current",
+	})
+	staleSameSessionItem := newQueuedNudgeWithOptions("router", "withdraw stale generation prompt", "session", now, queuedNudgeOptions{
+		SessionID:         "agent-session",
+		ContinuationEpoch: "old",
+	})
+	providerItem := newQueuedNudgeWithOptions("router", "preserve provider prompt", "session", now, queuedNudgeOptions{
+		SessionID: "provider-session",
+	})
+	for _, item := range []queuedNudge{disabledItem, staleSameSessionItem, providerItem} {
+		if err := enqueueQueuedNudgeWithStore(dir, store, item); err != nil {
+			t.Fatalf("enqueueQueuedNudgeWithStore(%s): %v", item.ID, err)
+		}
+	}
+
+	disabled := false
+	disabledTarget := nudgeTarget{
+		cityPath:          dir,
+		identity:          "router",
+		agent:             config.Agent{Name: "router", AcceptsPrompt: &disabled},
+		sessionID:         "agent-session",
+		continuationEpoch: "current",
+	}
+	withdrawn, err := withdrawQueuedNudgesForNonInteractiveTarget(
+		dir,
+		disabledTarget,
+		store.Store,
+		time.Now(),
+		promptDisabledQueuedNudgeReason,
+	)
+	if err != nil {
+		t.Fatalf("withdrawQueuedNudgesForNonInteractiveTarget: %v", err)
+	}
+	if withdrawn != 2 {
+		t.Fatalf("withdrawn = %d, want both continuation generations of disabled session", withdrawn)
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, "router", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != providerItem.ID || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("queue after withdrawal pending/inFlight/dead = %+v/%+v/%+v, want only provider item pending", pending, inFlight, dead)
+	}
+	raw, err := os.ReadFile(nudgequeue.StatePath(dir))
+	if err != nil {
+		t.Fatalf("ReadFile(queue state): %v", err)
+	}
+	if bytes.Contains(raw, []byte(disabledItem.Message)) || bytes.Contains(raw, []byte(staleSameSessionItem.Message)) || !bytes.Contains(raw, []byte(providerItem.Message)) {
+		t.Fatalf("queue state fence isolation failed: %q", raw)
+	}
+
+	providerTarget := nudgeTarget{
+		cityPath:        dir,
+		identity:        "router",
+		agent:           config.Agent{Name: "router"},
+		resolved:        &config.ResolvedProvider{Name: "router"},
+		sessionID:       "provider-session",
+		sessionName:     "router-provider-runtime",
+		providerSession: true,
+	}
+	fake := runtime.NewFake()
+	if err := fake.Start(context.Background(), providerTarget.sessionName, runtime.Config{}); err != nil {
+		t.Fatalf("fake.Start: %v", err)
+	}
+	delivered, err := tryDeliverQueuedNudgesByPoller(providerTarget, store.Store, store.Store, fake, 0, worker.LiveObservation{Running: true})
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller(provider): %v", err)
+	}
+	if !delivered {
+		t.Fatal("provider queued item was not delivered after colliding agent withdrawal")
+	}
+	var messages []string
+	for _, call := range fake.SnapshotCalls() {
+		if call.Method == "Nudge" {
+			messages = append(messages, call.Message)
+		}
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0], providerItem.Message) || strings.Contains(messages[0], disabledItem.Message) || strings.Contains(messages[0], staleSameSessionItem.Message) {
+		t.Fatalf("runtime messages = %q, want only preserved provider prompt", messages)
+	}
+}
+
+func TestRemovedAgentBackedTargetRejectsDirectNudgeAndMail(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	cityTOML := "[workspace]\nname = \"test-city\"\n\n[[agent]]\nname = \"friendly\"\nstart_command = \"echo friendly\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte(cityTOML), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	cfg := &config.City{Agents: []config.Agent{{Name: "friendly", StartCommand: "echo friendly"}}}
+	target := resolveNudgeTargetFromSessionInfo(dir, cfg, session.Info{
+		Template:      "friendly",
+		AgentName:     "removed-router",
+		Provider:      "router",
+		SessionOrigin: "manual",
+	})
+	if !target.agentBacked || target.providerSession {
+		t.Fatalf("target classification agentBacked/providerSession = %v/%v, want true/false", target.agentBacked, target.providerSession)
+	}
+	fake := runtime.NewFake()
+	var stdout, stderr bytes.Buffer
+	if code := deliverSessionNudgeWithWorker(target, nil, fake, "must reject", nudgeDeliveryImmediate, false, &stdout, &stderr); code != 1 {
+		t.Fatalf("deliverSessionNudgeWithWorker code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), `agent "removed-router" is no longer configured`) {
+		t.Fatalf("nudge stderr = %q, want removed-agent capability error", stderr.String())
+	}
+	if err := sendMailNotifyWithWorker(target, nil, fake, "human"); err == nil || !strings.Contains(err.Error(), `agent "removed-router" is no longer configured`) {
+		t.Fatalf("sendMailNotifyWithWorker error = %v, want removed-agent capability error", err)
+	}
+	assertNoRuntimePromptCalls(t, fake)
+}
+
+func TestMailNotifyRejectsAcceptsPromptFalse(t *testing.T) {
+	rejectsPrompt := false
+	target := nudgeTarget{
+		agent: config.Agent{Name: "k8s-canary", AcceptsPrompt: &rejectsPrompt},
+	}
+	err := sendMailNotifyWithWorker(target, nil, runtime.NewFake(), "human")
+	if err == nil || !strings.Contains(err.Error(), `agent "k8s-canary" has accepts_prompt=false`) {
+		t.Fatalf("error = %v, want explicit capability error", err)
+	}
+}
+
+func TestLegacyDeterministicDispatcherRejectsPostStartInteractiveDelivery(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	dispatcher := config.Agent{
+		Name:         config.ControlDispatcherAgentName,
+		StartCommand: config.ControlDispatcherStartCommand,
+	}
+	target := nudgeTarget{cityPath: dir, agent: dispatcher}
+	fake := runtime.NewFake()
+
+	var nudgeOut, nudgeErr bytes.Buffer
+	if code := deliverSessionNudgeWithWorker(target, nil, fake, "do not deliver", nudgeDeliveryImmediate, false, &nudgeOut, &nudgeErr); code != 1 {
+		t.Fatalf("deliverSessionNudgeWithWorker code = %d, want 1", code)
+	}
+	if !strings.Contains(nudgeErr.String(), "deterministic control dispatcher") {
+		t.Fatalf("nudge stderr = %q, want effective dispatcher capability error", nudgeErr.String())
+	}
+	if err := sendMailNotifyWithWorker(target, nil, fake, "human"); err == nil || !strings.Contains(err.Error(), "deterministic control dispatcher") {
+		t.Fatalf("sendMailNotifyWithWorker error = %v, want effective dispatcher capability error", err)
+	}
+
+	previousPoke := slingPokeController
+	pokes := 0
+	slingPokeController = func(string) error { pokes++; return nil }
+	t.Cleanup(func() { slingPokeController = previousPoke })
+	store := openNudgeBeadStore(dir)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck
+	var slingOut, slingErr bytes.Buffer
+	deliverSlingNudge(target, fake, store.Store, dir, &slingOut, &slingErr)
+	if pokes != 1 {
+		t.Fatalf("controller pokes = %d, want 1 for prompt-disabled sling target", pokes)
+	}
+	if slingErr.Len() != 0 {
+		t.Fatalf("sling stderr = %q, want empty", slingErr.String())
+	}
+	assertNoRuntimePromptCalls(t, fake)
+}
+
 func claimDueWorkerNudges(cityPath string) ([]queuedNudge, error) {
 	return claimDueQueuedNudgesMatching(cityPath, time.Now(), func(item queuedNudge) bool {
 		return item.Agent == "worker"
@@ -2765,6 +3222,45 @@ func (s *failingTerminalNudgeStore) SetMetadataBatch(id string, kvs map[string]s
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func TestPromptDisabledWithdrawalCommitsWhenAuditBeadUpdateFails(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	store := &failingTerminalNudgeStore{MemStore: beads.NewMemStore()}
+	const secret = "AUDIT_FAILURE_MUST_NOT_RETAIN_PROMPT_TEXT"
+	item := newQueuedNudge("worker", secret, time.Now().Add(-time.Minute))
+	if err := enqueueQueuedNudgeWithStore(dir, beads.NudgesStore{Store: store}, item); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+	itemBead, ok, err := findQueuedNudgeBead(beads.NudgesStore{Store: store}, item.ID)
+	if err != nil || !ok {
+		t.Fatalf("findQueuedNudgeBead = %v, ok=%v", err, ok)
+	}
+	store.failID = itemBead.ID
+
+	var warnings bytes.Buffer
+	previousWriter := nudgeWarningWriter
+	nudgeWarningWriter = &warnings
+	t.Cleanup(func() { nudgeWarningWriter = previousWriter })
+
+	withdrawn, err := withdrawQueuedNudgesForNonInteractiveTarget(
+		dir,
+		nudgeTarget{agent: config.Agent{Name: "worker"}},
+		store,
+		time.Now(),
+		promptDisabledQueuedNudgeReason,
+	)
+	if err != nil {
+		t.Fatalf("withdrawQueuedNudgesForNonInteractiveTarget: %v", err)
+	}
+	if withdrawn != 1 {
+		t.Fatalf("withdrawn = %d, want 1", withdrawn)
+	}
+	assertWorkerNudgeQueueTextWithdrawn(t, dir, secret)
+	if !strings.Contains(warnings.String(), item.ID) {
+		t.Fatalf("warnings = %q, want failed audit nudge ID %s", warnings.String(), item.ID)
+	}
+}
+
 func TestTryDeliverQueuedNudgesByPollerReleasesClaimsWhenDeliveryDeclined(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
@@ -2989,21 +3485,21 @@ func TestCmdNudgePollSurvivesTransientObserveErrors(t *testing.T) {
 		t.Fatalf("openCityStoreAt: %v", err)
 	}
 	created, err := store.Create(beads.Bead{
-		Title:  "Session: worker",
+		Title:  "Session: mayor",
 		Type:   session.BeadType,
 		Status: "open",
 		Labels: []string{session.LabelSession},
 		Metadata: map[string]string{
-			"session_name": "worker-session",
-			"agent_name":   "worker",
-			"template":     "worker",
+			"session_name": "mayor-session",
+			"agent_name":   "mayor",
+			"template":     "mayor",
 			"state":        string(session.StateActive),
 		},
 	})
 	if err != nil {
 		t.Fatalf("store.Create session: %v", err)
 	}
-	item := newQueuedNudgeWithOptions("worker", "resume your patrol wisp", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
+	item := newQueuedNudgeWithOptions("mayor", "resume your patrol wisp", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
 		SessionID: created.ID,
 	})
 	if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {
@@ -3026,7 +3522,7 @@ func TestCmdNudgePollSurvivesTransientObserveErrors(t *testing.T) {
 	defer func() { nudgeObserveTarget = origObserve }()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdNudgePoll([]string{created.ID}, "worker-session", time.Millisecond, 0, &stdout, &stderr)
+	code := cmdNudgePoll([]string{created.ID}, "mayor-session", time.Millisecond, 0, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("cmdNudgePoll = %d, want 0 (transient observe error with queued work pending must not kill the poller); stderr=%s", code, stderr.String())
 	}
@@ -3057,14 +3553,14 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 				t.Fatalf("openCityStoreAt: %v", err)
 			}
 			created, err := store.Create(beads.Bead{
-				Title:  "Session: worker",
+				Title:  "Session: mayor",
 				Type:   session.BeadType,
 				Status: "open",
 				Labels: []string{session.LabelSession},
 				Metadata: map[string]string{
-					"session_name": "worker-session",
-					"agent_name":   "worker",
-					"template":     "worker",
+					"session_name": "mayor-session",
+					"agent_name":   "mayor",
+					"template":     "mayor",
 					"state":        string(session.StateActive),
 				},
 			})
@@ -3072,7 +3568,7 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 				t.Fatalf("store.Create session: %v", err)
 			}
 
-			item := newQueuedNudgeWithOptions("worker", "check hook output", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
+			item := newQueuedNudgeWithOptions("mayor", "check hook output", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
 				SessionID: created.ID,
 			})
 			if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {
@@ -3155,6 +3651,53 @@ func TestDeliverSlingNudgeWaitIdleWrapsInSystemReminder(t *testing.T) {
 		t.Fatalf("delivered message = %q, want sling reminder content", delivered)
 	}
 	assertSessionLastNudgeDeliveredAtStamped(t, store, info.ID)
+}
+
+func TestDeliverSlingNudgePromptDisabledPokesWithoutMessageDelivery(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	store := openNudgeBeadStore(dir)
+	fake := runtime.NewFake()
+	rejectsPrompt := false
+	target := nudgeTarget{
+		cityPath: dir,
+		agent: config.Agent{
+			Name:          "k8s-canary",
+			AcceptsPrompt: &rejectsPrompt,
+		},
+	}
+
+	previousPoke := slingPokeController
+	pokes := 0
+	slingPokeController = func(cityPath string) error {
+		if cityPath != dir {
+			t.Fatalf("poke cityPath = %q, want %q", cityPath, dir)
+		}
+		pokes++
+		return nil
+	}
+	t.Cleanup(func() { slingPokeController = previousPoke })
+
+	var stdout, stderr bytes.Buffer
+	deliverSlingNudge(target, fake, store, dir, &stdout, &stderr)
+	if pokes != 1 {
+		t.Fatalf("controller pokes = %d, want 1", pokes)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	for _, call := range fake.Calls {
+		if call.Method == "Nudge" || call.Method == "NudgeNow" {
+			t.Fatalf("runtime message delivery occurred: %+v", call)
+		}
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, target.agent.QualifiedName(), time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending/inFlight/dead = %d/%d/%d, want no queued messages", len(pending), len(inFlight), len(dead))
+	}
 }
 
 func TestDeliverSlingNudgeQueuesFencedReminderAndStartsPollerForAsleepSession(t *testing.T) {

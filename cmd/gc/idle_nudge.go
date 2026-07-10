@@ -157,7 +157,7 @@ func claimNudgeFor(cfg *config.City, session beads.Bead) string {
 		return ""
 	}
 	agent := findAgentByTemplate(cfg, template)
-	if agent == nil {
+	if agent == nil || !agent.AcceptsPromptEnabled() {
 		return ""
 	}
 	return strings.TrimSpace(agent.Nudge)

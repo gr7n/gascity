@@ -519,6 +519,10 @@ func stripAgentPatchUpdate(cfg *config.City, name string, patch AgentUpdate) boo
 				p.Suspended = nil
 				patchModified = true
 			}
+			if patch.AcceptsPrompt != nil && p.AcceptsPrompt != nil {
+				p.AcceptsPrompt = nil
+				patchModified = true
+			}
 		}
 		if patchModified {
 			modified = true
@@ -786,7 +790,8 @@ func HasSchema2RootPack(fs fsys.FS, cityRoot string) (bool, error) {
 // WriteLocalDiscoveredAgentConfig writes the supported durable config for a
 // city-local convention agent under agents/<name>/agent.toml. The scaffold's
 // directory name is the agent identity; the file intentionally persists only
-// description, scope, provider, and suspended. Richer config.Agent fields must
+// description, scope, provider, suspended, and accepts_prompt. Richer
+// config.Agent fields must
 // come from pack config or [[patches.agent]] so the scaffold writer cannot
 // silently become a partial full-agent serializer. It returns ErrValidation
 // when agent.Dir is set; rig-scoped agents must also come from pack config or
@@ -796,7 +801,7 @@ func WriteLocalDiscoveredAgentConfig(fs fsys.FS, cityRoot string, agent config.A
 		return err
 	}
 	if unsupported := unsupportedLocalDiscoveredAgentFields(agent); len(unsupported) > 0 {
-		return fmt.Errorf("%w: schema-2 convention agent config only persists description, scope, provider, and suspended; unsupported fields: %s", ErrValidation, strings.Join(unsupported, ", "))
+		return fmt.Errorf("%w: schema-2 convention agent config only persists description, scope, provider, suspended, and accepts_prompt; unsupported fields: %s", ErrValidation, strings.Join(unsupported, ", "))
 	}
 
 	agentDir, agentDirExisted, err := EnsureLocalDiscoveredAgentDir(fs, cityRoot, agent.Name)
@@ -825,6 +830,9 @@ func WriteLocalDiscoveredAgentConfig(fs fsys.FS, cityRoot string, agent config.A
 	}
 	if agent.Suspended {
 		values["suspended"] = true
+	}
+	if agent.AcceptsPrompt != nil {
+		values["accepts_prompt"] = *agent.AcceptsPrompt
 	}
 
 	var buf bytes.Buffer
@@ -910,6 +918,9 @@ func writeLocalDiscoveredAgentUpdate(fs fsys.FS, cityRoot string, agent config.A
 	if patch.Suspended != nil {
 		values["suspended"] = *patch.Suspended
 	}
+	if patch.AcceptsPrompt != nil {
+		values["accepts_prompt"] = *patch.AcceptsPrompt
+	}
 
 	// An empty merged convention config means there is no durable agent.toml
 	// content to preserve; the prompt scaffold still defines the agent.
@@ -943,11 +954,12 @@ func validateLocalDiscoveredAgent(agent config.Agent) error {
 
 func unsupportedLocalDiscoveredAgentFields(agent config.Agent) []string {
 	allowed := map[string]bool{
-		"Name":        true,
-		"Description": true,
-		"Scope":       true,
-		"Provider":    true,
-		"Suspended":   true,
+		"Name":          true,
+		"Description":   true,
+		"Scope":         true,
+		"Provider":      true,
+		"Suspended":     true,
+		"AcceptsPrompt": true,
 	}
 	v := reflect.ValueOf(agent)
 	t := v.Type()
@@ -985,9 +997,10 @@ func LocalDiscoveredAgentDir(cityRoot, name string) (string, error) {
 
 // AgentUpdate holds optional fields for a partial agent update.
 type AgentUpdate struct {
-	Provider  string
-	Scope     string
-	Suspended *bool
+	Provider      string
+	Scope         string
+	Suspended     *bool
+	AcceptsPrompt *bool
 }
 
 func (e *Editor) loadExpandedForEdit() (*config.City, *config.City, error) {
@@ -1094,6 +1107,10 @@ func applyAgentUpdate(agent *config.Agent, patch AgentUpdate) {
 	}
 	if patch.Suspended != nil {
 		agent.Suspended = *patch.Suspended
+	}
+	if patch.AcceptsPrompt != nil {
+		value := *patch.AcceptsPrompt
+		agent.AcceptsPrompt = &value
 	}
 }
 
@@ -1256,6 +1273,7 @@ func (e *Editor) DeleteRig(name string) error {
 type ProviderUpdate struct {
 	DisplayName        *string
 	Base               **string
+	ImplicitAgent      *bool
 	Command            *string
 	ACPCommand         *string
 	Args               []string // nil = not set, non-nil = replace
@@ -1322,6 +1340,10 @@ func (e *Editor) UpdateProvider(name string, patch ProviderUpdate) error {
 			// to absent/inherit) or a pointer to a string ("" opt-out
 			// or concrete).
 			spec.Base = *patch.Base
+		}
+		if patch.ImplicitAgent != nil {
+			value := *patch.ImplicitAgent
+			spec.ImplicitAgent = &value
 		}
 		if patch.Command != nil {
 			spec.Command = *patch.Command

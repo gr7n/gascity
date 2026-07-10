@@ -112,7 +112,8 @@ city.toml
 10. Compute formula layers   (ComputeFormulaLayers)
     |
     v
-11. Inject implicit agents
+11. Inject implicit agents for providers whose effective `implicit_agent`
+    setting is enabled (the backward-compatible default)
     |
     v
 12. Apply agent defaults
@@ -150,7 +151,7 @@ Provider resolution happens later, at agent startup time, via
 - **`Agent`** (`internal/config/config.go`): Defines a configured agent.
   Fields cover identity (Name, Dir), lifecycle (Suspended, PreStart,
   SessionSetup), provider selection (Provider, StartCommand), prompt
-  delivery (PromptTemplate, Nudge, PromptMode), scaling (Pool), work
+  delivery (AcceptsPrompt, PromptTemplate, Nudge, PromptMode), scaling (Pool), work
   routing (WorkQuery, SlingQuery), and hooks (InstallAgentHooks,
   HooksInstalled).
 

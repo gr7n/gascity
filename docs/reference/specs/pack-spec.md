@@ -360,6 +360,7 @@ The normative authoring rules are specified here.
 | `suspended` | bool | Prevents orchestrator startup for the agent. |
 | `pre_start` | array of string | Commands before session creation. |
 | `prompt_template` | string | Prompt template path. Relative paths resolve against the pack directory. |
+| `accepts_prompt` | bool | Whether the agent consumes startup or interactive prompts. Defaults to `true`; `false` suppresses prompt/nudge/dialog startup behavior and rejects later interactive delivery while preserving supervision. |
 | `nudge` | string | Startup nudge text. |
 | `session` | string | Session transport override. Currently `acp` is the specified non-default value. |
 | `provider` | string | Provider preset name. |
@@ -398,6 +399,11 @@ The normative authoring rules are specified here.
 | `depends_on` | array of string | Agent startup dependencies. Bare rig-pack dependencies are qualified during rig loading. |
 | `resume_command` | string | Provider resume command template. |
 | `wake_mode` | string | `resume` or `fresh`. |
+
+`accepts_prompt = false` is the capability declaration for deterministic
+command workers. It is not equivalent to `prompt_mode = "none"`: the latter
+selects nudge-based prompt delivery for a provider that cannot take a prompt
+argument, while the former disables prompt delivery entirely.
 
 > **Compatibility:** The current runtime still parses agent-level `skills` and
 > `mcp` arrays as compatibility tombstones, but active materialization ignores
@@ -454,6 +460,13 @@ multiple city or rig packs contribute providers, the first provider already in
 the effective city wins.
 
 Provider fields are the same provider fields accepted in `city.toml`.
+
+Configured providers create provider-named implicit agents by default. A
+provider that is only a harness boundary can set `implicit_agent = false` to
+remain available in the provider catalog and to explicit agents without
+creating city- or rig-scoped implicit roles. The tri-state field inherits
+through provider base chains: omitted means inherit (or the compatibility
+default `true`), `false` suppresses synthesis, and `true` re-enables it.
 
 ### 1.2.8. Formula Directory
 

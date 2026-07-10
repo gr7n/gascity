@@ -194,9 +194,10 @@ type State interface {
 // AgentUpdate holds optional fields for a partial agent update. Pointer fields
 // distinguish "not set" from "set to zero value."
 type AgentUpdate struct {
-	Provider  string
-	Scope     string
-	Suspended *bool
+	Provider      string
+	Scope         string
+	Suspended     *bool
+	AcceptsPrompt *bool
 }
 
 // RigUpdate holds optional fields for a partial rig update. Pointer fields
@@ -220,6 +221,7 @@ type RigUpdate struct {
 type ProviderUpdate struct {
 	DisplayName        *string
 	Base               **string
+	ImplicitAgent      *bool
 	Command            *string
 	ACPCommand         *string
 	Args               []string // nil = not set, non-nil = replace

@@ -452,6 +452,7 @@ type AgentListItem struct {
 	Scope                string    `json:"scope,omitempty"`
 	WorkDir              string    `json:"work_dir,omitempty"`
 	Provider             string    `json:"provider,omitempty"`
+	AcceptsPrompt        bool      `json:"accepts_prompt"`
 	Session              string    `json:"session,omitempty"`
 	Suspended            bool      `json:"suspended"`
 	Pool                 *PoolJSON `json:"pool,omitempty"`
@@ -515,6 +516,7 @@ func agentListItems(cfg *config.City) []AgentListItem {
 			Scope:                a.Scope,
 			WorkDir:              a.WorkDir,
 			Provider:             a.Provider,
+			AcceptsPrompt:        a.AcceptsPromptEnabled(),
 			Session:              a.Session,
 			Suspended:            a.Suspended,
 			WorkQuery:            a.EffectiveWorkQueryForBeads(cfg.Beads),

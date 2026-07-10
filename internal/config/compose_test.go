@@ -689,6 +689,45 @@ prompt_flag = "--prompt"
 	}
 }
 
+func TestLoadWithIncludes_ProviderImplicitAgentFalseOverridesFragmentDefault(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/city/city.toml"] = []byte(`
+include = ["provider.toml"]
+
+[workspace]
+name = "test"
+
+[providers.custom]
+command = "custom"
+`)
+	fs.Files["/city/provider.toml"] = []byte(`
+[providers.custom]
+implicit_agent = false
+`)
+
+	cfg, prov, err := LoadWithIncludes(fs, "/city/city.toml")
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	spec := cfg.Providers["custom"]
+	if spec.ImplicitAgent == nil || *spec.ImplicitAgent {
+		t.Fatalf("ImplicitAgent = %#v, want explicit false", spec.ImplicitAgent)
+	}
+	if len(cfg.Agents) != 0 {
+		t.Fatalf("got implicit agents despite fragment opt-out: %+v", cfg.Agents)
+	}
+	foundWarning := false
+	for _, warning := range prov.Warnings {
+		if strings.Contains(warning, "implicit_agent") {
+			foundWarning = true
+			break
+		}
+	}
+	if foundWarning {
+		t.Fatalf("unexpected collision warning when only fragment defines implicit_agent: %v", prov.Warnings)
+	}
+}
+
 func TestLoadWithIncludes_ProviderEnvMerge(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Files["/city/city.toml"] = []byte(`

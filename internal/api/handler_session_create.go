@@ -145,6 +145,11 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	alias = createCtx.Alias
 	workDir = createCtx.WorkDir
+	if err := ensureAgentCreateMessageAccepted(&createCtx.Agent, body.Message); err != nil {
+		s.idem.unreserve(idemKey)
+		writeError(w, http.StatusBadRequest, "prompt_unsupported", err.Error())
+		return
+	}
 
 	mcpServers, err := s.sessionMCPServers(template, resolved.Name, createCtx.Identity, workDir, transport, kind, nil)
 	if err != nil {
@@ -242,7 +247,7 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	resp.Kind = "agent"
 	if catalog, catErr := s.workerSessionCatalog(store.Store); catErr == nil {
 		if caps, capErr := catalog.SubmissionCapabilities(info.ID); capErr == nil {
-			resp.SubmissionCapabilities = caps
+			resp.SubmissionCapabilities = submissionCapabilitiesForSessionResponse(info, extraMeta, s.state.Config(), caps)
 		}
 	}
 	if handle, handleErr := s.workerHandleForSession(store.Store, info.ID); handleErr == nil {
@@ -431,7 +436,7 @@ func (s *Server) createProviderSession(w http.ResponseWriter, r *http.Request, s
 	resp.Kind = "provider"
 	if catalog, catErr := s.workerSessionCatalog(store.Store); catErr == nil {
 		if caps, capErr := catalog.SubmissionCapabilities(info.ID); capErr == nil {
-			resp.SubmissionCapabilities = caps
+			resp.SubmissionCapabilities = submissionCapabilitiesForSessionResponse(info, extraMeta, s.state.Config(), caps)
 		}
 	}
 	if handle, handleErr := s.workerHandleForSession(store.Store, info.ID); handleErr == nil {

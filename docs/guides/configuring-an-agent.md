@@ -72,6 +72,56 @@ direct / custom-endpoint / model permutations — see
 [Understanding Packs](/guides/understanding-packs) for shipping a harness preset
 as a reusable pack.
 
+### Provider entries that are not roles
+
+By default, every configured `[providers.<name>]` entry also makes an
+on-demand, provider-named implicit agent at city scope and in each rig. This is
+convenient for direct harnesses such as `claude` and `codex`, but a wrapper,
+router, or other harness-only provider may not represent a work role at all.
+Disable only that automatic agent synthesis on the provider:
+
+```toml
+[providers.company-router]
+command = "company-router"
+implicit_agent = false
+
+[[agent]]
+name = "reviewer"
+provider = "company-router"
+```
+
+The provider remains in the catalog, may remain `workspace.provider`, and is
+still available to every explicit agent that references it. The setting only
+suppresses the provider-named implicit agents at city and rig scope; it does
+not suspend or disable explicit roles. Omission preserves the compatibility
+default (`true`). Provider descendants inherit the setting and can explicitly
+restore `implicit_agent = true`.
+
+### Deterministic command workers
+
+Some roles are supervised processes rather than conversational agents: a
+workflow dispatcher, health canary, or other command that reads its work from
+an API or queue. Declare that capability on the agent itself:
+
+```toml
+# agents/control-dispatcher/agent.toml
+start_command = "gc convoy control --serve --follow {{.Agent}}"
+accepts_prompt = false
+process_names = ["gc"]
+```
+
+`accepts_prompt = false` suppresses prompt rendering and delivery, configured
+startup nudges, and trust-dialog automation. Later `gc session nudge` and
+`gc session submit` calls fail with a capability error instead of typing into a
+deterministic process. Process liveness, scaling, restart, drain, and lifecycle
+supervision continue normally. Omit the field for the compatibility default
+(`true`).
+
+This is distinct from `prompt_mode = "none"`: that delivery mode means the
+provider does not accept a prompt as a command-line argument, so Gas City may
+still send the prompt as a startup nudge. Use `accepts_prompt = false` when the
+role must receive no prompt at all.
+
 ## Axis 2 — Model (`option_defaults.model`)
 
 A harness exposes its configurable knobs through an **options schema**. The

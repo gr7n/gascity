@@ -1849,6 +1849,66 @@ func TestMergeProviderOverBuiltinTriStateChildEnablesParentNil(t *testing.T) {
 	}
 }
 
+func TestMergeProviderOverBuiltinImplicitAgentTriState(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	t.Run("child false disables inherited default", func(t *testing.T) {
+		result := MergeProviderOverBuiltin(
+			ProviderSpec{ImplicitAgent: &enabled},
+			ProviderSpec{ImplicitAgent: &disabled},
+		)
+		if result.ImplicitAgent == nil || *result.ImplicitAgent {
+			t.Fatalf("ImplicitAgent = %#v, want explicit false", result.ImplicitAgent)
+		}
+	})
+
+	t.Run("nil child inherits false", func(t *testing.T) {
+		result := MergeProviderOverBuiltin(
+			ProviderSpec{ImplicitAgent: &disabled},
+			ProviderSpec{},
+		)
+		if result.ImplicitAgent == nil || *result.ImplicitAgent {
+			t.Fatalf("ImplicitAgent = %#v, want inherited false", result.ImplicitAgent)
+		}
+	})
+
+	t.Run("child true reenables", func(t *testing.T) {
+		result := MergeProviderOverBuiltin(
+			ProviderSpec{ImplicitAgent: &disabled},
+			ProviderSpec{ImplicitAgent: &enabled},
+		)
+		if result.ImplicitAgent == nil || !*result.ImplicitAgent {
+			t.Fatalf("ImplicitAgent = %#v, want explicit true", result.ImplicitAgent)
+		}
+	})
+}
+
+func TestResolveProviderDescendantReportsInheritedImplicitAgentFalse(t *testing.T) {
+	disabled := false
+	base := BasePrefixProvider + "router-base"
+	providers := map[string]ProviderSpec{
+		"router-base":  {Command: "router", ImplicitAgent: &disabled},
+		"router-child": {Base: &base},
+	}
+
+	resolved, err := ResolveProvider(&Agent{Name: "worker", Provider: "router-child"}, nil, providers, lookPathOnly("router"))
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if resolved.ImplicitAgent {
+		t.Fatal("ResolvedProvider.ImplicitAgent = true, want inherited false from provider ancestor")
+	}
+
+	folded, err := lookupProvider("router-child", providers, lookPathOnly("router"))
+	if err != nil {
+		t.Fatalf("lookupProvider: %v", err)
+	}
+	if folded.ImplicitAgent == nil || *folded.ImplicitAgent {
+		t.Fatalf("folded ProviderSpec.ImplicitAgent = %#v, want inherited false", folded.ImplicitAgent)
+	}
+}
+
 // TestSupportsHooksFalseRegressionTOML verifies that a raw TOML config
 // with supports_hooks = false decodes into *bool = &false and propagates
 // through resolution as a suppression (resolved.SupportsHooks == false).
@@ -2170,6 +2230,7 @@ func TestMergeProviderOverBuiltinFieldSync(t *testing.T) {
 	basePtr := "builtin:custom"
 	city := ProviderSpec{
 		Base:                   &basePtr,
+		ImplicitAgent:          boolPtr(true),
 		ArgsAppend:             []string{"--extra"},
 		OptionsSchemaMerge:     "by_key",
 		DisplayName:            "Custom",

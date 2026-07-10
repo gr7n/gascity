@@ -316,6 +316,10 @@ func DeepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 	dst := *src
 	dst.Name = name
 	dst.Dir = dir
+	if src.AcceptsPrompt != nil {
+		value := *src.AcceptsPrompt
+		dst.AcceptsPrompt = &value
+	}
 	// Deep-copy slices and maps to prevent aliasing.
 	if src.PreStart != nil {
 		dst.PreStart = append([]string(nil), src.PreStart...)
