@@ -5,14 +5,19 @@
 #
 # Build:
 #   docker build -f contrib/k8s/Dockerfile.controller \
+#     --build-arg GC_AGENT_IMAGE=gc-agent:latest \
 #     -t gc-controller:latest .
 #
 # The gc-agent image must be built first:
 #   docker build -f contrib/k8s/Dockerfile.agent -t gc-agent:latest .
 
-# Local build-layer image produced by Dockerfile.agent, not a registry pull.
-ARG BASE=gc-agent:latest
-FROM ${BASE}
+# The controller must launch workers from the exact agent image it was built
+# against. Release pipelines pass a digest-pinned reference; the local default
+# keeps the make docker-controller workflow convenient.
+ARG GC_AGENT_IMAGE=gc-agent:latest
+FROM ${GC_AGENT_IMAGE}
+ARG GC_AGENT_IMAGE
+ENV GC_K8S_IMAGE=${GC_AGENT_IMAGE}
 
 # Controller installs to /usr/local/bin — need root.
 USER root

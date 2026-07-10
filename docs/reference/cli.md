@@ -1868,8 +1868,12 @@ gc import credential remove <match> [flags]
 Install imports from pack.toml and packs.lock
 
 ```
-gc import install
+gc import install [flags]
 ```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--frozen-lockfile` | bool |  | install exactly from packs.lock without resolving or rewriting source files |
 
 ## gc import list
 

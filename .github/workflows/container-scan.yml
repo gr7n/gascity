@@ -205,7 +205,7 @@ jobs:
 
           docker build \
             -f contrib/k8s/Dockerfile.controller \
-            --build-arg BASE=gc-agent:latest \
+            --build-arg GC_AGENT_IMAGE=gc-agent:latest \
             -t "gc-controller:${IMAGE_TAG}" \
             .
 

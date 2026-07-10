@@ -15,6 +15,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -58,6 +59,11 @@ type Provider struct {
 	extraVolumes       []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
 	extraVolumeMounts  []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
 	extraEnv           []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
+	readOnlyRootFS     *bool                // GC_K8S_READ_ONLY_ROOT_FILESYSTEM
+	runAsUser          *int64               // GC_K8S_RUN_AS_USER
+	runAsGroup         *int64               // GC_K8S_RUN_AS_GROUP
+	fsGroup            *int64               // GC_K8S_FS_GROUP
+	cityRelease        string               // GC_K8S_CITY_RELEASE
 	postStartSettle    time.Duration        // settle time before post-start liveness check
 	stderr             io.Writer            // warning output (default os.Stderr)
 }
@@ -75,6 +81,13 @@ type podProjectionFields struct {
 	env          []corev1.EnvVar
 }
 
+type podSecurityFields struct {
+	readOnlyRootFS *bool
+	runAsUser      *int64
+	runAsGroup     *int64
+	fsGroup        *int64
+}
+
 // NewProvider creates a K8s session provider.
 // Configuration is read from environment variables (matching gc-session-k8s):
 //   - GC_K8S_NAMESPACE — namespace (default: "gc")
@@ -86,6 +99,10 @@ type podProjectionFields struct {
 //   - GC_K8S_EXTRA_VOLUMES_JSON — extra corev1.Volume JSON array
 //   - GC_K8S_EXTRA_VOLUME_MOUNTS_JSON — extra corev1.VolumeMount JSON array
 //   - GC_K8S_EXTRA_ENV_JSON — extra corev1.EnvVar JSON array
+//   - GC_K8S_READ_ONLY_ROOT_FILESYSTEM — set the agent container root filesystem read-only
+//   - GC_K8S_RUN_AS_USER, GC_K8S_RUN_AS_GROUP — fixed numeric agent identity
+//   - GC_K8S_FS_GROUP — pod volume group ownership
+//   - GC_K8S_CITY_RELEASE — immutable city release ID stamped on worker pods
 //
 // The in-cluster Dolt service alias defaults to the provider defaults
 // (dolt.gc.svc.cluster.local:3307). Pods receive projected GC_DOLT_* env;
@@ -123,6 +140,14 @@ func NewProvider() (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	security, err := parsePodSecurityEnv()
+	if err != nil {
+		return nil, err
+	}
+	cityRelease, err := parseCityReleaseEnv()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Provider{
 		ops: &realK8sOps{
@@ -150,6 +175,11 @@ func NewProvider() (*Provider, error) {
 		extraVolumes:       projection.volumes,
 		extraVolumeMounts:  projection.volumeMounts,
 		extraEnv:           projection.env,
+		readOnlyRootFS:     security.readOnlyRootFS,
+		runAsUser:          security.runAsUser,
+		runAsGroup:         security.runAsGroup,
+		fsGroup:            security.fsGroup,
+		cityRelease:        cityRelease,
 	}, nil
 }
 
@@ -186,6 +216,73 @@ func parsePodProjectionEnv() (podProjectionFields, error) {
 		return podProjectionFields{}, err
 	}
 	return projection, nil
+}
+
+func parsePodSecurityEnv() (podSecurityFields, error) {
+	readOnlyRootFS, err := optionalBoolEnv("GC_K8S_READ_ONLY_ROOT_FILESYSTEM")
+	if err != nil {
+		return podSecurityFields{}, err
+	}
+	runAsUser, err := optionalIDEnv("GC_K8S_RUN_AS_USER")
+	if err != nil {
+		return podSecurityFields{}, err
+	}
+	runAsGroup, err := optionalIDEnv("GC_K8S_RUN_AS_GROUP")
+	if err != nil {
+		return podSecurityFields{}, err
+	}
+	fsGroup, err := optionalIDEnv("GC_K8S_FS_GROUP")
+	if err != nil {
+		return podSecurityFields{}, err
+	}
+	return podSecurityFields{
+		readOnlyRootFS: readOnlyRootFS,
+		runAsUser:      runAsUser,
+		runAsGroup:     runAsGroup,
+		fsGroup:        fsGroup,
+	}, nil
+}
+
+func optionalBoolEnv(name string) (*bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s %q as boolean: %w", name, raw, err)
+	}
+	return &value, nil
+}
+
+func optionalIDEnv(name string) (*int64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		if err == nil {
+			err = fmt.Errorf("must be non-negative")
+		}
+		return nil, fmt.Errorf("parsing %s %q as numeric ID: %w", name, raw, err)
+	}
+	return &value, nil
+}
+
+func parseCityReleaseEnv() (string, error) {
+	release := strings.TrimSpace(os.Getenv("GC_K8S_CITY_RELEASE"))
+	return release, validateCityRelease(release)
+}
+
+func validateCityRelease(release string) error {
+	if release == "" {
+		return nil
+	}
+	if problems := k8svalidation.IsValidLabelValue(release); len(problems) > 0 {
+		return fmt.Errorf("GC_K8S_CITY_RELEASE %q is not a valid Kubernetes label value: %s", release, strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 func parseJSONEnv(name string, target any) error {
@@ -227,7 +324,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	existing, err := p.ops.listPods(ctx, "gc-session="+label, "")
 	if err == nil && len(existing) > 0 {
 		pod := &existing[0]
-		if pod.Status.Phase == corev1.PodRunning {
+		if pod.Status.Phase == corev1.PodRunning && p.podMatchesCityRelease(pod) {
 			// Check if tmux is alive — stale pod detection.
 			_, tmuxErr := execTmuxInPod(ctx, p.ops, pod.Name, podLinuxUsername(pod),
 				[]string{"tmux", "has-session", "-t", tmuxSession})
@@ -572,6 +669,9 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 		return false
 	}
 	pod := &pods[0]
+	if !p.podMatchesCityRelease(pod) {
+		return false
+	}
 
 	// Check deletionTimestamp — pod in graceful shutdown is not alive.
 	if pod.DeletionTimestamp != nil {
@@ -735,6 +835,9 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	var names []string
 	for i := range pods {
 		pod := &pods[i]
+		if !p.podMatchesCityRelease(pod) {
+			continue
+		}
 		// Prefer annotation (raw name) over label (sanitized).
 		name := pod.Annotations["gc-session-name"]
 		if name == "" {
@@ -886,10 +989,12 @@ func (p *Provider) findRunningPod(ctx context.Context, name string) (string, err
 	if err != nil {
 		return "", err
 	}
-	if len(pods) == 0 {
-		return "", fmt.Errorf("no running pod for session %q", name)
+	for i := range pods {
+		if p.podMatchesCityRelease(&pods[i]) {
+			return pods[i].Name, nil
+		}
 	}
-	return pods[0].Name, nil
+	return "", fmt.Errorf("no running pod for session %q on city release %q", name, p.cityRelease)
 }
 
 // findPod finds a pod by session label (any phase).
@@ -899,10 +1004,20 @@ func (p *Provider) findPod(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(pods) == 0 {
-		return "", fmt.Errorf("no pod for session %q", name)
+	for i := range pods {
+		if p.podMatchesCityRelease(&pods[i]) {
+			return pods[i].Name, nil
+		}
 	}
-	return pods[0].Name, nil
+	return "", fmt.Errorf("no pod for session %q on city release %q", name, p.cityRelease)
+}
+
+func (p *Provider) podMatchesCityRelease(pod *corev1.Pod) bool {
+	if p.cityRelease == "" {
+		return true
+	}
+	return pod.Labels[podCityReleaseKey] == p.cityRelease &&
+		pod.Annotations[podCityReleaseKey] == p.cityRelease
 }
 
 // waitForDeletion waits for a pod to be deleted.

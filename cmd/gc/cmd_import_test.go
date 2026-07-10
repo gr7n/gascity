@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -858,6 +859,80 @@ version = "^1.4"
 	}
 	if !called {
 		t.Fatal("expected InstallLocked to be called")
+	}
+}
+
+func TestImportInstallFrozenLockfileFlag(t *testing.T) {
+	cmd := newImportInstallCmd(io.Discard, io.Discard)
+	flag := cmd.Flags().Lookup("frozen-lockfile")
+	if flag == nil {
+		t.Fatal("missing --frozen-lockfile flag")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--frozen-lockfile default = %q, want false", flag.DefValue)
+	}
+}
+
+func TestDoImportInstallFrozenUsesOnlyExistingLock(t *testing.T) {
+	clearGCEnv(t)
+	dir := t.TempDir()
+	// Deliberately invalid authored source proves the frozen path does not load
+	// or re-resolve the source graph. An immutable image may restore its cache,
+	// but it must leave both source and lock bytes untouched.
+	packPath := filepath.Join(dir, "pack.toml")
+	lockPath := filepath.Join(dir, "packs.lock")
+	packBefore := []byte("this is baked source, not valid toml\n")
+	lockBefore := []byte("schema = 1\n\n[packs.\"https://example.com/tools.git\"]\ncommit = \"abc123\"\n")
+	if err := os.WriteFile(packPath, packBefore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, lockBefore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prevSync := syncImports
+	prevInstall := installLockedImports
+	prevWrite := writeImportLockfile
+	t.Cleanup(func() {
+		syncImports = prevSync
+		installLockedImports = prevInstall
+		writeImportLockfile = prevWrite
+	})
+	syncImports = func(_ string, _ map[string]config.Import, _ packman.InstallMode) (*packman.Lockfile, error) {
+		t.Fatal("frozen install must not resolve the authored import graph")
+		return nil, nil
+	}
+	writeImportLockfile = func(_ fsys.FS, _ string, _ *packman.Lockfile) error {
+		t.Fatal("frozen install must not rewrite packs.lock")
+		return nil
+	}
+	installLockedImports = func(cityRoot string) (*packman.Lockfile, error) {
+		if cityRoot != dir {
+			t.Fatalf("cityRoot = %q, want %q", cityRoot, dir)
+		}
+		return &packman.Lockfile{
+			Schema: packman.LockfileSchema,
+			Packs: map[string]packman.LockedPack{
+				"https://example.com/tools.git": {Commit: "abc123"},
+			},
+		}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := doImportInstallWithOptions(dir, true, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if got := stdout.String(); got != "Installed 1 remote import(s) from frozen lockfile\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+	for path, want := range map[string][]byte{packPath: packBefore, lockPath: lockBefore} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s changed during frozen install:\n%s", filepath.Base(path), got)
+		}
 	}
 }
 

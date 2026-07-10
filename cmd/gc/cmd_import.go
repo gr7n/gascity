@@ -216,7 +216,8 @@ func newImportCheckCmd(stdout, stderr io.Writer) *cobra.Command {
 }
 
 func newImportInstallCmd(stdout, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var frozenLockfile bool
+	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install imports from pack.toml and packs.lock",
 		Args:  cobra.NoArgs,
@@ -226,12 +227,15 @@ func newImportInstallCmd(stdout, stderr io.Writer) *cobra.Command {
 				fmt.Fprintf(stderr, "gc import install: %v\n", err) //nolint:errcheck
 				return errExit
 			}
-			if doImportInstall(cityPath, stdout, stderr) != 0 {
+			if doImportInstallWithOptions(cityPath, frozenLockfile, stdout, stderr) != 0 {
 				return errExit
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&frozenLockfile, "frozen-lockfile", false,
+		"install exactly from packs.lock without resolving or rewriting source files")
+	return cmd
 }
 
 func newImportUpgradeCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -692,6 +696,26 @@ func doImportRemove(fs fsys.FS, cityPath, name string, stdout, stderr io.Writer)
 }
 
 func doImportInstall(cityPath string, stdout, stderr io.Writer) int {
+	return doImportInstallWithOptions(cityPath, false, stdout, stderr)
+}
+
+func doImportInstallWithOptions(cityPath string, frozenLockfile bool, stdout, stderr io.Writer) int {
+	// Immutable city images carry reviewed pack.toml/city.toml source and a
+	// matching packs.lock. Their startup path may populate the machine cache,
+	// but must never resolve a different graph or rewrite baked source. Keep
+	// this path intentionally narrow: InstallLocked reads the existing lock and
+	// restores only those exact commits.
+	if frozenLockfile {
+		lock, err := installLockedImports(cityPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc import install: %v\n", err) //nolint:errcheck
+			printCredentialHint(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Installed %d remote import(s) from frozen lockfile\n", len(lock.Packs)) //nolint:errcheck
+		return 0
+	}
+
 	allImports, err := collectAllImportsFS(cityPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc import install: %v\n", err) //nolint:errcheck

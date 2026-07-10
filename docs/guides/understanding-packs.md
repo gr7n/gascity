@@ -298,6 +298,17 @@ repairs `packs.lock`, and materializes the packs in the local cache:
 $ gc import install
 ```
 
+Immutable images and other reviewed deployments can restore only the commits
+already recorded in the baked lockfile:
+
+```text
+$ gc import install --frozen-lockfile
+```
+
+Frozen install calls the lockfile-only cache installer directly. It does not
+resolve the authored import graph and does not rewrite `pack.toml`, `city.toml`,
+or `packs.lock`; a missing or unusable lockfile is an error.
+
 `gc import check` is a read-only pass: it reports missing, stale, or uncached
 import state and points back to `gc import install` for repair. Registry
 commands are discovery only; they never sync the authored import graph.

@@ -229,6 +229,102 @@ func TestBuildPod_DynamicUserPreservesEnvForStartupScript(t *testing.T) {
 	}
 }
 
+func TestBuildPod_ImmutableCellSecurityAndRelease(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.prebaked = true
+	readOnly := true
+	runAsUser := int64(1000)
+	runAsGroup := int64(1000)
+	fsGroup := int64(1000)
+	p.readOnlyRootFS = &readOnly
+	p.runAsUser = &runAsUser
+	p.runAsGroup = &runAsGroup
+	p.fsGroup = &fsGroup
+	p.cityRelease = "4bd17e45c019fedfc0a33b09"
+
+	pod, err := buildPod("immutable-worker", runtime.Config{
+		Command: "gc agent-script --script /workspace/worker.yaml",
+		Env: map[string]string{
+			"GC_AGENT": "project-worker",
+			"GC_CITY":  "/workspace",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	containerSecurity := pod.Spec.Containers[0].SecurityContext
+	if containerSecurity == nil || containerSecurity.ReadOnlyRootFilesystem == nil || !*containerSecurity.ReadOnlyRootFilesystem {
+		t.Fatalf("ReadOnlyRootFilesystem = %#v, want true", containerSecurity)
+	}
+	if containerSecurity.RunAsUser == nil || *containerSecurity.RunAsUser != 1000 {
+		t.Fatalf("RunAsUser = %#v, want 1000", containerSecurity.RunAsUser)
+	}
+	if containerSecurity.RunAsGroup == nil || *containerSecurity.RunAsGroup != 1000 {
+		t.Fatalf("RunAsGroup = %#v, want 1000", containerSecurity.RunAsGroup)
+	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != 1000 {
+		t.Fatalf("FSGroup = %#v, want 1000", pod.Spec.SecurityContext)
+	}
+	for kind, values := range map[string]map[string]string{
+		"label":      pod.Labels,
+		"annotation": pod.Annotations,
+	} {
+		if got := values[podCityReleaseKey]; got != p.cityRelease {
+			t.Fatalf("%s %s = %q, want %q", kind, podCityReleaseKey, got, p.cityRelease)
+		}
+	}
+	if strings.Contains(pod.Spec.Containers[0].Args[0], "useradd") {
+		t.Fatalf("immutable fixed-identity pod unexpectedly uses dynamic user setup: %s", pod.Spec.Containers[0].Args[0])
+	}
+}
+
+func TestBuildPod_RejectsDynamicUserWithImmutableIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*Provider)
+		want      string
+	}{
+		{
+			name: "read-only root filesystem",
+			configure: func(p *Provider) {
+				value := true
+				p.readOnlyRootFS = &value
+			},
+			want: "GC_K8S_READ_ONLY_ROOT_FILESYSTEM=true",
+		},
+		{
+			name: "fixed non-root uid",
+			configure: func(p *Provider) {
+				value := int64(1000)
+				p.runAsUser = &value
+			},
+			want: "GC_K8S_RUN_AS_USER=1000",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newProviderWithOps(newFakeK8sOps())
+			tc.configure(p)
+			_, err := buildPod("worker", runtime.Config{
+				Command: "/bin/bash",
+				Env:     map[string]string{"LINUX_USERNAME": "ubuntu"},
+			}, p)
+			if err == nil || !strings.Contains(err.Error(), "LINUX_USERNAME=\"ubuntu\"") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("buildPod error = %v, want dynamic-user conflict with %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildPod_RejectsInvalidCityReleaseInsteadOfMutatingIt(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.cityRelease = "release/invalid"
+	_, err := buildPod("worker", runtime.Config{Command: "/bin/bash"}, p)
+	if err == nil || !strings.Contains(err.Error(), "GC_K8S_CITY_RELEASE") {
+		t.Fatalf("buildPod error = %v, want invalid release label error", err)
+	}
+}
+
 func TestBuildPod_NoSchedulingFields_NoBehaviorChange(t *testing.T) {
 	// Zero-value scheduling fields must not alter default pod behavior.
 	p := newProviderWithOps(newFakeK8sOps())

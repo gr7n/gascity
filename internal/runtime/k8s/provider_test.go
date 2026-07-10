@@ -109,6 +109,85 @@ func clearPodProjectionEnv(t *testing.T) {
 	}
 }
 
+func TestParsePodSecurityEnv(t *testing.T) {
+	clearPodSecurityEnv(t)
+	t.Setenv("GC_K8S_READ_ONLY_ROOT_FILESYSTEM", "true")
+	t.Setenv("GC_K8S_RUN_AS_USER", "1000")
+	t.Setenv("GC_K8S_RUN_AS_GROUP", "1001")
+	t.Setenv("GC_K8S_FS_GROUP", "1002")
+
+	security, err := parsePodSecurityEnv()
+	if err != nil {
+		t.Fatalf("parsePodSecurityEnv: %v", err)
+	}
+	if security.readOnlyRootFS == nil || !*security.readOnlyRootFS {
+		t.Fatalf("readOnlyRootFS = %#v, want true", security.readOnlyRootFS)
+	}
+	for name, got := range map[string]*int64{
+		"runAsUser":  security.runAsUser,
+		"runAsGroup": security.runAsGroup,
+		"fsGroup":    security.fsGroup,
+	} {
+		if got == nil {
+			t.Fatalf("%s is nil", name)
+		}
+	}
+	if *security.runAsUser != 1000 || *security.runAsGroup != 1001 || *security.fsGroup != 1002 {
+		t.Fatalf("security = %#v, want uid=1000 gid=1001 fsGroup=1002", security)
+	}
+}
+
+func TestParsePodSecurityEnvRejectsInvalidValues(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "boolean", key: "GC_K8S_READ_ONLY_ROOT_FILESYSTEM", value: "sometimes"},
+		{name: "user text", key: "GC_K8S_RUN_AS_USER", value: "ubuntu"},
+		{name: "negative user", key: "GC_K8S_RUN_AS_USER", value: "-1"},
+		{name: "group text", key: "GC_K8S_RUN_AS_GROUP", value: "staff"},
+		{name: "negative fs group", key: "GC_K8S_FS_GROUP", value: "-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearPodSecurityEnv(t)
+			t.Setenv(tc.key, tc.value)
+			_, err := parsePodSecurityEnv()
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("parsePodSecurityEnv() error = %v, want %s context", err, tc.key)
+			}
+		})
+	}
+}
+
+func TestParseCityReleaseEnv(t *testing.T) {
+	t.Setenv("GC_K8S_CITY_RELEASE", "4bd17e45c019fedfc0a33b09")
+	got, err := parseCityReleaseEnv()
+	if err != nil {
+		t.Fatalf("parseCityReleaseEnv: %v", err)
+	}
+	if got != "4bd17e45c019fedfc0a33b09" {
+		t.Fatalf("release = %q", got)
+	}
+
+	t.Setenv("GC_K8S_CITY_RELEASE", "release/invalid")
+	if _, err := parseCityReleaseEnv(); err == nil || !strings.Contains(err.Error(), "GC_K8S_CITY_RELEASE") {
+		t.Fatalf("invalid release error = %v", err)
+	}
+}
+
+func clearPodSecurityEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_READ_ONLY_ROOT_FILESYSTEM",
+		"GC_K8S_RUN_AS_USER",
+		"GC_K8S_RUN_AS_GROUP",
+		"GC_K8S_FS_GROUP",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestTuneRESTClientRateLimits(t *testing.T) {
 	t.Setenv("GC_K8S_CLIENT_QPS", "")
 	t.Setenv("GC_K8S_CLIENT_BURST", "")
@@ -766,6 +845,62 @@ func TestStartCreatesPodsAndWaits(t *testing.T) {
 	}
 	if pod.Annotations["gc-session-name"] != "gc-test-agent" {
 		t.Errorf("annotation gc-session-name = %q, want gc-test-agent", pod.Annotations["gc-session-name"])
+	}
+}
+
+func TestStartReplacesPodFromDifferentCityRelease(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.prebaked = true
+	p.cityRelease = "new-release"
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.pods["gc-test-agent"].Labels[podCityReleaseKey] = "old-release"
+	fake.pods["gc-test-agent"].Annotations = map[string]string{
+		podCityReleaseKey: "old-release",
+	}
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	err := p.Start(context.Background(), "gc-test-agent", runtime.Config{
+		Command:   "agent",
+		Lifecycle: runtime.LifecycleOneShot,
+		Env:       map[string]string{"GC_AGENT": "worker", "GC_CITY": "/workspace"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pod := fake.pods["gc-test-agent"]
+	if pod == nil {
+		t.Fatal("replacement pod was not created")
+	}
+	if pod.Labels[podCityReleaseKey] != "new-release" || pod.Annotations[podCityReleaseKey] != "new-release" {
+		t.Fatalf("replacement release metadata = labels:%#v annotations:%#v", pod.Labels, pod.Annotations)
+	}
+	foundDelete := false
+	for _, call := range fake.calls {
+		if call.method == "deletePod" && call.pod == "gc-test-agent" {
+			foundDelete = true
+			break
+		}
+	}
+	if !foundDelete {
+		t.Fatal("old-release pod was not deleted")
+	}
+}
+
+func TestIsRunningIgnoresPodFromDifferentCityRelease(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.cityRelease = "new-release"
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.pods["gc-test-agent"].Labels[podCityReleaseKey] = "old-release"
+	fake.pods["gc-test-agent"].Annotations = map[string]string{podCityReleaseKey: "old-release"}
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	if p.IsRunning("gc-test-agent") {
+		t.Fatal("old-release pod must not satisfy current-release liveness")
 	}
 }
 

@@ -11,6 +11,26 @@ import (
 	"testing"
 )
 
+func TestControllerDockerfileEmbedsExactAgentImage(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(controllerScriptPath(t)), "..", "k8s", "Dockerfile.controller"))
+	if err != nil {
+		t.Fatalf("read Dockerfile.controller: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"ARG GC_AGENT_IMAGE=gc-agent:latest",
+		"FROM ${GC_AGENT_IMAGE}",
+		"ENV GC_K8S_IMAGE=${GC_AGENT_IMAGE}",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Dockerfile.controller missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "ARG BASE=") || strings.Contains(text, "FROM ${BASE}") {
+		t.Fatalf("Dockerfile.controller still permits a base image distinct from GC_AGENT_IMAGE:\n%s", text)
+	}
+}
+
 func TestControllerScriptDeployProjectsOnlyExplicitCanonicalDoltTarget(t *testing.T) {
 	result := runControllerScriptDeploy(t, controllerScriptDeployOptions{
 		Env: map[string]string{

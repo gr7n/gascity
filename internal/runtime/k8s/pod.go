@@ -21,6 +21,7 @@ const (
 	podManagedDoltHost         = "dolt.gc.svc.cluster.local"
 	podManagedDoltPort         = "3307"
 	podLinuxUsernameAnnotation = "gc-linux-username"
+	podCityReleaseKey          = "gr7n.com/city-release"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -267,6 +268,12 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	// as root (see securityContext below), creates the user, sets up workspace
 	// ownership, then drops privileges via su for the tmux session.
 	linuxUsername := strings.TrimSpace(cfg.Env["LINUX_USERNAME"])
+	if err := validatePodSecurityCompatibility(linuxUsername, p); err != nil {
+		return nil, err
+	}
+	if err := validateCityRelease(p.cityRelease); err != nil {
+		return nil, err
+	}
 	var userSetup string
 	if linuxUsername != "" {
 		userSetup = fmt.Sprintf(
@@ -376,6 +383,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			},
 		},
 		Spec: corev1.PodSpec{
+			SecurityContext:    podSecurityContext(p),
 			ServiceAccountName: p.serviceAccount,
 			RestartPolicy:      corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{
@@ -390,10 +398,14 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 				TTY:             true,
 				Resources:       resources,
 				VolumeMounts:    mainVolMounts,
-				SecurityContext: agentSecurityContext(linuxUsername),
+				SecurityContext: agentSecurityContext(linuxUsername, p),
 			}},
 			Volumes: volumes,
 		},
+	}
+	if p.cityRelease != "" {
+		pod.Labels[podCityReleaseKey] = p.cityRelease
+		pod.Annotations[podCityReleaseKey] = p.cityRelease
 	}
 
 	if linuxUsername != "" {
@@ -465,18 +477,49 @@ func cloneTolerations(in []corev1.Toleration) []corev1.Toleration {
 	return out
 }
 
-// agentSecurityContext returns a container security context.
-// When a dynamic linux username is configured, the container starts as root
-// (UID 0) so it can create the user at runtime before dropping privileges.
-// When no dynamic user is set, returns nil (uses Dockerfile default: gcagent).
-func agentSecurityContext(linuxUsername string) *corev1.SecurityContext {
+func validatePodSecurityCompatibility(linuxUsername string, p *Provider) error {
 	if linuxUsername == "" {
 		return nil
 	}
-	var rootUID int64
-	return &corev1.SecurityContext{
-		RunAsUser: &rootUID,
+	var conflicts []string
+	if p.readOnlyRootFS != nil && *p.readOnlyRootFS {
+		conflicts = append(conflicts, "GC_K8S_READ_ONLY_ROOT_FILESYSTEM=true")
 	}
+	if p.runAsUser != nil && *p.runAsUser != 0 {
+		conflicts = append(conflicts, fmt.Sprintf("GC_K8S_RUN_AS_USER=%d", *p.runAsUser))
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("LINUX_USERNAME=%q is incompatible with %s: dynamic user setup requires UID 0 and a writable root filesystem",
+		linuxUsername, strings.Join(conflicts, ", "))
+}
+
+// agentSecurityContext returns the configured immutable container identity.
+// The legacy dynamic-user path still starts as UID 0 so it can create the user
+// before dropping privileges; validatePodSecurityCompatibility rejects fixed
+// non-root/read-only combinations that make that setup impossible.
+func agentSecurityContext(linuxUsername string, p *Provider) *corev1.SecurityContext {
+	runAsUser := p.runAsUser
+	if linuxUsername != "" {
+		var rootUID int64
+		runAsUser = &rootUID
+	}
+	if runAsUser == nil && p.runAsGroup == nil && p.readOnlyRootFS == nil {
+		return nil
+	}
+	return &corev1.SecurityContext{
+		RunAsUser:              runAsUser,
+		RunAsGroup:             p.runAsGroup,
+		ReadOnlyRootFilesystem: p.readOnlyRootFS,
+	}
+}
+
+func podSecurityContext(p *Provider) *corev1.PodSecurityContext {
+	if p.fsGroup == nil {
+		return nil
+	}
+	return &corev1.PodSecurityContext{FSGroup: p.fsGroup}
 }
 
 // buildPodEnv creates the env var list for the agent container.

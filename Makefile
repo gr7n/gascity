@@ -778,7 +778,9 @@ docker-agent: check-docker
 
 ## docker-controller: build controller image for K8s deployment (~10s on top of agent)
 docker-controller: check-docker
-	docker build -f contrib/k8s/Dockerfile.controller -t gc-controller:latest .
+	docker build -f contrib/k8s/Dockerfile.controller \
+		--build-arg GC_AGENT_IMAGE=gc-agent:latest \
+		-t gc-controller:latest .
 	@if kubectl config current-context 2>/dev/null | grep -q '^kind-'; then \
 		cluster=$$(kubectl config current-context | sed 's/^kind-//'); \
 		echo "Loading gc-controller:latest into kind cluster '$$cluster'..."; \
