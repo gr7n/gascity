@@ -92,6 +92,7 @@ jobs:
               - 'go.mod'
               - 'internal/beads/**'
               - 'deps.env'
+              - '.github/scripts/build-bd-image.sh'
               - '.github/scripts/install-bd-archive.sh'
               - 'cmd/gc/init_provider_readiness.go'
             packs:
@@ -157,6 +158,7 @@ jobs:
               - 'Makefile'
               - '.github/workflows/**'
               - '.github/actions/setup-gascity-ubuntu/**'
+              - '.github/scripts/build-bd-image.sh'
               - '.github/scripts/install-dolt-archive.sh'
               - '.github/scripts/install-bd-archive.sh'
               - '.github/scripts/install-claude-native.sh'

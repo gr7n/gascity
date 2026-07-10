@@ -10,6 +10,7 @@ on:
       - ".github/requirements/mcp-agent-mail.in"
       - ".github/requirements/mcp-agent-mail.overrides.txt"
       - ".github/requirements/mcp-agent-mail.txt"
+      - ".github/scripts/build-bd-image.sh"
       - ".github/scripts/install-*.sh"
       - ".github/workflows/container-scan.yml"
       - "contrib/beads-scripts/gc-beads-br"
@@ -34,6 +35,7 @@ on:
       - ".github/requirements/mcp-agent-mail.in"
       - ".github/requirements/mcp-agent-mail.overrides.txt"
       - ".github/requirements/mcp-agent-mail.txt"
+      - ".github/scripts/build-bd-image.sh"
       - ".github/scripts/install-*.sh"
       - ".github/workflows/container-scan.yml"
       - "contrib/beads-scripts/gc-beads-br"
@@ -179,7 +181,7 @@ jobs:
           . ./deps.env
           bin_dir="${RUNNER_TEMP}/gascity-container-scan-bin"
           mkdir -p "$bin_dir"
-          BD_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-bd-archive.sh "$BD_VERSION"
+          .github/scripts/build-bd-image.sh "$bin_dir/bd"
           BR_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-br-archive.sh "$BR_VERSION"
           go build -o gc ./cmd/gc
           cp -f "$bin_dir/bd" bd

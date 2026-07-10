@@ -18,6 +18,7 @@ EXPECTED_SHARED_PATHS = {
     "Makefile",
     ".github/workflows/**",
     ".github/actions/setup-gascity-ubuntu/**",
+    ".github/scripts/build-bd-image.sh",
     ".github/scripts/install-dolt-archive.sh",
     ".github/scripts/install-bd-archive.sh",
     ".github/scripts/install-claude-native.sh",
@@ -223,6 +224,7 @@ class AcceptanceScenarioTests(unittest.TestCase):
         filters = _filter_globs()
         setup_paths = [
             ".github/actions/setup-gascity-ubuntu/action.yml",
+            ".github/scripts/build-bd-image.sh",
             ".github/scripts/install-dolt-archive.sh",
             ".github/scripts/install-bd-archive.sh",
             ".github/scripts/install-claude-native.sh",

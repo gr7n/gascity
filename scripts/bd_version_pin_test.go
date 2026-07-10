@@ -28,6 +28,11 @@ func TestBDVersionPins(t *testing.T) {
 	bdPrev := env["BD_PREV_VERSION"]       // min-supported matrix cell (downloadable)
 	bdCurrent := env["BD_CURRENT_VERSION"] // bleeding-edge matrix cell (built from source)
 	bdCurrentRef := env["BD_CURRENT_REF"]  // beads commit the current cell builds from
+	bdImageRef := env["BD_IMAGE_SOURCE_REF"]
+	bdImageCrypto := env["BD_IMAGE_X_CRYPTO_VERSION"]
+	bdImageNet := env["BD_IMAGE_X_NET_VERSION"]
+	bdImageGoModSHA := env["BD_IMAGE_GO_MOD_SHA256"]
+	bdImageGoSumSHA := env["BD_IMAGE_GO_SUM_SHA256"]
 
 	if bdVersion == "" {
 		t.Fatal("deps.env missing BD_VERSION")
@@ -47,6 +52,25 @@ func TestBDVersionPins(t *testing.T) {
 	}
 	if !regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`).MatchString(bdCurrent) {
 		t.Fatalf("deps.env BD_CURRENT_VERSION = %q, want a semver token", bdCurrent)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(bdImageRef) {
+		t.Fatalf("deps.env BD_IMAGE_SOURCE_REF = %q, want the full commit behind BD_VERSION", bdImageRef)
+	}
+	for name, version := range map[string]string{
+		"BD_IMAGE_X_CRYPTO_VERSION": bdImageCrypto,
+		"BD_IMAGE_X_NET_VERSION":    bdImageNet,
+	} {
+		if !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(version) {
+			t.Fatalf("deps.env %s = %q, want a v-prefixed module version", name, version)
+		}
+	}
+	for name, digest := range map[string]string{
+		"BD_IMAGE_GO_MOD_SHA256": bdImageGoModSHA,
+		"BD_IMAGE_GO_SUM_SHA256": bdImageGoSumSHA,
+	} {
+		if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
+			t.Fatalf("deps.env %s = %q, want a lowercase SHA-256", name, digest)
+		}
 	}
 
 	// Anchor roles, kept as distinct contracts so a promotion cannot quietly
@@ -109,6 +133,24 @@ func TestBDVersionPins(t *testing.T) {
 				t.Fatalf(".github/scripts/install-bd-archive.sh missing SHA pin %q; %s cannot install on the required path without it", want, release)
 			}
 		}
+	}
+
+	imageBuilder := readFile(t, root, ".github/scripts/build-bd-image.sh")
+	for _, pin := range []string{
+		"BD_IMAGE_SOURCE_REF",
+		"BD_IMAGE_X_CRYPTO_VERSION",
+		"BD_IMAGE_X_NET_VERSION",
+		"BD_IMAGE_GO_MOD_SHA256",
+		"BD_IMAGE_GO_SUM_SHA256",
+		"GOTOOLCHAIN",
+	} {
+		if !strings.Contains(imageBuilder, pin) {
+			t.Fatalf(".github/scripts/build-bd-image.sh does not enforce %s", pin)
+		}
+	}
+	containerScan := readFile(t, root, ".github/workflows/container-scan.yml")
+	if !strings.Contains(containerScan, ".github/scripts/build-bd-image.sh \"$bin_dir/bd\"") {
+		t.Fatal("container scan must build the pinned, security-fixed bd image binary")
 	}
 
 	// Every workflow that pins BD_VERSION must pin the same value as deps.env, so a
