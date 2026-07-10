@@ -202,7 +202,15 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: no city config found: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
+		// Hook invocations without a resolvable city cannot be attributed to a
+		// Gas City session. Stay silent instead of injecting the generic worker
+		// protocol into an unrelated provider conversation. Explicit/manual
+		// `gc prime` keeps the historical fallback below.
+		prompt := defaultPrimePrompt
+		if hookMode {
+			prompt = ""
+		}
+		writePrimePromptWithFormat(stdout, "", "", prompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
 	}
 	cfg, err := loadCityConfig(cityPath, stderr)
@@ -211,7 +219,11 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: loading city config: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
+		prompt := defaultPrimePrompt
+		if hookMode {
+			prompt = ""
+		}
+		writePrimePromptWithFormat(stdout, "", "", prompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
 	}
 	resolveRigPaths(cityPath, cfg.Rigs)
@@ -278,6 +290,17 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 		}
 		// Strict preconditions passed; now it's safe to update provider resume metadata.
 		runHookSideEffects()
+	}
+
+	if hookMode && !primeHookHasSessionContext(cityPath, len(resolvedAgents) > 0) {
+		// A user-level/global SessionStart hook can run in every Codex task.
+		// GC_MANAGED_SESSION_HOOK marks the hook file as GC-managed; it does
+		// not prove that the current conversation is a Gas City runtime
+		// session. Require runtime identity, an explicit configured runtime
+		// role, or a structurally managed agent workdir before emitting any
+		// role or generic worker prompt.
+		writePrimePromptWithFormat(stdout, "", "", "", true, hookFormat, false)
+		return 0
 	}
 
 	for _, a := range resolvedAgents {
@@ -443,6 +466,53 @@ func primeHookAgentCandidatesFromPath(path string) []string {
 		}
 	}
 	return nil
+}
+
+// primeHookHasSessionContext reports whether a hook invocation is attributable
+// to a Gas City-managed session. The managed-hook marker alone is deliberately
+// insufficient: user-level provider hooks may carry it into every conversation.
+// Runtime sessions receive both GC_SESSION_ID and GC_SESSION_NAME. The managed
+// .gc/agents workdir fallback preserves providers whose startup hook runs before
+// those environment variables are visible.
+func primeHookHasSessionContext(cityPath string, resolvedAgent bool) bool {
+	sessionID := strings.TrimSpace(os.Getenv("GC_SESSION_ID"))
+	if sessionID != "" && strings.TrimSpace(os.Getenv("GC_SESSION_NAME")) != "" {
+		return true
+	}
+	if sessionID != "" && strings.TrimSpace(cityPath) != "" {
+		if store, err := openCityStoreAt(cityPath); err == nil {
+			if bead, err := store.Get(sessionID); err == nil && session.IsSessionBeadOrRepairable(bead) {
+				return true
+			}
+		}
+	}
+	if !resolvedAgent {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("GC_AGENT")) != "" || strings.TrimSpace(os.Getenv("GC_TEMPLATE")) != "" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv(managedSessionHookEnv)) != "1" || strings.TrimSpace(cityPath) == "" {
+		return false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	cityAbs, err := filepath.Abs(cityPath)
+	if err != nil {
+		return false
+	}
+	cwdAbs, err := filepath.Abs(cwd)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(cityAbs), filepath.Clean(cwdAbs))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(filepath.Clean(rel), string(os.PathSeparator))
+	return len(parts) >= 3 && parts[0] == ".gc" && parts[1] == "agents"
 }
 
 func prependHookBeacon(cityName, agentName, prompt string) string {

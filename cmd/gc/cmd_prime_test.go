@@ -566,56 +566,76 @@ prompt_template = "prompts/worker.md"
 	}
 }
 
-func TestDoPrimeWithHookFormat_FormatsDefaultFallback(t *testing.T) {
+func TestDoPrimeWithHookFormat_UnboundHookIsSilent(t *testing.T) {
+	clearGCEnv(t)
 	t.Setenv("GC_CITY", filepath.Join(t.TempDir(), "missing-city"))
 	t.Setenv("GC_ALIAS", "")
 	t.Setenv("GC_AGENT", "")
 	t.Setenv("GC_SESSION_NAME", "")
+	t.Setenv("GC_SESSION_ID", "")
 	t.Setenv("GC_TEMPLATE", "")
+	t.Setenv(managedSessionHookEnv, "1")
+	t.Setenv("GC_HOOK_EVENT_NAME", "SessionStart")
+	withPrimeHookStdin(t)
 
 	var stdout, stderr bytes.Buffer
 	code := doPrimeWithHookFormat(nil, &stdout, &stderr, true, hookOutputFormatCodex, false)
 	if code != 0 {
 		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
 	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no context from unbound global hook", stdout.String())
+	}
+}
 
-	var payload struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("stdout is not hook JSON: %v\n%s", err, stdout.String())
-	}
-	if got, want := payload.HookSpecificOutput.HookEventName, "SessionStart"; got != want {
-		t.Fatalf("hookEventName = %q, want %q", got, want)
-	}
-	if !strings.Contains(payload.HookSpecificOutput.AdditionalContext, "# Gas City Agent") {
-		t.Fatalf("additionalContext = %q, want default prime prompt", payload.HookSpecificOutput.AdditionalContext)
+func TestDoPrimeManual_MissingCityKeepsDefaultFallback(t *testing.T) {
+	clearGCEnv(t)
+	t.Setenv("GC_CITY", filepath.Join(t.TempDir(), "missing-city"))
+
+	var stdout, stderr bytes.Buffer
+	code := doPrime(nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doPrime() = %d, want 0; stderr=%q", code, stderr.String())
 	}
 	for _, want := range []string{
+		"# Gas City Agent",
 		"You are an agent in a Gas City workspace. Claim available work and execute it.",
 		"`gc hook --claim --json`",
-		"`bd show <id>`",
-		"`bd close <id>`",
-		"Read the claimed bead and execute the work described in its title",
-		"Check for more work. Repeat until the queue is empty.",
 	} {
-		if !strings.Contains(payload.HookSpecificOutput.AdditionalContext, want) {
-			t.Fatalf("additionalContext missing %q:\n%s", want, payload.HookSpecificOutput.AdditionalContext)
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("manual prime stdout missing %q:\n%s", want, stdout.String())
 		}
 	}
-	for _, stale := range []string{
-		"managed runtime session",
-		"If $GC_SESSION_NAME is empty",
-		"bd update <id> --claim",
-		"gc runtime drain-ack",
-		"bd ready",
-	} {
-		if strings.Contains(payload.HookSpecificOutput.AdditionalContext, stale) {
-			t.Fatalf("additionalContext contains stale fallback protocol %q:\n%s", stale, payload.HookSpecificOutput.AdditionalContext)
-		}
+}
+
+func TestDoPrimeWithHookFormat_UnboundCityDoesNotInferWorker(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "gastown"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	unknownAgentDir := filepath.Join(cityDir, ".gc", "agents", "worker")
+	if err := os.MkdirAll(unknownAgentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(unknown agent dir): %v", err)
+	}
+	t.Chdir(unknownAgentDir)
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv(managedSessionHookEnv, "1")
+	t.Setenv("GC_HOOK_EVENT_NAME", "SessionStart")
+	withPrimeHookStdin(t)
+
+	var stdout, stderr bytes.Buffer
+	code := doPrimeWithHookFormat(nil, &stdout, &stderr, true, hookOutputFormatCodex, false)
+	if code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no generic worker context without session identity", stdout.String())
 	}
 }
 
@@ -729,6 +749,7 @@ func TestDoPrimeWithHook_CodexJSONFormatInfersAgentFromWorkDir(t *testing.T) {
 			clearInheritedCityRoutingEnv(t)
 			disableManagedDoltRecoveryForTest(t)
 			t.Setenv("GC_TEMPLATE", "")
+			t.Setenv(managedSessionHookEnv, "1")
 			t.Setenv("GC_HOOK_EVENT_NAME", "SessionStart")
 			withPrimeHookStdin(t)
 
