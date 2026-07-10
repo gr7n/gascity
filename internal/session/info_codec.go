@@ -170,6 +170,7 @@ var infoKeyCodec = []infoKeySpec{
 	{"session_id_flag", func(i *Info, v string) { i.SessionIDFlag = v }},
 	{"template_overrides", func(i *Info, v string) { i.TemplateOverrides = v }},
 	{"provider_kind", func(i *Info, v string) { i.ProviderKind = v }},
+	{"builtin_ancestor", func(i *Info, v string) { i.BuiltinAncestor = v }},
 
 	// wake_attempts: int + raw mirror. The total form (explicit = 0 on parse
 	// failure) matches ApplyPatch and, on a fresh Info, agrees with the old

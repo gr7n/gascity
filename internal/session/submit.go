@@ -306,13 +306,24 @@ func (m *Manager) waitForInterruptBoundaryLocked(ctx context.Context, b beads.Be
 // etc.) consume this helper so wrapped custom aliases inherit the
 // correct family behavior without every call site re-deriving it.
 func ProviderFamilyFromMetadata(meta map[string]string, fallback string) string {
-	if ancestor := strings.TrimSpace(meta["builtin_ancestor"]); ancestor != "" {
+	return ProviderFamilyFromInfo(Info{
+		BuiltinAncestor: meta["builtin_ancestor"],
+		ProviderKind:    meta["provider_kind"],
+		Provider:        meta["provider"],
+	}, fallback)
+}
+
+// ProviderFamilyFromInfo is the typed-session form of
+// ProviderFamilyFromMetadata. It preserves the same preference order while
+// allowing session.Info consumers to stay behind the front-door projection.
+func ProviderFamilyFromInfo(info Info, fallback string) string {
+	if ancestor := strings.TrimSpace(info.BuiltinAncestor); ancestor != "" {
 		return sessionlog.ProviderFamily(ancestor)
 	}
-	if kind := strings.TrimSpace(meta["provider_kind"]); kind != "" {
+	if kind := strings.TrimSpace(info.ProviderKind); kind != "" {
 		return sessionlog.ProviderFamily(kind)
 	}
-	if provider := strings.TrimSpace(meta["provider"]); provider != "" {
+	if provider := strings.TrimSpace(info.Provider); provider != "" {
 		return sessionlog.ProviderFamily(provider)
 	}
 	return sessionlog.ProviderFamily(fallback)

@@ -294,27 +294,26 @@ func registerHybridRemoteRoutes(sp runtime.Provider, snapshot *sessionBeadSnapsh
 		return
 	}
 	match := hybridRemoteMatcher(pattern)
-	for _, bead := range snapshot.Open() {
-		sessionName := strings.TrimSpace(bead.Metadata["session_name"])
-		if sessionName == "" || !beadMatchesHybridRemoteRoute(bead, match) {
+	for _, info := range snapshot.OpenInfos() {
+		sessionName := strings.TrimSpace(info.SessionNameMetadata)
+		if sessionName == "" || !infoMatchesHybridRemoteRoute(info, match) {
 			continue
 		}
 		router.RouteRemote(sessionName)
 	}
 }
 
-func beadMatchesHybridRemoteRoute(bead beads.Bead, match func(string) bool) bool {
-	meta := bead.Metadata
+func infoMatchesHybridRemoteRoute(info session.Info, match func(string) bool) bool {
 	for _, candidate := range []string{
-		meta["session_name"],
-		meta["template"],
-		meta["provider"],
-		session.ProviderFamilyFromMetadata(meta, ""),
-		meta["provider_kind"],
-		meta["builtin_ancestor"],
-		meta["agent_name"],
-		meta["configured_named_identity"],
-		meta["common_name"],
+		info.SessionNameMetadata,
+		info.Template,
+		info.Provider,
+		session.ProviderFamilyFromInfo(info, ""),
+		info.ProviderKind,
+		info.BuiltinAncestor,
+		info.AgentName,
+		info.ConfiguredNamedIdentity,
+		info.CommonName,
 	} {
 		if match(strings.TrimSpace(candidate)) {
 			return true

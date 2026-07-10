@@ -374,6 +374,9 @@ type Info struct {
 	// raw value. Additive, internal-only (absent from the HTTP wire). Session-class
 	// periphery front-door migration.
 	ProviderKind string // provider_kind (raw)
+	// BuiltinAncestor is the RAW builtin_ancestor metadata used to preserve a
+	// wrapped provider's canonical family through typed session projections.
+	BuiltinAncestor string // builtin_ancestor (raw)
 	// PromptVersion is the human-readable version from prompt template
 	// frontmatter. PromptSHA identifies the rendered template projection, not
 	// any runtime delivery envelope added afterward. Both are empty for legacy

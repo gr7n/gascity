@@ -360,7 +360,7 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 			if rendered.Text != "" {
 				setPrimePromptReceipt(receiptOut, rendered.Version, rendered.SHA)
 				if !suppressStartupPromptForAgent(&a) {
-					persistPrimePromptReceipt(cityPath, hookMode, session.PromptReceipt{Version: rendered.Version, SHA: rendered.SHA})
+					persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{Version: rendered.Version, SHA: rendered.SHA})
 				}
 				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, rendered.Text, hookMode, hookFormat, suppressHookPrompt)
 				return 0
@@ -388,7 +388,7 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 					sha := promptmeta.SHA(string(content))
 					setPrimePromptReceipt(receiptOut, "", sha)
 					if !suppressHookPrompt {
-						persistPrimePromptReceipt(cityPath, hookMode, session.PromptReceipt{SHA: sha})
+						persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{SHA: sha})
 					}
 					writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt)
 					return 0
@@ -404,7 +404,7 @@ func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, ho
 	defaultSHA := promptmeta.SHA(defaultPrimePrompt)
 	setPrimePromptReceipt(receiptOut, "", defaultSHA)
 	if !suppressHookPrompt {
-		persistPrimePromptReceipt(cityPath, hookMode, session.PromptReceipt{SHA: defaultSHA})
+		persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{SHA: defaultSHA})
 	}
 	writePrimePromptWithFormat(stdout, cityName, agentName, defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
 	return 0
@@ -423,7 +423,7 @@ func setPrimePromptReceipt(out *session.PromptReceipt, version, sha string) {
 // persist the same receipt in their atomic start commit. Missing/legacy hook
 // identity is an honest no-observation and stays silent so a user-level global
 // hook cannot make unrelated conversations noisy.
-func persistPrimePromptReceipt(cityPath string, hookMode bool, receipt session.PromptReceipt) {
+func persistPrimePromptReceipt(cityPath string, cfg *config.City, hookMode bool, receipt session.PromptReceipt) {
 	if !hookMode || strings.TrimSpace(cityPath) == "" {
 		return
 	}
@@ -439,7 +439,7 @@ func persistPrimePromptReceipt(cityPath string, hookMode bool, receipt session.P
 	if err != nil || !session.IsSessionBeadOrRepairable(bead) {
 		return
 	}
-	_ = sessionFrontDoor(store).RecordPromptReceipt(sessionID, receipt)
+	_ = cliSessionFrontDoor(store, cfg, cityPath).RecordPromptReceipt(sessionID, receipt)
 }
 
 func primeAgentCandidates(agentName string, hookMode bool, cityPath string) []string {

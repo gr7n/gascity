@@ -126,6 +126,7 @@ func infoFromPersistedBeadFrozen(b beads.Bead) Info {
 		TemplateOverrides:              b.Metadata["template_overrides"],
 		WakeAttemptsMetadata:           b.Metadata["wake_attempts"],
 		ProviderKind:                   b.Metadata["provider_kind"],
+		BuiltinAncestor:                b.Metadata["builtin_ancestor"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n
