@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -69,45 +70,47 @@ func TestStart_RoutesToRemote(t *testing.T) {
 	}
 }
 
-func TestStart_RoutesToRemoteFromStartupConfig(t *testing.T) {
+func TestStart_RoutesRandomizedRuntimeNamesFromDurableIdentity(t *testing.T) {
 	local, remote := runtime.NewFake(), runtime.NewFake()
 	h := NewWithStartMatcher(local, remote, isRemote, func(name string, cfg runtime.Config) bool {
-		return strings.Contains(name, "polecat") || cfg.Env["GC_TEMPLATE"] == "k8s-canary"
+		return isRemote(name) || cfg.Env["GC_TEMPLATE"] == "rig/web-worker"
 	})
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic routing fixtures, not security.
 
-	const name = "s-gr-7sgzx"
-	if err := h.Start(context.Background(), name, runtime.Config{
-		Env: map[string]string{"GC_TEMPLATE": "k8s-canary"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if local.IsRunning(name) {
-		t.Error("local should not have session")
-	}
-	if !remote.IsRunning(name) {
-		t.Error("expected remote to have session")
-	}
-
-	if _, err := h.Peek(name, 20); err != nil {
-		t.Fatalf("Peek: %v", err)
-	}
-	if local.CountCalls("Peek", name) != 0 {
-		t.Fatal("Peek routed to local for config-routed remote session")
-	}
-	if remote.CountCalls("Peek", name) != 1 {
-		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", name))
+	for i := 0; i < 32; i++ {
+		name := fmt.Sprintf("s-gr-%016x", rng.Uint64())
+		if isRemote(name) {
+			t.Fatalf("fixture runtime name %q unexpectedly matched the name router", name)
+		}
+		if err := h.Start(context.Background(), name, runtime.Config{
+			Env: map[string]string{"GC_TEMPLATE": "rig/web-worker"},
+		}); err != nil {
+			t.Fatalf("Start(%q): %v", name, err)
+		}
+		if !remote.IsRunning(name) || local.IsRunning(name) {
+			t.Fatalf("runtime %q did not start exclusively on remote", name)
+		}
+		if _, err := h.Peek(name, 20); err != nil {
+			t.Fatalf("Peek(%q): %v", name, err)
+		}
+		if got := local.CountCalls("Peek", name); got != 0 {
+			t.Fatalf("local Peek(%q) calls = %d, want 0", name, got)
+		}
+		if got := remote.CountCalls("Peek", name); got != 1 {
+			t.Fatalf("remote Peek(%q) calls = %d, want 1", name, got)
+		}
 	}
 }
 
 func TestStop_ForgetsConfigRoutedRemoteName(t *testing.T) {
 	local, remote := runtime.NewFake(), runtime.NewFake()
 	h := NewWithStartMatcher(local, remote, isRemote, func(_ string, cfg runtime.Config) bool {
-		return cfg.Env["GC_TEMPLATE"] == "k8s-canary"
+		return cfg.Env["GC_TEMPLATE"] == "rig/web-worker"
 	})
 
 	const name = "s-gr-7sgzx"
 	if err := h.Start(context.Background(), name, runtime.Config{
-		Env: map[string]string{"GC_TEMPLATE": "k8s-canary"},
+		Env: map[string]string{"GC_TEMPLATE": "rig/web-worker"},
 	}); err != nil {
 		t.Fatal(err)
 	}

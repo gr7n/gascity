@@ -801,7 +801,7 @@ SessionConfig holds session provider settings.
 | `startup_timeout` | string |  | `60s` | StartupTimeout is how long to wait for each agent's Start() call before treating it as failed. Duration string (e.g., "60s", "2m"). Defaults to "60s". |
 | `progress_stall_timeout` | string |  |  | ProgressStallTimeout, when set, enables progress-aware session recycling: a desired, alive, claim-less session on a healthy provider whose last provider-reported activity is older than this duration is restarted fresh. Such a session has likely parked (e.g. its turn ended on a provider auth error) and will not self-recover. Set this above the longest legitimate alive-idle period for the city; values below 5m are clamped to 5m. Duration string (e.g. "30m"). Unset/zero disables it. |
 | `socket` | string |  |  | Socket specifies the tmux socket name for per-city isolation. When set, all tmux commands use "tmux -L &lt;socket&gt;" to connect to a dedicated server. When empty, defaults to the city name (workspace.name) — giving every city its own tmux server automatically. Set explicitly to override. |
-| `remote_match` | string |  |  | RemoteMatch is a substring pattern for the hybrid provider to route sessions to the remote (K8s) backend. Sessions whose names contain this pattern go to K8s; all others stay local (tmux). Overridden by the GC_HYBRID_REMOTE_MATCH env var if set. |
+| `remote_match` | string |  |  | RemoteMatch is a comma- or whitespace-separated list of patterns for the hybrid provider to route sessions to the remote (K8s) backend. A session routes remotely when its runtime name or durable startup/session identity contains a listed pattern; all others stay local (tmux). Overridden by the GC_HYBRID_REMOTE_MATCH env var if set. |
 
 ## SessionSleepConfig
 

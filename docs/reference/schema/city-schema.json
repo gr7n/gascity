@@ -2761,7 +2761,7 @@
         },
         "remote_match": {
           "type": "string",
-          "description": "RemoteMatch is a substring pattern for the hybrid provider to route\nsessions to the remote (K8s) backend. Sessions whose names contain\nthis pattern go to K8s; all others stay local (tmux).\nOverridden by the GC_HYBRID_REMOTE_MATCH env var if set."
+          "description": "RemoteMatch is a comma- or whitespace-separated list of patterns for the\nhybrid provider to route sessions to the remote (K8s) backend. A session\nroutes remotely when its runtime name or durable startup/session identity\ncontains a listed pattern; all others stay local (tmux).\nOverridden by the GC_HYBRID_REMOTE_MATCH env var if set."
         }
       },
       "additionalProperties": false,

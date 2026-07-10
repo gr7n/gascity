@@ -1574,9 +1574,10 @@ type SessionConfig struct {
 	// (workspace.name) — giving every city its own tmux server
 	// automatically. Set explicitly to override.
 	Socket string `toml:"socket,omitempty"`
-	// RemoteMatch is a substring pattern for the hybrid provider to route
-	// sessions to the remote (K8s) backend. Sessions whose names contain
-	// this pattern go to K8s; all others stay local (tmux).
+	// RemoteMatch is a comma- or whitespace-separated list of patterns for the
+	// hybrid provider to route sessions to the remote (K8s) backend. A session
+	// routes remotely when its runtime name or durable startup/session identity
+	// contains a listed pattern; all others stay local (tmux).
 	// Overridden by the GC_HYBRID_REMOTE_MATCH env var if set.
 	RemoteMatch string `toml:"remote_match,omitempty"`
 }

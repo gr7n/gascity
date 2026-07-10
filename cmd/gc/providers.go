@@ -216,20 +216,17 @@ func loadProviderSessionSnapshot(ctx sessionProviderContext) *sessionBeadSnapsho
 	}
 	store, err := openSessionProviderStore(ctx.cityPath)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
-	// This snapshot reads only session-class beads (the gc:session label) to
-	// drive transport/ACP routing decisions, so route through the session
-	// coordination-class store for relocation-safety. openSessionProviderStore
-	// opens its own generic store (independent of the caller), so routing here
-	// closes the gap on both the CLI and controller provider-construction paths.
-	// Identity to the opened store today (resolveClassStore is pure identity).
+	// Route the session-class read through the relocation-aware store, then use
+	// the shared type+label snapshot loader so repairable session beads are not
+	// lost merely because their gc:session label is missing.
 	sessStore := cliSessionStore(store, ctx.cfg, ctx.cityPath)
-	all, err := sessStore.ListByLabel(sessionBeadLabel, 0)
+	snapshot, err := loadSessionBeadSnapshot(sessStore)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
-	return newSessionBeadSnapshot(all)
+	return snapshot
 }
 
 func newSessionProviderFromContext(ctx sessionProviderContext, sessionBeads *sessionBeadSnapshot) runtime.Provider {
@@ -259,6 +256,11 @@ func resolveSessionTransportProvider(ctx sessionProviderContext, sessionBeads *s
 	if err != nil {
 		return nil, err
 	}
+	// Hybrid session names can be randomized and therefore cannot be routed
+	// reliably by substring after startup. Seed the hybrid provider from the
+	// durable identities persisted on open session beads before an optional ACP
+	// transport wrapper obscures the concrete provider type.
+	registerHybridRemoteRoutes(base, sessionBeads, hybridRemotePattern(ctx.sc))
 	// If the city-level provider is not ACP but some agents need ACP, wrap in an
 	// auto provider that routes per-session.
 	// NOTE: agents comes from loadCityConfig which applies pack overrides, so the
@@ -284,6 +286,41 @@ func resolveSessionTransportProvider(ctx sessionProviderContext, sessionBeads *s
 		return autoSP, nil
 	}
 	return base, nil
+}
+
+func registerHybridRemoteRoutes(sp runtime.Provider, snapshot *sessionBeadSnapshot, pattern string) {
+	router, ok := sp.(interface{ RouteRemote(string) })
+	if !ok || snapshot == nil {
+		return
+	}
+	match := hybridRemoteMatcher(pattern)
+	for _, bead := range snapshot.Open() {
+		sessionName := strings.TrimSpace(bead.Metadata["session_name"])
+		if sessionName == "" || !beadMatchesHybridRemoteRoute(bead, match) {
+			continue
+		}
+		router.RouteRemote(sessionName)
+	}
+}
+
+func beadMatchesHybridRemoteRoute(bead beads.Bead, match func(string) bool) bool {
+	meta := bead.Metadata
+	for _, candidate := range []string{
+		meta["session_name"],
+		meta["template"],
+		meta["provider"],
+		session.ProviderFamilyFromMetadata(meta, ""),
+		meta["provider_kind"],
+		meta["builtin_ancestor"],
+		meta["agent_name"],
+		meta["configured_named_identity"],
+		meta["common_name"],
+	} {
+		if match(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentSessionCreateTransport(cfg *config.City, agentCfg config.Agent) string {
@@ -1117,28 +1154,50 @@ func newHybridProvider(sc config.SessionConfig, cityName, cityPath string) (runt
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: k8s backend: %w", err)
 	}
+	pattern := hybridRemotePattern(sc)
+	return sessionhybrid.NewWithStartMatcher(
+		local,
+		remote,
+		hybridRemoteMatcher(pattern),
+		hybridRemoteStartMatcher(pattern),
+	), nil
+}
+
+func hybridRemotePattern(sc config.SessionConfig) string {
 	pattern := sc.RemoteMatch
 	if v := os.Getenv("GC_HYBRID_REMOTE_MATCH"); v != "" {
 		pattern = v
 	}
-	return sessionhybrid.New(local, remote, hybridRemoteMatcher(pattern)), nil
+	return pattern
 }
 
+// hybridRemoteMatcher treats remote_match as a comma/whitespace separated
+// list. Each non-empty entry keeps the historical substring semantics so a
+// durable template such as rig/web-worker also matches a qualified instance.
 func hybridRemoteMatcher(pattern string) func(string) bool {
-	parts := strings.Split(pattern, ",")
-	fragments := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			fragments = append(fragments, part)
-		}
-	}
+	fragments := strings.Fields(strings.ReplaceAll(pattern, ",", " "))
 	return func(name string) bool {
+		name = strings.TrimSpace(name)
 		if name == "" {
 			return false
 		}
 		for _, fragment := range fragments {
 			if name == fragment || strings.Contains(name, fragment) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func hybridRemoteStartMatcher(pattern string) func(string, runtime.Config) bool {
+	match := hybridRemoteMatcher(pattern)
+	return func(name string, cfg runtime.Config) bool {
+		if match(name) {
+			return true
+		}
+		for _, key := range []string{"GC_TEMPLATE", "GC_AGENT", "GC_ALIAS", "GC_SESSION_NAME"} {
+			if match(strings.TrimSpace(cfg.Env[key])) {
 				return true
 			}
 		}
