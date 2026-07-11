@@ -365,18 +365,13 @@ func (cs *controllerState) openRigStore(provider, rigName, rigPath, prefix strin
 		}
 		return wrapStoreWithBeadPolicies(store, cfg)
 	}
-	if provider == "file" {
-		store, err := openCompatibleFileStore(scopeRoot, cs.cityPath)
-		if err != nil {
-			return unavailableStore{err: fmt.Errorf("open file rig store %s: %w", scopeRoot, err)}
-		}
-		return wrapStoreWithBeadPolicies(store, cfg)
-	}
 	result, err := controllerStateOpenRigStoreAtForCity(context.Background(), beads.StoreOpenOptions{
-		ScopeRoot:        scopeRoot,
-		CityPath:         cs.cityPath,
-		Provider:         provider,
-		PreflightChecker: newBeadsPreflightChecker(cs.cityPath, provider),
+		ScopeRoot:                   scopeRoot,
+		CityPath:                    cs.cityPath,
+		Provider:                    provider,
+		PreflightChecker:            newBeadsPreflightChecker(cs.cityPath, provider),
+		ConditionalWrites:           cs.rolloutFlags.BeadsConditionalWrites(),
+		OnConditionalWritesDegraded: conditionalWritesDegradedRecorder(cs.eventProv, cs.rolloutFlags, "rig/"+rigName),
 		OpenFileStore: func() (beads.Store, error) {
 			store, err := openCompatibleFileStore(scopeRoot, cs.cityPath)
 			if err != nil {

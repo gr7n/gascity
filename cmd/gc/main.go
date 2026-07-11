@@ -1201,11 +1201,17 @@ func openStoreResultAtForCity(storePath, cityPath string) (beads.StoreOpenResult
 		return beads.StoreOpenResult{Store: wrapStoreWithBeadPolicies(store, cfg), Diagnostic: beads.ExecStoreDiagnostic()}, err
 	}
 	result, err := beads.OpenStoreAtForCity(context.Background(), beads.StoreOpenOptions{
-		ScopeRoot:        scopeRoot,
-		CityPath:         runtimeCityPath,
-		Provider:         provider,
-		PreflightChecker: newBeadsPreflightChecker(runtimeCityPath, provider),
-		Logger:           slog.Default(),
+		ScopeRoot:         scopeRoot,
+		CityPath:          runtimeCityPath,
+		Provider:          provider,
+		PreflightChecker:  newBeadsPreflightChecker(runtimeCityPath, provider),
+		Logger:            slog.Default(),
+		ConditionalWrites: resolvedConditionalWritesMode(cfg),
+		OnConditionalWritesDegraded: func() func(beads.ConditionalWritesDegrade) {
+			flags, resolved := resolvedConditionalWritesFlags(cfg)
+			return lazyConditionalWritesDegradeEmitter(
+				runtimeCityPath, conditionalWritesStoreID(scopeRoot, runtimeCityPath), flags, resolved)
+		}(),
 		OpenFileStore: func() (beads.Store, error) {
 			return openCompatibleFileStore(scopeRoot, runtimeCityPath)
 		},
