@@ -25,6 +25,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     git \
     libnghttp2-14 \
+    libssh2-1t64 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY .github/requirements/mcp-agent-mail.txt /tmp/requirements-mcp-agent-mail.txt
