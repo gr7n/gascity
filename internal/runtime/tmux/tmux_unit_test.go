@@ -38,6 +38,7 @@ func TestProviderEnvFamily(t *testing.T) {
 		{"claude-eco", "claude"},
 		{"copilot", "copilot"},
 		{"grok", "grok"},
+		{"mimocode", "mimocode"},
 		{"my-pi/tmux", "pi"},
 		{"antigravity", "antigravity"},
 		{"opencode", "opencode"},

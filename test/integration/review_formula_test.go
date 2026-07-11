@@ -314,7 +314,7 @@ on_exhausted = "hard_fail"
 
 	_, workflowID := startReviewWorkflow(t, cityDir, "mol-retry-recovery-smoke", map[string]string{})
 
-	workflow := waitForBeadClosed(t, cityDir, workflowID, 4*time.Minute)
+	workflow := waitForBeadClosed(t, cityDir, workflowID, reviewWorkflowTimeout)
 	if got := metaValue(workflow, "gc.outcome"); got != "pass" {
 		dumpWorkflowState(t, cityDir, workflowID)
 		t.Fatalf("workflow outcome = %q, want pass", got)

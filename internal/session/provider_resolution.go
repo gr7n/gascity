@@ -1,6 +1,10 @@
 package session
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/gastownhall/gascity/internal/config"
+)
 
 // SessionKindMetadataKey is the persisted discriminator for direct provider
 // versus configured agent sessions. It is projected onto Info.SessionKind so
@@ -31,4 +35,26 @@ func UseAgentTemplateForProviderResolution(sessionKind string, metadata map[stri
 		return false
 	}
 	return templateFound
+}
+
+// ConcreteAgentIdentityUsesTemplate reports whether AgentName is a concrete
+// identity minted from the currently resolved multi-session template rather
+// than the name of a configured agent. API-created sessions preserve that
+// binding either as their controller-managed alias or as the reconciler's
+// canonical identity record. Requiring one of those durable equalities keeps a
+// removed agent fail-closed instead of rebinding it through an unrelated
+// template that happens to remain configured.
+func ConcreteAgentIdentityUsesTemplate(info Info, agent *config.Agent) bool {
+	if agent == nil || !agent.SupportsMultipleSessions() {
+		return false
+	}
+	identity := strings.TrimSpace(info.AgentName)
+	if identity == "" {
+		return false
+	}
+	if alias := strings.TrimSpace(info.Alias); alias != "" && alias == identity {
+		return true
+	}
+	canonical := info.CanonicalIdentity()
+	return canonical.Present && strings.TrimSpace(canonical.QualifiedInstanceName) == identity
 }

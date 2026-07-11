@@ -516,6 +516,53 @@ func TestEnsureSessionAcceptsPromptRejectsRemovedAgentBackedSession(t *testing.T
 	}
 }
 
+func TestEnsureSessionAcceptsPromptResolvesConcreteAliasThroughMultiSessionTemplate(t *testing.T) {
+	rejectsPrompt := false
+	for _, tc := range []struct {
+		name          string
+		acceptsPrompt *bool
+		wantDetail    string
+	}{
+		{name: "interactive template"},
+		{name: "prompt-disabled template", acceptsPrompt: &rejectsPrompt, wantDetail: `agent "friendly" has accepts_prompt=false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.City{Agents: []config.Agent{{
+				Name:          "friendly",
+				AcceptsPrompt: tc.acceptsPrompt,
+			}}}
+			store := beads.NewMemStore()
+			identity := "rw-lifecycle-alias"
+			bead, err := store.Create(beads.Bead{
+				Type:   session.BeadType,
+				Title:  "Concrete alias",
+				Labels: []string{session.LabelSession},
+				Metadata: map[string]string{
+					"template":       "friendly",
+					"agent_name":     identity,
+					"alias":          identity,
+					"provider":       "router",
+					"session_name":   "router-agent-session",
+					"session_origin": "ephemeral",
+				},
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			err = ensureSessionAcceptsPrompt(cfg, store, bead.ID)
+			if tc.wantDetail == "" {
+				if err != nil {
+					t.Fatalf("ensureSessionAcceptsPrompt rejected concrete alias binding: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantDetail) {
+				t.Fatalf("ensureSessionAcceptsPrompt error = %v, want %q", err, tc.wantDetail)
+			}
+		})
+	}
+}
+
 func TestCmdSessionNew_PoolTemplateUsesAliasBackedWorkDirIdentity(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_SESSION", "fake")
