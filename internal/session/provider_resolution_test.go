@@ -1,6 +1,10 @@
 package session
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gastownhall/gascity/internal/config"
+)
 
 func TestUseAgentTemplateForProviderResolution(t *testing.T) {
 	tests := []struct {
@@ -101,6 +105,66 @@ func TestUseAgentTemplateForProviderResolution(t *testing.T) {
 			got := UseAgentTemplateForProviderResolution(tt.kind, tt.metadata, tt.persistedProvider, tt.templateProvider, tt.templateFound)
 			if got != tt.want {
 				t.Fatalf("UseAgentTemplateForProviderResolution() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConcreteAgentIdentityUsesTemplate(t *testing.T) {
+	one := 1
+	tests := []struct {
+		name  string
+		info  Info
+		agent *config.Agent
+		want  bool
+	}{
+		{
+			name:  "controller-managed alias binds concrete identity",
+			info:  Info{AgentName: "rig/rw-lifecycle", Alias: "rig/rw-lifecycle"},
+			agent: &config.Agent{Name: "worker", Dir: "rig"},
+			want:  true,
+		},
+		{
+			name: "canonical record binds concrete identity",
+			info: Info{
+				AgentName:                     "rig/worker-7",
+				CanonicalInstanceNameMetadata: "rig/worker-7",
+			},
+			agent: &config.Agent{Name: "worker", Dir: "rig"},
+			want:  true,
+		},
+		{
+			name:  "different alias does not bind",
+			info:  Info{AgentName: "removed-router", Alias: "friendly-session"},
+			agent: &config.Agent{Name: "friendly"},
+		},
+		{
+			name: "different canonical identity does not bind",
+			info: Info{
+				AgentName:                     "removed-router",
+				CanonicalInstanceNameMetadata: "friendly-1",
+			},
+			agent: &config.Agent{Name: "friendly"},
+		},
+		{
+			name:  "single-session template cannot mint concrete identities",
+			info:  Info{AgentName: "friendly", Alias: "friendly"},
+			agent: &config.Agent{Name: "friendly", MaxActiveSessions: &one},
+		},
+		{
+			name:  "missing agent name",
+			info:  Info{Alias: "friendly"},
+			agent: &config.Agent{Name: "friendly"},
+		},
+		{
+			name: "missing template",
+			info: Info{AgentName: "friendly", Alias: "friendly"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ConcreteAgentIdentityUsesTemplate(tt.info, tt.agent); got != tt.want {
+				t.Fatalf("ConcreteAgentIdentityUsesTemplate() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -171,6 +171,9 @@ func promptCapabilityAgentForSession(info session.Info, metadata map[string]stri
 		if agent, ok := findAgent(cfg, identity); ok {
 			return &agent, true
 		}
+		if templateFound && session.ConcreteAgentIdentityUsesTemplate(info, &templateAgent) {
+			return &templateAgent, true
+		}
 		return nil, true
 	}
 	// Template is authoritative for legacy agent sessions that predate

@@ -2526,6 +2526,9 @@ func ensureSessionAcceptsPrompt(cfg *config.City, store beads.Store, sessionID s
 	var agent *config.Agent
 	if identity := strings.TrimSpace(info.AgentName); identity != "" {
 		agent = findAgentByTemplate(cfg, identity)
+		if agent == nil && templateAgent != nil && session.ConcreteAgentIdentityUsesTemplate(info, templateAgent) {
+			agent = templateAgent
+		}
 	} else if identity := strings.TrimSpace(info.Template); identity != "" {
 		// Template is authoritative for legacy agent sessions lacking the newer
 		// agent_name marker; do not rebound a removed template through alias.

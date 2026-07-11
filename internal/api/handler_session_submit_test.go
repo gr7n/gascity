@@ -84,6 +84,82 @@ func TestHandleSessionSubmitRejectsAcceptsPromptFalse(t *testing.T) {
 	}
 }
 
+func TestConcreteAliasBoundMultiSessionAgentRetainsPromptCapability(t *testing.T) {
+	rejectsPrompt := false
+	for _, tc := range []struct {
+		name          string
+		acceptsPrompt *bool
+		wantAccepted  bool
+	}{
+		{name: "interactive template", wantAccepted: true},
+		{name: "prompt-disabled template", acceptsPrompt: &rejectsPrompt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newSessionFakeState(t)
+			fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{
+				Name:          "friendly",
+				Provider:      "router",
+				StartCommand:  "echo friendly",
+				AcceptsPrompt: tc.acceptsPrompt,
+			})
+			h := newTestCityHandler(t, fs)
+			identity := "rw-lifecycle-alias"
+			mgr := session.NewManagerWithOptions(fs.cityBeadStore, fs.sp)
+			info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+				Alias:    identity,
+				Template: "friendly",
+				Title:    "Concrete alias",
+				Command:  "router",
+				WorkDir:  t.TempDir(),
+				Provider: "router",
+				Hints:    runtime.Config{},
+				ExtraMeta: map[string]string{
+					"agent_name":     identity,
+					"session_origin": "ephemeral",
+					"pool_managed":   "true",
+					"pool_slot":      "1",
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+
+			getRec := httptest.NewRecorder()
+			getReq := httptest.NewRequest("GET", cityURL(fs, "/session/")+info.ID, nil)
+			h.ServeHTTP(getRec, getReq)
+			if getRec.Code != http.StatusOK {
+				t.Fatalf("get status = %d, want %d; body: %s", getRec.Code, http.StatusOK, getRec.Body.String())
+			}
+			var resp sessionResponse
+			if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			gotAccepted := resp.SubmissionCapabilities.SupportsFollowUp || resp.SubmissionCapabilities.SupportsInterruptNow
+			if gotAccepted != tc.wantAccepted {
+				t.Fatalf("submission_capabilities = %+v, want accepted=%v", resp.SubmissionCapabilities, tc.wantAccepted)
+			}
+
+			submitReq := newPostRequest(cityURL(fs, "/session/")+info.ID+"/submit", strings.NewReader(`{"message":"hello"}`))
+			submitRec := httptest.NewRecorder()
+			h.ServeHTTP(submitRec, submitReq)
+			if submitRec.Code != http.StatusAccepted {
+				t.Fatalf("submit status = %d, want %d; body: %s", submitRec.Code, http.StatusAccepted, submitRec.Body.String())
+			}
+			accepted := decodeAsyncAccepted(t, submitRec.Body)
+			success, failure := waitForSessionSubmitResult(t, fs.eventProv, accepted.RequestID)
+			if tc.wantAccepted {
+				if success == nil {
+					t.Fatalf("concrete alias submit failed: %+v", failure)
+				}
+				return
+			}
+			if success != nil || failure == nil || !strings.Contains(failure.ErrorMessage, `agent "friendly" has accepts_prompt=false`) {
+				t.Fatalf("success=%+v failure=%+v, want prompt-disabled template rejection", success, failure)
+			}
+		})
+	}
+}
+
 func TestHandleSessionSubmitRejectsLegacyDeterministicDispatcher(t *testing.T) {
 	fs := newSessionFakeState(t)
 	fs.cfg.Agents = append(fs.cfg.Agents, config.Agent{
