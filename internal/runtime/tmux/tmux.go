@@ -1940,6 +1940,7 @@ var knownProviderEnvFamilies = map[string]bool{
 	"gemini":      true,
 	"grok":        true,
 	"kimi":        true,
+	"mimocode":    true,
 	"opencode":    true,
 	"pi":          true,
 }
