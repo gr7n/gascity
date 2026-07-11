@@ -11,6 +11,8 @@ on:
       - ".github/requirements/mcp-agent-mail.overrides.txt"
       - ".github/requirements/mcp-agent-mail.txt"
       - ".github/scripts/build-bd-image.sh"
+      - ".github/scripts/build-go-image-inputs.sh"
+      - ".github/scripts/build-image-go-tools.sh"
       - ".github/scripts/install-*.sh"
       - ".github/workflows/container-scan.yml"
       - "contrib/beads-scripts/gc-beads-br"
@@ -36,6 +38,8 @@ on:
       - ".github/requirements/mcp-agent-mail.overrides.txt"
       - ".github/requirements/mcp-agent-mail.txt"
       - ".github/scripts/build-bd-image.sh"
+      - ".github/scripts/build-go-image-inputs.sh"
+      - ".github/scripts/build-image-go-tools.sh"
       - ".github/scripts/install-*.sh"
       - ".github/workflows/container-scan.yml"
       - "contrib/beads-scripts/gc-beads-br"
@@ -181,24 +185,45 @@ jobs:
           . ./deps.env
           bin_dir="${RUNNER_TEMP}/gascity-container-scan-bin"
           mkdir -p "$bin_dir"
-          .github/scripts/build-bd-image.sh "$bin_dir/bd"
+          docker run --rm --pull=always \
+            --platform linux/amd64 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/home \
+            --env XDG_CACHE_HOME=/tmp/xdg-cache \
+            --env GOCACHE=/tmp/go-build \
+            --env GOMODCACHE=/tmp/go-mod \
+            --env GOPATH=/tmp/go \
+            --volume "$PWD:/src:ro" \
+            --volume "$bin_dir:/out" \
+            --workdir /src \
+            "$IMAGE_GO_BUILDER" \
+            bash .github/scripts/build-go-image-inputs.sh /out
           BR_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-br-archive.sh "$BR_VERSION"
           go build -o gc ./cmd/gc
           cp -f "$bin_dir/bd" bd
           cp -f "$bin_dir/br" br
+          mkdir -p image-tools
+          install -m 0755 "$bin_dir/image-tools/gh" image-tools/gh
+          install -m 0755 "$bin_dir/image-tools/dolt" image-tools/dolt
+          install -m 0755 "$bin_dir/image-tools/kubectl" image-tools/kubectl
 
       - name: Build local images
         run: |
           set -euo pipefail
           . ./deps.env
           docker build \
+            --platform linux/amd64 \
             -f contrib/k8s/Dockerfile.base \
+            --build-arg GH_VERSION="$GH_VERSION" \
             --build-arg DOLT_VERSION="$DOLT_VERSION" \
             -t "gc-agent-base:${IMAGE_TAG}" \
             .
           docker tag "gc-agent-base:${IMAGE_TAG}" gc-agent-base:latest
 
           docker build \
+            --platform linux/amd64 \
             -f contrib/k8s/Dockerfile.agent \
             --build-arg BASE_IMAGE=gc-agent-base:latest \
             -t "gc-agent:${IMAGE_TAG}" \
@@ -206,12 +231,15 @@ jobs:
           docker tag "gc-agent:${IMAGE_TAG}" gc-agent:latest
 
           docker build \
+            --platform linux/amd64 \
             -f contrib/k8s/Dockerfile.controller \
             --build-arg GC_AGENT_IMAGE=gc-agent:latest \
+            --build-arg KUBECTL_VERSION="$KUBECTL_VERSION" \
             -t "gc-controller:${IMAGE_TAG}" \
             .
 
           docker build \
+            --platform linux/amd64 \
             -f contrib/k8s/Dockerfile.mail \
             -t "gc-mcp-mail:${IMAGE_TAG}" \
             .

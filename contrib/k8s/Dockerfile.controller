@@ -4,7 +4,8 @@
 # the workspace management dashboard.
 #
 # Build:
-#   docker build -f contrib/k8s/Dockerfile.controller \
+#   make image-go-tools
+#   docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.controller \
 #     --build-arg GC_AGENT_IMAGE=gc-agent:latest \
 #     -t gc-controller:latest .
 #
@@ -22,17 +23,12 @@ ENV GC_K8S_IMAGE=${GC_AGENT_IMAGE}
 # Controller installs to /usr/local/bin — need root.
 USER root
 
-# kubectl for agent attach and beads/events exec providers.
+# kubectl for agent attach and beads/events exec providers. The binary is an
+# exact-source security rebuild produced with the same pinned Go image builder
+# as gc, bd, gh, and Dolt.
 ARG KUBECTL_VERSION=v1.36.0
-RUN curl -fsSL \
-    "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
-    -o /tmp/kubectl \
-    && curl -fsSL \
-       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
-       -o /tmp/kubectl.sha256 \
-    && echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c - \
-    && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl \
-    && rm -f /tmp/kubectl /tmp/kubectl.sha256
+COPY image-tools/kubectl /usr/local/bin/kubectl
+RUN test "$(kubectl version --client=true -o json | sed -n 's/.*\"gitVersion\": \"\([^\"]*\)\".*/\1/p')" = "${KUBECTL_VERSION}"
 
 # K8s provider scripts (beads, events). Session provider is now native
 # (compiled into gc binary as GC_SESSION=k8s).

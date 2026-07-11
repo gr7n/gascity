@@ -6,12 +6,14 @@
 #
 # Build:
 #   make docker-base
-#   # or: docker build -f contrib/k8s/Dockerfile.base -t gc-agent-base:latest .
+#   # Direct builds require `make image-go-tools` first and must target amd64:
+#   # docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.base -t gc-agent-base:latest .
 
 FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG CLAUDE_CODE_VERSION=2.1.123
+ARG GH_VERSION=2.96.0
 ARG DOLT_VERSION=2.1.10
 
 # System packages.
@@ -37,20 +39,14 @@ COPY .github/scripts/install-claude-native.sh /tmp/install-claude-native.sh
 RUN /tmp/install-claude-native.sh "${CLAUDE_CODE_VERSION}" \
     && rm -f /tmp/install-claude-native.sh
 
-# GitHub CLI (for git credential helper in containers).
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-       > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
-
-# Dolt CLI — pinned version (keep in sync with deps.env).
-COPY .github/scripts/install-dolt-archive.sh /tmp/install-dolt-archive.sh
-RUN /tmp/install-dolt-archive.sh "${DOLT_VERSION}" \
-    && rm -f /tmp/install-dolt-archive.sh
+# GitHub CLI and Dolt are exact-source security rebuilds produced by
+# .github/scripts/build-image-go-tools.sh with the pinned Go image builder.
+# Validate their user-facing versions again at the image boundary.
+COPY image-tools/gh /usr/local/bin/gh
+COPY image-tools/dolt /usr/local/bin/dolt
+RUN test "$(gh --version | head -n 1)" != "" \
+    && gh --version | head -n 1 | grep -F "gh version ${GH_VERSION} " \
+    && test "$(dolt version | head -n 1)" = "dolt version ${DOLT_VERSION}"
 
 # Default non-root user for Claude Code (--dangerously-skip-permissions rejects root).
 # When LINUX_USERNAME is set at runtime, the pod entrypoint creates a dynamic

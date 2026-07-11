@@ -10,6 +10,7 @@ cmd/gc/.runtime/
 /genschema
 /bd
 /br
+/image-tools/
 /tmp/
 .runtime/
 *.test

@@ -19,6 +19,8 @@ EXPECTED_SHARED_PATHS = {
     ".github/workflows/**",
     ".github/actions/setup-gascity-ubuntu/**",
     ".github/scripts/build-bd-image.sh",
+    ".github/scripts/build-go-image-inputs.sh",
+    ".github/scripts/build-image-go-tools.sh",
     ".github/scripts/install-dolt-archive.sh",
     ".github/scripts/install-bd-archive.sh",
     ".github/scripts/install-claude-native.sh",
@@ -225,6 +227,8 @@ class AcceptanceScenarioTests(unittest.TestCase):
         setup_paths = [
             ".github/actions/setup-gascity-ubuntu/action.yml",
             ".github/scripts/build-bd-image.sh",
+            ".github/scripts/build-go-image-inputs.sh",
+            ".github/scripts/build-image-go-tools.sh",
             ".github/scripts/install-dolt-archive.sh",
             ".github/scripts/install-bd-archive.sh",
             ".github/scripts/install-claude-native.sh",

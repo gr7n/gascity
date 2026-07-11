@@ -64,7 +64,7 @@ endif
 endif
 endif
 
-.PHONY: build check check-all check-bd check-docker check-docs check-dolt check-eventexport-isolation check-gomod-replace check-core-boundary check-native-dependency-surface check-routed-test-rows check-version-tag lint lint-full lint-new lint-changed fmt-check fmt vet test test-mac test-fast-parallel test-fsys-darwin-compile test-pack-registry-live test-native-doltlite-beads test-cmd-gc-process test-cmd-gc-process-shard test-cmd-gc-process-parallel test-worker-core test-worker-core-phase2 test-worker-core-phase2-real-transport setup-worker-inference test-worker-inference test-worker-inference-phase3 test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-parallel test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-local-full-parallel test-mail-wisp-insert test-mcp-mail test-openclaw-bridge test-docker test-k8s test-cover test-cover-mac test-cover-noncmdgc test-cover-cmdgc-shard cover install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev diagrams-excalidraw dashboard-smoke
+.PHONY: build check check-all check-bd check-docker check-docs check-dolt check-eventexport-isolation check-gomod-replace check-core-boundary check-native-dependency-surface check-routed-test-rows check-version-tag lint lint-full lint-new lint-changed fmt-check fmt vet test test-mac test-fast-parallel test-fsys-darwin-compile test-pack-registry-live test-native-doltlite-beads test-cmd-gc-process test-cmd-gc-process-shard test-cmd-gc-process-parallel test-worker-core test-worker-core-phase2 test-worker-core-phase2-real-transport setup-worker-inference test-worker-inference test-worker-inference-phase3 test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-parallel test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-local-full-parallel test-mail-wisp-insert test-mcp-mail test-openclaw-bridge test-docker test-k8s test-cover test-cover-mac test-cover-noncmdgc test-cover-cmdgc-shard cover install install-tools install-buildx setup clean generate check-schema image-go-tools docker-base docker-agent docker-controller docs-dev diagrams-excalidraw dashboard-smoke
 
 ## build: compile gc binary with version metadata
 build:
@@ -107,6 +107,7 @@ check-schema: generate
 ## clean: remove build artifacts
 clean:
 	rm -f $(BUILD_DIR)/$(BINARY)
+	rm -rf image-tools
 
 ## check: run fast quality gates (pre-commit: unit tests only)
 check: fmt-check lint vet check-routed-test-rows test
@@ -769,15 +770,34 @@ spec-ci: install-oapi-codegen
 		exit 1; \
 	fi
 
+## image-go-tools: rebuild exact upstream runtime tools with the pinned Go image
+image-go-tools: check-docker
+	@mkdir -p "$(CURDIR)/image-tools"
+	@. ./deps.env; docker run --rm --platform linux/amd64 \
+		--cap-drop ALL \
+		--security-opt no-new-privileges:true \
+		--user "$$(id -u):$$(id -g)" \
+		--env HOME=/tmp/home \
+		--env XDG_CACHE_HOME=/tmp/xdg-cache \
+		--env GOCACHE=/tmp/go-build \
+		--env GOMODCACHE=/tmp/go-mod \
+		--env GOPATH=/tmp/go \
+		--volume "$(CURDIR):/src:ro" \
+		--volume "$(CURDIR)/image-tools:/out" \
+		--workdir /src \
+		"$$IMAGE_GO_BUILDER" \
+		bash .github/scripts/build-image-go-tools.sh /out
+
 ## docker-base: build base image with system dependencies (~2.5 min, rebuild rarely)
-docker-base: check-docker
-	. ./deps.env && docker build -f contrib/k8s/Dockerfile.base \
+docker-base: check-docker image-go-tools
+	. ./deps.env && docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.base \
+		--build-arg GH_VERSION=$$GH_VERSION \
 		--build-arg DOLT_VERSION=$$DOLT_VERSION \
 		-t gc-agent-base:latest .
 
 ## docker-agent: build base agent image (~5s on top of base). For prebaked images use: gc build-image
 docker-agent: check-docker
-	docker build -f contrib/k8s/Dockerfile.agent -t gc-agent:latest .
+	docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.agent -t gc-agent:latest .
 	@if kubectl config current-context 2>/dev/null | grep -q '^kind-'; then \
 		cluster=$$(kubectl config current-context | sed 's/^kind-//'); \
 		echo "Loading gc-agent:latest into kind cluster '$$cluster'..."; \
@@ -785,9 +805,10 @@ docker-agent: check-docker
 	fi
 
 ## docker-controller: build controller image for K8s deployment (~10s on top of agent)
-docker-controller: check-docker
-	docker build -f contrib/k8s/Dockerfile.controller \
+docker-controller: check-docker image-go-tools
+	. ./deps.env && docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.controller \
 		--build-arg GC_AGENT_IMAGE=gc-agent:latest \
+		--build-arg KUBECTL_VERSION=$$KUBECTL_VERSION \
 		-t gc-controller:latest .
 	@if kubectl config current-context 2>/dev/null | grep -q '^kind-'; then \
 		cluster=$$(kubectl config current-context | sed 's/^kind-//'); \
