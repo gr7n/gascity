@@ -671,7 +671,7 @@ terminal emulator.
 
 ## Build From Source Fails
 
-Building from source requires `make` and Go 1.26.4 or newer:
+Building from source requires `make` and Go 1.26.5 or newer:
 
 ```bash
 make --version

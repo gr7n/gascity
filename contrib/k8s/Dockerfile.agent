@@ -6,7 +6,7 @@
 #
 # Build:
 #   make docker-agent
-#   # or: docker build -f contrib/k8s/Dockerfile.agent -t gc-agent:latest .
+#   # or: docker build --platform linux/amd64 -f contrib/k8s/Dockerfile.agent -t gc-agent:latest .
 #
 # Full rebuild (base + agent):
 #   make docker-base docker-agent

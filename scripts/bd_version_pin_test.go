@@ -149,8 +149,12 @@ func TestBDVersionPins(t *testing.T) {
 		}
 	}
 	containerScan := readFile(t, root, ".github/workflows/container-scan.yml")
-	if !strings.Contains(containerScan, ".github/scripts/build-bd-image.sh \"$bin_dir/bd\"") {
-		t.Fatal("container scan must build the pinned, security-fixed bd image binary")
+	if !strings.Contains(containerScan, "bash .github/scripts/build-go-image-inputs.sh /out") {
+		t.Fatal("container scan must build the pinned Go image inputs, including bd")
+	}
+	imageInputs := readFile(t, root, ".github/scripts/build-go-image-inputs.sh")
+	if !strings.Contains(imageInputs, "build-bd-image.sh\" \"${output_dir}/bd\"") {
+		t.Fatal("Go image input builder must include the pinned, security-fixed bd binary")
 	}
 
 	// Every workflow that pins BD_VERSION must pin the same value as deps.env, so a
