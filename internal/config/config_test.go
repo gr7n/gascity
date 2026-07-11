@@ -81,6 +81,56 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAgentAnnotationsTOMLRoundTrip(t *testing.T) {
+	cfg, err := Parse([]byte(`
+[workspace]
+name = "test"
+
+[[agent]]
+name = "worker"
+annotations = { "example.com/context_profile" = "company", owner = "platform" }
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("len(Agents) = %d, want 1", len(cfg.Agents))
+	}
+	want := map[string]string{
+		"example.com/context_profile": "company",
+		"owner":                       "platform",
+	}
+	if !reflect.DeepEqual(cfg.Agents[0].Annotations, want) {
+		t.Fatalf("Annotations = %#v, want %#v", cfg.Agents[0].Annotations, want)
+	}
+
+	data, err := cfg.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	roundTripped, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse(Marshal output): %v", err)
+	}
+	if !reflect.DeepEqual(roundTripped.Agents[0].Annotations, want) {
+		t.Fatalf("round-tripped Annotations = %#v, want %#v", roundTripped.Agents[0].Annotations, want)
+	}
+}
+
+func TestAgentAnnotationsRejectNonStringValues(t *testing.T) {
+	_, err := Parse([]byte(`
+[workspace]
+name = "test"
+
+[[agent]]
+name = "worker"
+annotations = { "example.com/context_profile" = 7 }
+`))
+	if err == nil {
+		t.Fatal("Parse accepted a non-string annotation value")
+	}
+}
+
 func TestMarshalOmitsEmptyFields(t *testing.T) {
 	c := DefaultCity("test")
 	data, err := c.Marshal()

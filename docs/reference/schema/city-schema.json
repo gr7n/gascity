@@ -70,6 +70,13 @@
           "type": "string",
           "description": "Description is a human-readable description shown in MC's session creation UI."
         },
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "description": "Annotations are declaration-only metadata for external consumers. Gas City\npreserves and reports these opaque string pairs but assigns them no runtime\nbehavior or authority. They are intentionally not mutable through agent\npatches, rig overrides, or the agent API."
+        },
         "dir": {
           "type": "string",
           "description": "Dir is the identity prefix for rig-scoped agents and the default\nworking directory when WorkDir is not set."

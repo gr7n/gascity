@@ -20,6 +20,7 @@ func TestAgentFieldSync(t *testing.T) {
 	excluded := map[string]string{
 		"Name":        "identity field, not overridable",
 		"Description": "display field for real-world app session creation UI, not overridable via patch",
+		"Annotations": "declaration-only metadata; deliberately not mutable via patch, rig override, or API",
 		// Provider-level fields: set during ResolveProvider, not typically
 		// overridden per-rig. Agent-level overrides happen in the Agent
 		// struct itself (which feeds into ResolveProvider).
@@ -589,6 +590,21 @@ func TestAgentCloneIsDeep(t *testing.T) {
 				t.Errorf("Agent.Clone aliases field %q (shared backing storage) — add a deep copy in Clone()", name)
 			}
 		}
+	}
+}
+
+func TestAgentCloneCopiesAnnotations(t *testing.T) {
+	original := Agent{Annotations: map[string]string{"example.com/context_profile": "company"}}
+	clone := original.Clone()
+
+	clone.Annotations["example.com/context_profile"] = "platform"
+	clone.Annotations["owner"] = "operator"
+
+	if got := original.Annotations["example.com/context_profile"]; got != "company" {
+		t.Fatalf("original annotation changed through clone: %q", got)
+	}
+	if _, ok := original.Annotations["owner"]; ok {
+		t.Fatal("annotation added to clone leaked into original")
 	}
 }
 

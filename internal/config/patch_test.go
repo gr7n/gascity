@@ -678,6 +678,40 @@ name = "worker"
 	}
 }
 
+func TestLoadWithIncludes_AgentAnnotationsAreNotPatchable(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/city/city.toml"] = []byte(`
+[workspace]
+name = "test"
+
+[[agent]]
+name = "worker"
+annotations = { "example.com/context_profile" = "company" }
+
+[[patches.agent]]
+name = "worker"
+annotations = { "example.com/context_profile" = "platform" }
+`)
+
+	cfg, provenance, err := LoadWithIncludes(fs, "/city/city.toml")
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if got := cfg.Agents[0].Annotations["example.com/context_profile"]; got != "company" {
+		t.Fatalf("annotation changed through declaration-only patch field: %q", got)
+	}
+	foundWarning := false
+	for _, warning := range provenance.Warnings {
+		if strings.Contains(warning, "patches.agent.annotations") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("missing unknown-field warning for annotations patch: %v", provenance.Warnings)
+	}
+}
+
 func TestLoadWithIncludes_PatchTargetMissing(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Files["/city/city.toml"] = []byte(`

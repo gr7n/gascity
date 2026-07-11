@@ -135,7 +135,7 @@ gc agent add --name worker --prompt-template ./worker.md --suspended
 List configured agents from the resolved city configuration.
 
 Use --json to inspect agent routing fields, including effective work_query
-and sling_query values.
+and sling_query values, plus any declaration-only annotations.
 
 ```
 gc agent list [flags]

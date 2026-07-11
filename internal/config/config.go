@@ -2961,6 +2961,11 @@ type Agent struct {
 	Name string `toml:"name" jsonschema:"required"`
 	// Description is a human-readable description shown in MC's session creation UI.
 	Description string `toml:"description,omitempty"`
+	// Annotations are declaration-only metadata for external consumers. Gas City
+	// preserves and reports these opaque string pairs but assigns them no runtime
+	// behavior or authority. They are intentionally not mutable through agent
+	// patches, rig overrides, or the agent API.
+	Annotations map[string]string `toml:"annotations,omitempty"`
 	// Dir is the identity prefix for rig-scoped agents and the default
 	// working directory when WorkDir is not set.
 	Dir string `toml:"dir,omitempty"`
@@ -3312,6 +3317,7 @@ type Agent struct {
 // the build fails.
 func (a Agent) Clone() Agent {
 	out := a
+	out.Annotations = deepCopyStringMap(a.Annotations)
 	out.PreStart = append([]string(nil), a.PreStart...)
 	out.Args = append([]string(nil), a.Args...)
 	out.ProcessNames = append([]string(nil), a.ProcessNames...)

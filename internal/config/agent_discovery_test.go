@@ -576,6 +576,57 @@ source = "../mypk"
 	}
 }
 
+func TestAgentDiscovery_ImportedAnnotationsPreserved(t *testing.T) {
+	dir := t.TempDir()
+	packDir := filepath.Join(dir, "mypk")
+	agentDir := filepath.Join(packDir, "agents", "worker")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, packDir, "pack.toml", `
+[pack]
+name = "mypk"
+schema = 2
+`)
+	writeTestFile(t, agentDir, "agent.toml", `
+scope = "city"
+annotations = { "example.com/context_profile" = "company", owner = "platform" }
+`)
+
+	cityDir := filepath.Join(dir, "city")
+	if err := os.MkdirAll(cityDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, cityDir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.helper]
+source = "../mypk"
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityDir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+
+	for _, agent := range explicitAgents(cfg.Agents) {
+		if agent.QualifiedName() != "helper.worker" {
+			continue
+		}
+		want := map[string]string{
+			"example.com/context_profile": "company",
+			"owner":                       "platform",
+		}
+		if !reflect.DeepEqual(agent.Annotations, want) {
+			t.Fatalf("Annotations = %#v, want %#v", agent.Annotations, want)
+		}
+		return
+	}
+	t.Fatal("missing helper.worker imported agent")
+}
+
 func TestAgentDiscovery_RootCityPackDirectory(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, "agents", "ada")

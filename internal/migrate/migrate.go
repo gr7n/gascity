@@ -57,6 +57,7 @@ type packRigDefaults struct {
 
 type agentFile struct {
 	Description            string            `toml:"description,omitempty"`
+	Annotations            map[string]string `toml:"annotations,omitempty"`
 	Dir                    string            `toml:"dir,omitempty"`
 	WorkDir                string            `toml:"work_dir,omitempty"`
 	TmuxAlias              string            `toml:"tmux_alias,omitempty"`
@@ -913,6 +914,7 @@ func encodeTOML(v any) ([]byte, error) {
 func agentConfigFromAgent(agent config.Agent) agentFile {
 	return agentFile{
 		Description:            agent.Description,
+		Annotations:            agent.Annotations,
 		Dir:                    agent.Dir,
 		WorkDir:                agent.WorkDir,
 		TmuxAlias:              agent.TmuxAlias,
@@ -966,6 +968,7 @@ func agentConfigFromAgent(agent config.Agent) agentFile {
 
 func isZeroAgentConfig(cfg agentFile) bool {
 	return cfg.Description == "" &&
+		len(cfg.Annotations) == 0 &&
 		cfg.Dir == "" &&
 		cfg.WorkDir == "" &&
 		cfg.TmuxAlias == "" &&

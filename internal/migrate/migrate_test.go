@@ -1107,6 +1107,7 @@ func TestAgentConfigFromAgentCoversPersistedFields(t *testing.T) {
 	src := config.Agent{
 		Name:                   "worker",
 		Description:            "test agent description",
+		Annotations:            map[string]string{"example.com/context_profile": "company"},
 		Dir:                    "demo",
 		WorkDir:                ".gc/agents/worker",
 		TmuxAlias:              "worker--{{.CityName}}",

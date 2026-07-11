@@ -354,6 +354,7 @@ The normative authoring rules are specified here.
 | Field | Type | Rule |
 |---|---|---|
 | `description` | string | Human-readable description. |
+| `annotations` | inline table of string to string | Opaque, declaration-only metadata preserved for external consumers. |
 | `dir` | string | Identity prefix. Reusable packs should usually omit this. |
 | `work_dir` | string | Session working directory without changing identity. |
 | `scope` | string | `city`, `rig`, or omitted. |
@@ -404,6 +405,20 @@ The normative authoring rules are specified here.
 command workers. It is not equivalent to `prompt_mode = "none"`: the latter
 selects nudge-based prompt delivery for a provider that cannot take a prompt
 argument, while the former disables prompt delivery entirely.
+
+Annotations attach namespaced metadata without adding SDK behavior:
+
+```toml
+annotations = { "example.com/context_profile" = "company" }
+```
+
+Gas City treats every annotation key and value as an opaque string. A key that
+contains a dot must be quoted in TOML, as above. An annotation may help an
+external consumer choose its own behavior, but it is not an authorization or
+capability grant and Gas City does not interpret it. Do not store secrets in
+annotations: `gc agent list --json` reports them. Annotations are
+declaration-only in this release; agent patches, rig overrides, and agent API
+mutations cannot add or change them.
 
 > **Compatibility:** The current runtime still parses agent-level `skills` and
 > `mcp` arrays as compatibility tombstones, but active materialization ignores
@@ -495,7 +510,8 @@ session_setup_append = ["tmux set status-left '[review]'"]
 | `name` | string | yes | Target agent local name. |
 | `dir` | string | context-dependent | Target identity prefix. Empty means city-level in `city.toml`; in `pack.toml`, empty matches by name before consumer rig stamping. |
 
-Patch operation fields mirror agent fields. A scalar pointer field replaces the
+Patch operation fields mirror mutable agent fields. Declaration-only
+`annotations` are intentionally excluded. A scalar pointer field replaces the
 target value. A list replacement field replaces the target list. A field whose
 name ends in `_append` appends to the corresponding target list.
 
