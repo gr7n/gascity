@@ -216,7 +216,7 @@ func loadProviderSessionSnapshot(ctx sessionProviderContext) *sessionBeadSnapsho
 	}
 	store, err := openSessionProviderStore(ctx.cityPath)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
 	// This snapshot reads only session-class beads (the gc:session label) to
 	// drive transport/ACP routing decisions, so route through the session
@@ -225,15 +225,14 @@ func loadProviderSessionSnapshot(ctx sessionProviderContext) *sessionBeadSnapsho
 	// closes the gap on both the CLI and controller provider-construction paths.
 	// Identity to the opened store today (resolveClassStore is pure identity).
 	sessStore := cliSessionStore(store, ctx.cfg, ctx.cityPath)
-	// The label-only, closed-excluded, IsSessionBeadOrRepairable-UNfiltered Info
-	// lister is byte-identical to the retired newSessionBeadSnapshot(ListByLabel(
-	// gc:session)) set: same gc:session label scope, same closed exclusion, same
-	// no-narrowing (a damaged non-"session"-typed labeled bead is still surfaced).
-	infos, err := session.NewStore(beads.SessionStore{Store: sessStore}).ListLabeledSessionInfosUnfiltered()
+	// Use the canonical typed type+label union so label-lost session beads still
+	// seed durable hybrid/ACP routes. This is the same snapshot contract the
+	// reconciler consumes and keeps raw beads behind the session front door.
+	snapshot, err := loadSessionBeadSnapshot(sessStore)
 	if err != nil {
-		return nil
+		return newSessionBeadSnapshotWithError(err)
 	}
-	return newSessionBeadSnapshotFromInfos(infos)
+	return snapshot
 }
 
 func newSessionProviderFromContext(ctx sessionProviderContext, sessionBeads *sessionBeadSnapshot) runtime.Provider {
@@ -263,6 +262,11 @@ func resolveSessionTransportProvider(ctx sessionProviderContext, sessionBeads *s
 	if err != nil {
 		return nil, err
 	}
+	// Hybrid session names can be randomized and therefore cannot be routed
+	// reliably by substring after startup. Seed the hybrid provider from the
+	// durable identities persisted on open session beads before an optional ACP
+	// transport wrapper obscures the concrete provider type.
+	registerHybridRemoteRoutes(base, sessionBeads, hybridRemotePattern(ctx.sc))
 	// If the city-level provider is not ACP but some agents need ACP, wrap in an
 	// auto provider that routes per-session.
 	// NOTE: agents comes from loadCityConfig which applies pack overrides, so the
@@ -288,6 +292,40 @@ func resolveSessionTransportProvider(ctx sessionProviderContext, sessionBeads *s
 		return autoSP, nil
 	}
 	return base, nil
+}
+
+func registerHybridRemoteRoutes(sp runtime.Provider, snapshot *sessionBeadSnapshot, pattern string) {
+	router, ok := sp.(interface{ RouteRemote(string) })
+	if !ok || snapshot == nil {
+		return
+	}
+	match := hybridRemoteMatcher(pattern)
+	for _, info := range snapshot.OpenInfos() {
+		sessionName := strings.TrimSpace(info.SessionNameMetadata)
+		if sessionName == "" || !infoMatchesHybridRemoteRoute(info, match) {
+			continue
+		}
+		router.RouteRemote(sessionName)
+	}
+}
+
+func infoMatchesHybridRemoteRoute(info session.Info, match func(string) bool) bool {
+	for _, candidate := range []string{
+		info.SessionNameMetadata,
+		info.Template,
+		info.Provider,
+		session.ProviderFamilyFromInfo(info, ""),
+		info.ProviderKind,
+		info.BuiltinAncestor,
+		info.AgentName,
+		info.ConfiguredNamedIdentity,
+		info.CommonName,
+	} {
+		if match(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentSessionCreateTransport(cfg *config.City, agentCfg config.Agent) string {
@@ -1123,11 +1161,53 @@ func newHybridProvider(sc config.SessionConfig, cityName, cityPath string) (runt
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: k8s backend: %w", err)
 	}
+	pattern := hybridRemotePattern(sc)
+	return sessionhybrid.NewWithStartMatcher(
+		local,
+		remote,
+		hybridRemoteMatcher(pattern),
+		hybridRemoteStartMatcher(pattern),
+	), nil
+}
+
+func hybridRemotePattern(sc config.SessionConfig) string {
 	pattern := sc.RemoteMatch
 	if v := os.Getenv("GC_HYBRID_REMOTE_MATCH"); v != "" {
 		pattern = v
 	}
-	return sessionhybrid.New(local, remote, func(name string) bool {
-		return pattern != "" && strings.Contains(name, pattern)
-	}), nil
+	return pattern
+}
+
+// hybridRemoteMatcher treats remote_match as a comma/whitespace separated
+// list. Each non-empty entry keeps the historical substring semantics so a
+// durable template such as rig/web-worker also matches a qualified instance.
+func hybridRemoteMatcher(pattern string) func(string) bool {
+	fragments := strings.Fields(strings.ReplaceAll(pattern, ",", " "))
+	return func(name string) bool {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return false
+		}
+		for _, fragment := range fragments {
+			if name == fragment || strings.Contains(name, fragment) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func hybridRemoteStartMatcher(pattern string) func(string, runtime.Config) bool {
+	match := hybridRemoteMatcher(pattern)
+	return func(name string, cfg runtime.Config) bool {
+		if match(name) {
+			return true
+		}
+		for _, key := range []string{"GC_TEMPLATE", "GC_AGENT", "GC_ALIAS", "GC_SESSION_NAME"} {
+			if match(strings.TrimSpace(cfg.Env[key])) {
+				return true
+			}
+		}
+		return false
+	}
 }

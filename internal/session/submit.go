@@ -306,29 +306,17 @@ func (m *Manager) waitForInterruptBoundaryLocked(ctx context.Context, b beads.Be
 // etc.) consume this helper so wrapped custom aliases inherit the
 // correct family behavior without every call site re-deriving it.
 func ProviderFamilyFromMetadata(meta map[string]string, fallback string) string {
-	if ancestor := strings.TrimSpace(meta["builtin_ancestor"]); ancestor != "" {
-		return sessionlog.ProviderFamily(ancestor)
-	}
-	if kind := strings.TrimSpace(meta["provider_kind"]); kind != "" {
-		return sessionlog.ProviderFamily(kind)
-	}
-	if provider := strings.TrimSpace(meta["provider"]); provider != "" {
-		return sessionlog.ProviderFamily(provider)
-	}
-	return sessionlog.ProviderFamily(fallback)
+	return ProviderFamilyFromInfo(Info{
+		BuiltinAncestor: meta["builtin_ancestor"],
+		ProviderKind:    meta["provider_kind"],
+		Provider:        meta["provider"],
+	}, fallback)
 }
 
-func providerKind(b beads.Bead) string {
-	return ProviderFamilyFromMetadata(b.Metadata, "")
-}
-
-// ProviderFamilyFromInfo is the session.Info sibling of ProviderFamilyFromMetadata:
-// it walks the same builtin_ancestor → provider_kind → provider precedence ladder,
-// reading the raw mirrors Info carries (BuiltinAncestor, ProviderKind, Provider)
-// instead of the bead metadata map. Byte-identical to the metadata form for any
-// bead b (ProviderFamilyFromInfo(infoFromPersistedBead(b), fallback) ==
-// ProviderFamilyFromMetadata(b.Metadata, fallback)), so a caller holding a typed
-// Info can resolve the provider family without the raw bead.
+// ProviderFamilyFromInfo is the typed-session form of
+// ProviderFamilyFromMetadata. Production paths that already consume the
+// session Info projection should use this form rather than reopening raw Bead
+// metadata.
 func ProviderFamilyFromInfo(info Info, fallback string) string {
 	if ancestor := strings.TrimSpace(info.BuiltinAncestor); ancestor != "" {
 		return sessionlog.ProviderFamily(ancestor)
@@ -340,6 +328,67 @@ func ProviderFamilyFromInfo(info Info, fallback string) string {
 		return sessionlog.ProviderFamily(provider)
 	}
 	return sessionlog.ProviderFamily(fallback)
+}
+
+func providerKind(b beads.Bead) string {
+	return ProviderFamilyFromMetadata(b.Metadata, "")
+}
+
+// ObservedProviderKind returns the transcript provider family a session bead
+// should learn from a runtime process-name observation, or "" if nothing
+// should be stamped. It is the decision half of stamping provider_kind for
+// custom wrapper providers whose effective CLI is chosen per session (e.g. a
+// router command that launches claude for some sessions and codex for others):
+// such beads have no builtin_ancestor and a provider name that maps to no
+// transcript family, so the family can only be learned from which agent
+// process is actually running.
+//
+// It returns "" — leaving the bead untouched — when:
+//   - there is no observation, or the bead already has a builtin ancestor;
+//   - the bead's existing provider_kind/provider already yields a known family
+//     (write-once: a learned or configured family is never overwritten);
+//   - no observed name maps to a known family, or more than one distinct known
+//     family is observed at once (ambiguous, e.g. an agent shelling out to a
+//     second CLI) — the caller retries on the next observation;
+//   - the single observed family already equals the stored provider_kind.
+func ObservedProviderKind(meta map[string]string, matchedProcessNames []string) string {
+	return ObservedProviderKindFromInfo(Info{
+		BuiltinAncestor: meta["builtin_ancestor"],
+		ProviderKind:    meta["provider_kind"],
+		Provider:        meta["provider"],
+	}, matchedProcessNames)
+}
+
+// ObservedProviderKindFromInfo is the typed-session form of
+// ObservedProviderKind. Reconciler paths that already hold an Info projection
+// use it so runtime-family learning does not reopen or reconstruct a raw bead.
+func ObservedProviderKindFromInfo(info Info, matchedProcessNames []string) string {
+	if len(matchedProcessNames) == 0 {
+		return ""
+	}
+	if strings.TrimSpace(info.BuiltinAncestor) != "" {
+		return ""
+	}
+	for _, value := range []string{info.ProviderKind, info.Provider} {
+		if v := strings.TrimSpace(value); v != "" && sessionlog.KnownProviderFamily(v) {
+			return ""
+		}
+	}
+	family := ""
+	for _, name := range matchedProcessNames {
+		if !sessionlog.KnownProviderFamily(name) {
+			continue
+		}
+		observed := sessionlog.ProviderFamily(name)
+		if family != "" && family != observed {
+			return ""
+		}
+		family = observed
+	}
+	if family == "" || strings.TrimSpace(info.ProviderKind) == family {
+		return ""
+	}
+	return family
 }
 
 func wrappedProviderFamily(b beads.Bead, family string) bool {

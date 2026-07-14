@@ -13,10 +13,47 @@ import (
 	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/promptmeta"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 var testBeaconTime = time.Unix(1_700_000_000, 0)
+
+func TestResolveTemplateCarriesRenderedPromptReceipt(t *testing.T) {
+	cityPath := t.TempDir()
+	fakeFS := fsys.NewFake()
+	promptPath := filepath.Join(cityPath, "prompts", "worker.template.md")
+	if err := fakeFS.WriteFile(promptPath, []byte("---\nversion: v4\n---\nhello {{.AgentName}}\n"), 0o644); err != nil {
+		t.Fatalf("write prompt template: %v", err)
+	}
+	params := &agentBuildParams{
+		fs:         fakeFS,
+		cityName:   "receipt-city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Name: "receipt-city", Provider: "codex"},
+		providers:  config.BuiltinProviders(),
+		lookPath:   func(string) (string, error) { return "/usr/bin/codex", nil },
+		beaconTime: testBeaconTime,
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agentCfg := &config.Agent{Name: "worker", PromptTemplate: "prompts/worker.template.md"}
+
+	tp, err := resolveTemplate(params, agentCfg, "worker-opaque-7", nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if tp.PromptReceipt == nil {
+		t.Fatal("PromptReceipt = nil, want observed receipt")
+	}
+	if got := tp.PromptReceipt.Version; got != "v4" {
+		t.Fatalf("PromptReceipt.Version = %q, want v4", got)
+	}
+	if got, want := tp.PromptReceipt.SHA, promptmeta.SHA("hello worker-opaque-7\n"); got != want {
+		t.Fatalf("PromptReceipt.SHA = %q, want %q", got, want)
+	}
+}
 
 // TestTemplateParamsToConfigArgModeAppendsPromptAsBareArg verifies that
 // when PromptMode is "arg" (the default), the prompt text is shell-quoted
@@ -234,6 +271,9 @@ func TestResolveTemplateControlDispatcherSuppressesStartupPrompt(t *testing.T) {
 	}
 	if tp.Prompt != "" {
 		t.Fatalf("Prompt = %q, want empty for deterministic control dispatcher", tp.Prompt)
+	}
+	if tp.PromptReceipt == nil || *tp.PromptReceipt != (session.PromptReceipt{}) {
+		t.Fatalf("PromptReceipt = %+v, want observed prompt-less receipt", tp.PromptReceipt)
 	}
 	cfg := templateParamsToConfig(tp)
 	if cfg.PromptSuffix != "" {
@@ -1063,6 +1103,9 @@ prompt_template = "agents/mayor/prompt.template.md"
 	if !strings.Contains(tp.Prompt, "City Footer") {
 		t.Fatalf("prompt missing city append fragment: %q", tp.Prompt)
 	}
+	if tp.PromptReceipt == nil || tp.PromptReceipt.SHA != promptmeta.SHA("Hello\n\nCity Footer") {
+		t.Fatalf("city append fragment missing from prompt receipt: %+v", tp.PromptReceipt)
+	}
 }
 
 func TestResolveTemplateScopesRigPackFragmentsByCurrentRig(t *testing.T) {
@@ -1197,5 +1240,8 @@ func TestResolveTemplateConventionAgentAppendFragments(t *testing.T) {
 	}
 	if !strings.Contains(tp.Prompt, "Discord Ready") {
 		t.Fatalf("prompt missing per-agent append fragment: %q", tp.Prompt)
+	}
+	if tp.PromptReceipt == nil || tp.PromptReceipt.SHA != promptmeta.SHA("Hello\n\nDiscord Ready") {
+		t.Fatalf("agent append fragment missing from prompt receipt: %+v", tp.PromptReceipt)
 	}
 }

@@ -3096,25 +3096,31 @@ type SessionRespondOutputBody struct {
 
 // SessionResponse defines model for SessionResponse.
 type SessionResponse struct {
-	ActiveBead             *string                 `json:"active_bead,omitempty"`
-	Activity               *string                 `json:"activity,omitempty"`
-	AgentKind              *string                 `json:"agent_kind,omitempty"`
-	Alias                  *string                 `json:"alias,omitempty"`
-	Attached               bool                    `json:"attached"`
-	ConfiguredNamedSession *bool                   `json:"configured_named_session,omitempty"`
-	ContextPct             *int64                  `json:"context_pct,omitempty"`
-	ContextWindow          *int64                  `json:"context_window,omitempty"`
-	CreatedAt              string                  `json:"created_at"`
-	DisplayName            *string                 `json:"display_name,omitempty"`
-	Id                     string                  `json:"id"`
-	Kind                   *string                 `json:"kind,omitempty"`
-	LastActive             *string                 `json:"last_active,omitempty"`
-	LastNudgeDeliveredAt   *string                 `json:"last_nudge_delivered_at,omitempty"`
-	LastOutput             *string                 `json:"last_output,omitempty"`
-	Metadata               *map[string]string      `json:"metadata,omitempty"`
-	Model                  *string                 `json:"model,omitempty"`
-	Options                *map[string]string      `json:"options,omitempty"`
-	Pool                   *string                 `json:"pool,omitempty"`
+	ActiveBead             *string            `json:"active_bead,omitempty"`
+	Activity               *string            `json:"activity,omitempty"`
+	AgentKind              *string            `json:"agent_kind,omitempty"`
+	Alias                  *string            `json:"alias,omitempty"`
+	Attached               bool               `json:"attached"`
+	ConfiguredNamedSession *bool              `json:"configured_named_session,omitempty"`
+	ContextPct             *int64             `json:"context_pct,omitempty"`
+	ContextWindow          *int64             `json:"context_window,omitempty"`
+	CreatedAt              string             `json:"created_at"`
+	DisplayName            *string            `json:"display_name,omitempty"`
+	Id                     string             `json:"id"`
+	Kind                   *string            `json:"kind,omitempty"`
+	LastActive             *string            `json:"last_active,omitempty"`
+	LastNudgeDeliveredAt   *string            `json:"last_nudge_delivered_at,omitempty"`
+	LastOutput             *string            `json:"last_output,omitempty"`
+	Metadata               *map[string]string `json:"metadata,omitempty"`
+	Model                  *string            `json:"model,omitempty"`
+	Options                *map[string]string `json:"options,omitempty"`
+	Pool                   *string            `json:"pool,omitempty"`
+
+	// PromptSha SHA-256 of the rendered template projection (including configured template fragments, excluding runtime delivery envelopes). Absent for legacy or prompt-less sessions.
+	PromptSha *string `json:"prompt_sha,omitempty"`
+
+	// PromptVersion Template version from the persisted startup prompt receipt. Absent for legacy or prompt-less sessions.
+	PromptVersion          *string                 `json:"prompt_version,omitempty"`
 	Provider               string                  `json:"provider"`
 	Reason                 *string                 `json:"reason,omitempty"`
 	Rig                    *string                 `json:"rig,omitempty"`
@@ -6197,13 +6203,13 @@ type WorkerOperationEventPayload struct {
 	OpId      string  `json:"op_id"`
 	Operation string  `json:"operation"`
 
-	// PromptSha SHA-256 of the rendered prompt (best-effort, currently always absent; #1256 follow-up).
+	// PromptSha SHA-256 of the rendered template projection from the persisted startup receipt (includes configured template fragments; excludes runtime delivery envelopes; legacy sessions may be absent).
 	PromptSha *string `json:"prompt_sha,omitempty"`
 
 	// PromptTokens Non-cached input tokens (best-effort, currently always absent; treat zero as 'not measured', not 'free').
 	PromptTokens *int64 `json:"prompt_tokens,omitempty"`
 
-	// PromptVersion Template version frontmatter (best-effort, currently always absent; #1256 follow-up).
+	// PromptVersion Template version frontmatter from the persisted startup prompt receipt (best-effort; legacy sessions may be absent).
 	PromptVersion *string `json:"prompt_version,omitempty"`
 	Provider      *string `json:"provider,omitempty"`
 	Queued        *bool   `json:"queued,omitempty"`

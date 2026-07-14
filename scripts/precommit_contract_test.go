@@ -120,6 +120,29 @@ func TestLocalParallelAllowlistIncludesObservableEnv(t *testing.T) {
 	}
 }
 
+func TestLocalParallelFastUnitJobsHaveExplicitBudgets(t *testing.T) {
+	repoRoot := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "test-local-parallel"))
+	if err != nil {
+		t.Fatalf("read test-local-parallel: %v", err)
+	}
+	content := string(script)
+	for _, want := range []string{
+		"LOCAL_TEST_GO_TIMEOUT",
+		"LOCAL_TEST_GO_P",
+		"go test -p=",
+		"-count=1 -timeout",
+		"github.com/gastownhall/gascity/examples/bd/dolt$",
+		"unit-dolt-example",
+		"go test -count=1 -timeout",
+		"./examples/bd/dolt",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("test-local-parallel missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

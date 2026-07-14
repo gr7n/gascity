@@ -637,6 +637,22 @@ func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) 
 	}
 }
 
+func TestCommitStartedPatchPersistsObservedPromptReceipt(t *testing.T) {
+	receipt := &PromptReceipt{Version: "v7", SHA: "sha-rendered"}
+	patch := CommitStartedPatch(CommitStartedPatchInput{PromptReceipt: receipt})
+	if got := PromptReceiptFromMetadata(map[string]string(patch)); got != *receipt {
+		t.Fatalf("prompt receipt = %+v, want %+v", got, *receipt)
+	}
+
+	legacyPatch := CommitStartedPatch(CommitStartedPatchInput{})
+	if _, ok := legacyPatch[promptVersionMetadataKey]; ok {
+		t.Fatalf("nil receipt synthesized prompt version: %v", legacyPatch)
+	}
+	if _, ok := legacyPatch[promptSHAMetadataKey]; ok {
+		t.Fatalf("nil receipt synthesized prompt SHA: %v", legacyPatch)
+	}
+}
+
 func TestDrainAckStopPendingPatchOwnsDurableStopPendingMetadata(t *testing.T) {
 	now := time.Date(2026, 5, 18, 4, 15, 0, 0, time.UTC)
 	patch := DrainAckStopPendingPatch(now)

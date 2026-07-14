@@ -74,6 +74,9 @@
 #   GC_DOLT_COMPACT_PENDING_PUSH_MAX_AGE_SECS
 #     (default: 172800) — maximum age for automatic pending remote-push retry.
 #                       Older markers require manual review before push.
+#   GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS
+#     (optional) — override the jittered 1-5s preflight retry sleep.
+#                  Primarily useful for tests; unset keeps production jitter.
 #   GC_DOLT_COMPACT_REMOTE               (optional) — remote to fetch/push.
 #                                         Defaults to origin when present;
 #                                         ambiguous multi-remote stores fail.
@@ -292,6 +295,7 @@ threshold_commits="${GC_DOLT_COMPACT_THRESHOLD_COMMITS:-2000}"
 call_timeout="${GC_DOLT_COMPACT_CALL_TIMEOUT_SECS:-1800}"
 push_timeout="${GC_DOLT_COMPACT_PUSH_TIMEOUT_SECS:-120}"
 pending_push_max_age_secs="${GC_DOLT_COMPACT_PENDING_PUSH_MAX_AGE_SECS:-172800}"
+preflight_retry_sleep_secs="${GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS:-}"
 compact_remote="${GC_DOLT_COMPACT_REMOTE:-}"
 dry_run="${GC_DOLT_COMPACT_DRY_RUN:-}"
 only_dbs="${GC_DOLT_COMPACT_ONLY_DBS:-}"
@@ -369,6 +373,16 @@ case "$pending_push_max_age_secs" in
     printf 'compact: invalid GC_DOLT_COMPACT_PENDING_PUSH_MAX_AGE_SECS=%s (must be a non-negative integer)\n' \
       "$pending_push_max_age_secs" >&2
     exit 2
+    ;;
+esac
+
+case "$preflight_retry_sleep_secs" in
+  ''|*[!0-9]*)
+    if [ -n "$preflight_retry_sleep_secs" ]; then
+      printf 'compact: invalid GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS=%s (must be a non-negative integer)\n' \
+        "$preflight_retry_sleep_secs" >&2
+      exit 2
+    fi
     ;;
 esac
 
@@ -2150,7 +2164,13 @@ flatten_database() {
     if [ "$preflight_attempt" -lt "$preflight_max_attempts" ]; then
       printf 'compact: db=%s HEAD moved during preflight attempt=%s/%s want_HEAD=%s got_HEAD=%s — retrying\n' \
         "$db" "$preflight_attempt" "$preflight_max_attempts" "$head" "${current_head:-<empty>}" >&2
-      sleep "$(awk 'BEGIN{srand(); printf "%d", 1 + rand() * 5}')"
+      if [ -n "$preflight_retry_sleep_secs" ]; then
+        if [ "$preflight_retry_sleep_secs" -gt 0 ]; then
+          sleep "$preflight_retry_sleep_secs"
+        fi
+      else
+        sleep "$(awk 'BEGIN{srand(); printf "%d", 1 + rand() * 5}')"
+      fi
     fi
     preflight_attempt=$((preflight_attempt + 1))
   done

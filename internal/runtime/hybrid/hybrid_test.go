@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -66,6 +67,137 @@ func TestStart_RoutesToRemote(t *testing.T) {
 	}
 	if !remote.IsRunning("remote-agent-1") {
 		t.Error("expected remote to have session")
+	}
+}
+
+func TestStart_RoutesRandomizedRuntimeNamesFromDurableIdentity(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := NewWithStartMatcher(local, remote, isRemote, func(name string, cfg runtime.Config) bool {
+		return isRemote(name) || cfg.Env["GC_TEMPLATE"] == "rig/web-worker"
+	})
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic routing fixtures, not security.
+
+	for i := 0; i < 32; i++ {
+		name := fmt.Sprintf("s-gr-%016x", rng.Uint64())
+		if isRemote(name) {
+			t.Fatalf("fixture runtime name %q unexpectedly matched the name router", name)
+		}
+		if err := h.Start(context.Background(), name, runtime.Config{
+			Env: map[string]string{"GC_TEMPLATE": "rig/web-worker"},
+		}); err != nil {
+			t.Fatalf("Start(%q): %v", name, err)
+		}
+		if !remote.IsRunning(name) || local.IsRunning(name) {
+			t.Fatalf("runtime %q did not start exclusively on remote", name)
+		}
+		if _, err := h.Peek(name, 20); err != nil {
+			t.Fatalf("Peek(%q): %v", name, err)
+		}
+		if got := local.CountCalls("Peek", name); got != 0 {
+			t.Fatalf("local Peek(%q) calls = %d, want 0", name, got)
+		}
+		if got := remote.CountCalls("Peek", name); got != 1 {
+			t.Fatalf("remote Peek(%q) calls = %d, want 1", name, got)
+		}
+	}
+}
+
+func TestStop_ForgetsConfigRoutedRemoteName(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := NewWithStartMatcher(local, remote, isRemote, func(_ string, cfg runtime.Config) bool {
+		return cfg.Env["GC_TEMPLATE"] == "rig/web-worker"
+	})
+
+	const name = "s-gr-7sgzx"
+	if err := h.Start(context.Background(), name, runtime.Config{
+		Env: map[string]string{"GC_TEMPLATE": "rig/web-worker"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Stop(name); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := h.Start(context.Background(), name, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if !local.IsRunning(name) {
+		t.Error("expected local to have reused opaque session name")
+	}
+	if remote.IsRunning(name) {
+		t.Error("remote should not have reused opaque session name")
+	}
+}
+
+func TestRouteRemote_SeedsOpaqueNameForLaterOperations(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := New(local, remote, isRemote)
+	const name = "s-gr-7sgzx"
+	if err := remote.Start(context.Background(), name, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.RouteRemote(name)
+	if _, err := h.Peek(name, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", name) != 0 {
+		t.Fatal("Peek routed to local for durable remote route")
+	}
+	if remote.CountCalls("Peek", name) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", name))
+	}
+	if err := h.Stop(name); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if remote.CountCalls("Stop", name) != 1 {
+		t.Fatalf("remote Stop calls = %d, want 1", remote.CountCalls("Stop", name))
+	}
+}
+
+// livenessObserverFake wraps a fake provider with a provider-native
+// ObserveLiveness that reports matched process names.
+type livenessObserverFake struct {
+	runtime.Provider
+	observed runtime.Liveness
+	calls    int
+}
+
+func (f *livenessObserverFake) ObserveLiveness(_ string, _ []string) runtime.Liveness {
+	f.calls++
+	return f.observed
+}
+
+func TestObserveLiveness_DelegatesToRoutedObserver(t *testing.T) {
+	local := &livenessObserverFake{
+		Provider: runtime.NewFake(),
+		observed: runtime.Liveness{Running: true, Alive: true, MatchedProcessNames: []string{"claude"}},
+	}
+	remote := runtime.NewFake()
+	h := New(local, remote, isRemote)
+
+	got := h.ObserveLiveness("refinery", []string{"claude", "codex"})
+	if !got.Running || !got.Alive {
+		t.Fatalf("ObserveLiveness = %+v, want running and alive", got)
+	}
+	if len(got.MatchedProcessNames) != 1 || got.MatchedProcessNames[0] != "claude" {
+		t.Fatalf("MatchedProcessNames = %v, want [claude] from local observer", got.MatchedProcessNames)
+	}
+	if local.calls != 1 {
+		t.Fatalf("local observer calls = %d, want 1", local.calls)
+	}
+}
+
+func TestObserveLiveness_FallsBackForNonObserverBackend(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	h := New(local, remote, isRemote)
+
+	_ = h.Start(context.Background(), "polecat-1", runtime.Config{})
+	got := h.ObserveLiveness("polecat-1", nil)
+	if !got.Running {
+		t.Fatalf("ObserveLiveness = %+v, want running from remote fallback", got)
+	}
+	if got.MatchedProcessNames != nil {
+		t.Fatalf("MatchedProcessNames = %v, want nil from boolean fallback", got.MatchedProcessNames)
 	}
 }
 

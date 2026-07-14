@@ -256,6 +256,22 @@ func TestInfoFromPersistedBeadProjectsIdentityPoolNamedCluster(t *testing.T) {
 	}
 }
 
+func TestInfoFromPersistedBeadProjectsPromptReceiptAndLegacyAbsence(t *testing.T) {
+	receipt := &PromptReceipt{Version: "v9", SHA: "rendered-sha"}
+	b := sessionBeadFixture("s-receipt", "open", WithPromptReceiptMetadata(map[string]string{
+		"state": "active",
+	}, receipt))
+	info := infoFromPersistedBead(b)
+	if info.PromptVersion != receipt.Version || info.PromptSHA != receipt.SHA {
+		t.Fatalf("Info prompt receipt = (%q, %q), want (%q, %q)", info.PromptVersion, info.PromptSHA, receipt.Version, receipt.SHA)
+	}
+
+	legacy := infoFromPersistedBead(sessionBeadFixture("s-legacy", "open", map[string]string{"state": "active"}))
+	if legacy.PromptVersion != "" || legacy.PromptSHA != "" {
+		t.Fatalf("legacy Info synthesized prompt receipt: %+v", legacy)
+	}
+}
+
 func infoIDs(in []Info) []string {
 	out := make([]string, 0, len(in))
 	for _, i := range in {

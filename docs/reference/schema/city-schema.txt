@@ -1890,6 +1890,10 @@
             "always"
           ],
           "description": "Mode controls when the controller ensures this named session is live.\n\"on_demand\" (default): reserve identity and materialize when work or\nan explicit reference requires it.\n\"always\": keep the canonical session controller-managed.\nNote: mode=\"always\" is independent of min_active_sessions; both produce\nsessions, and gc doctor reports accidental duplicate-pool combinations."
+        },
+        "operator_visibility": {
+          "type": "string",
+          "description": "OperatorVisibility is optional operator UI metadata. Core scheduling\ntreats it as advisory and does not validate or interpret it."
         }
       },
       "additionalProperties": false,
@@ -2348,7 +2352,7 @@
             "type": "string"
           },
           "type": "array",
-          "description": "ProcessNames lists process names to look for when checking if the provider is running."
+          "description": "ProcessNames lists process names to look for when checking if the provider is running.\nFor custom wrapper providers that launch one of several built-in CLIs\ndecided per session (e.g. a router command that execs claude or codex),\nlist the underlying CLI names here: when exactly one observed name maps\nto a known transcript family, the session bead learns that family as its\nprovider_kind, enabling transcript discovery and family-sensitive behavior."
         },
         "emits_permission_warning": {
           "type": "boolean",
@@ -2752,7 +2756,7 @@
         },
         "remote_match": {
           "type": "string",
-          "description": "RemoteMatch is a substring pattern for the hybrid provider to route\nsessions to the remote (K8s) backend. Sessions whose names contain\nthis pattern go to K8s; all others stay local (tmux).\nOverridden by the GC_HYBRID_REMOTE_MATCH env var if set."
+          "description": "RemoteMatch is a comma- or whitespace-separated list of patterns for the\nhybrid provider to route sessions to the remote (K8s) backend. A session\nroutes remotely when its runtime name or durable startup/session identity\ncontains a listed pattern; all others stay local (tmux).\nOverridden by the GC_HYBRID_REMOTE_MATCH env var if set."
         }
       },
       "additionalProperties": false,

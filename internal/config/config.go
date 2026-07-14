@@ -467,6 +467,9 @@ type NamedSession struct {
 	// Note: mode="always" is independent of min_active_sessions; both produce
 	// sessions, and gc doctor reports accidental duplicate-pool combinations.
 	Mode string `toml:"mode,omitempty" jsonschema:"enum=on_demand,enum=always"`
+	// OperatorVisibility is optional operator UI metadata. Core scheduling
+	// treats it as advisory and does not validate or interpret it.
+	OperatorVisibility string `toml:"operator_visibility,omitempty"`
 	// SourceDir is the directory where this named session's config was
 	// defined. Set during pack/fragment loading; empty for inline config.
 	// Runtime-only — not persisted to TOML or JSON.
@@ -1538,9 +1541,10 @@ type SessionConfig struct {
 	// (workspace.name) — giving every city its own tmux server
 	// automatically. Set explicitly to override.
 	Socket string `toml:"socket,omitempty"`
-	// RemoteMatch is a substring pattern for the hybrid provider to route
-	// sessions to the remote (K8s) backend. Sessions whose names contain
-	// this pattern go to K8s; all others stay local (tmux).
+	// RemoteMatch is a comma- or whitespace-separated list of patterns for the
+	// hybrid provider to route sessions to the remote (K8s) backend. A session
+	// routes remotely when its runtime name or durable startup/session identity
+	// contains a listed pattern; all others stay local (tmux).
 	// Overridden by the GC_HYBRID_REMOTE_MATCH env var if set.
 	RemoteMatch string `toml:"remote_match,omitempty"`
 }

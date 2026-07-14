@@ -125,7 +125,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeAll,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   436,
+			BaselineCalls:   435,
 			BaselineFiles:   153,
 			ReportedCalls:   447,
 			ReportedFiles:   157,
@@ -153,7 +153,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   284,
+			BaselineCalls:   282,
 			BaselineFiles:   110,
 			ReportedCalls:   295,
 			ReportedFiles:   114,
@@ -166,7 +166,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-			BaselineCalls:   4092,
+			BaselineCalls:   4088,
 			BaselineFiles:   180,
 			ReportedCalls:   3960,
 			ReportedFiles:   184,
@@ -298,9 +298,9 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   284,
+			BaselineCalls:   282,
 			BaselineFiles:   110,
-			ReportedCalls:   284,
+			ReportedCalls:   282,
 			ReportedFiles:   110,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline",
@@ -311,9 +311,9 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-			BaselineCalls:   4086,
+			BaselineCalls:   4082,
 			BaselineFiles:   180,
-			ReportedCalls:   4086,
+			ReportedCalls:   4082,
 			ReportedFiles:   180,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small cmd/gc environment call/file totals cannot grow; reductions must lower this baseline",

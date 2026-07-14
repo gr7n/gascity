@@ -106,6 +106,60 @@ pid_is_running() (
   return 1
 )
 
+# Resolve a bounded-execution helper before port discovery. Port discovery uses
+# lsof, and lsof itself must not be allowed to stall startup/health paths.
+if command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+elif command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+else
+  TIMEOUT_BIN=""
+fi
+
+_run_bounded_warned_no_timeout=""
+
+# Wall-clock bound (seconds) for `gc rig list --json` rig discovery, shared
+# by the compact and health commands and tunable via
+# GC_DOLT_RIG_LIST_TIMEOUT_SECS. The bound must absorb a slow-but-healthy gc
+# on a busy host (~16s observed): discovery callers degrade to a city-only
+# filesystem scan on timeout, which silently drops external rig databases
+# (gascity#2740).
+GC_DOLT_RIG_LIST_TIMEOUT_SECS="${GC_DOLT_RIG_LIST_TIMEOUT_SECS:-30}"
+
+# run_bounded SECS CMD...  — Run CMD with a wall-clock timeout. Exits
+# 124 on timeout (coreutils convention). Uses --kill-after=2 so an
+# uncooperative child that ignores SIGTERM (e.g. a dolt client stuck
+# in kernel socket wait) is escalated to SIGKILL rather than leaking
+# zombies — which is the failure mode the bounded helper exists to
+# prevent. If no bounded execution mechanism is available, fail closed rather
+# than running a potentially wedged Dolt client unbounded.
+run_bounded() {
+  _t="$1"; shift
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" --kill-after=2 "$_t" "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$_t" "$@" <<'PY'
+import subprocess
+import sys
+
+limit = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
+except subprocess.TimeoutExpired as exc:
+    sys.stdout.write(exc.stdout or "")
+    sys.stderr.write(exc.stderr or "")
+    sys.exit(124)
+sys.stdout.write(proc.stdout)
+sys.stderr.write(proc.stderr)
+sys.exit(proc.returncode)
+PY
+  else
+    printf 'dolt runtime: timeout/gtimeout/python3 not found; cannot run bounded command\n' >&2
+    return 124
+  fi
+}
+
 managed_runtime_listener_pid() (
   port="$1"
 
@@ -119,7 +173,14 @@ managed_runtime_listener_pid() (
     return 0
   fi
 
-  lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null \
+  lsof_out=$(run_bounded 2 lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null)
+  lsof_status=$?
+  if [ "$lsof_status" -ne 0 ]; then
+    [ "$lsof_status" -eq 124 ] && return 124
+    return 0
+  fi
+
+  printf '%s\n' "$lsof_out" \
     | while IFS= read -r holder_pid; do
         case "$holder_pid" in
           ''|*[!0-9]*)
@@ -188,7 +249,11 @@ managed_runtime_port() (
   fi
   pid_is_running "$pid" || return 0
 
-  holder_pid=$(managed_runtime_listener_pid "$port" || true)
+  holder_status=0
+  holder_pid=$(managed_runtime_listener_pid "$port") || holder_status=$?
+  if [ "$holder_status" -eq 124 ]; then
+    return 0
+  fi
   if [ -n "$holder_pid" ]; then
     [ "$holder_pid" = "$pid" ] || return 0
     printf '%s\n' "$port"
@@ -207,60 +272,3 @@ managed_runtime_port() (
 # operator seed, and exits 78 if neither yields a port.
 . "${GC_PACK_DIR:-${PACK_DIR:-${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}/dolt}}/assets/scripts/port_resolve.sh"
 GC_DOLT_PORT=$(resolve_dolt_port_or_die "$DOLT_STATE_FILE" "$DOLT_PROVIDER_STATE_FILE" "$DOLT_DATA_DIR" "$GC_CITY_PATH") || exit $?
-
-# Resolve a bounded-execution helper. Prefer gtimeout (coreutils on
-# macOS), fall back to timeout (coreutils on Linux), then to running
-# the command directly if neither is installed. Running unbounded is
-# still better than letting a wedged dolt client hang the caller, but
-# patrol callers need a hard upper bound wherever possible.
-if command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-elif command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-else
-  TIMEOUT_BIN=""
-fi
-
-_run_bounded_warned_no_timeout=""
-
-# Wall-clock bound (seconds) for `gc rig list --json` rig discovery, shared
-# by the compact and health commands and tunable via
-# GC_DOLT_RIG_LIST_TIMEOUT_SECS. The bound must absorb a slow-but-healthy gc
-# on a busy host (~16s observed): discovery callers degrade to a city-only
-# filesystem scan on timeout, which silently drops external rig databases
-# (gascity#2740).
-GC_DOLT_RIG_LIST_TIMEOUT_SECS="${GC_DOLT_RIG_LIST_TIMEOUT_SECS:-30}"
-
-# run_bounded SECS CMD...  — Run CMD with a wall-clock timeout. Exits
-# 124 on timeout (coreutils convention). Uses --kill-after=2 so an
-# uncooperative child that ignores SIGTERM (e.g. a dolt client stuck
-# in kernel socket wait) is escalated to SIGKILL rather than leaking
-# zombies — which is the failure mode the bounded helper exists to
-# prevent. If no bounded execution mechanism is available, fail closed rather
-# than running a potentially wedged Dolt client unbounded.
-run_bounded() {
-  _t="$1"; shift
-  if [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" --kill-after=2 "$_t" "$@"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 - "$_t" "$@" <<'PY'
-import subprocess
-import sys
-
-limit = float(sys.argv[1])
-cmd = sys.argv[2:]
-try:
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
-except subprocess.TimeoutExpired as exc:
-    sys.stdout.write(exc.stdout or "")
-    sys.stderr.write(exc.stderr or "")
-    sys.exit(124)
-sys.stdout.write(proc.stdout)
-sys.stderr.write(proc.stderr)
-sys.exit(proc.returncode)
-PY
-  else
-    printf 'dolt runtime: timeout/gtimeout/python3 not found; cannot run bounded command\n' >&2
-    return 124
-  fi
-}

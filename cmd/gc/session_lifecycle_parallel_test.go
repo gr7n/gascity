@@ -4042,7 +4042,11 @@ func TestRecoverRunningPendingCreate_StampsCreationCompleteAtForAlreadyActive(t 
 		t.Fatal(err)
 	}
 	cfg := &config.City{Agents: []config.Agent{{Name: "helper"}}}
-	tp := TemplateParams{SessionName: "sky", TemplateName: "helper"}
+	tp := TemplateParams{
+		SessionName:   "sky",
+		TemplateName:  "helper",
+		PromptReceipt: &sessionpkg.PromptReceipt{Version: "v5", SHA: "recovered-sha"},
+	}
 	clkTime := time.Date(2026, 3, 18, 12, 0, 1, 0, time.UTC)
 
 	if ok, _ := recoverRunningPendingCreate(sessiontest.SeedBead(t, bead), tp, cfg, store, &clock.Fake{Time: clkTime}, nil); !ok {
@@ -4059,6 +4063,9 @@ func TestRecoverRunningPendingCreate_StampsCreationCompleteAtForAlreadyActive(t 
 	if got.Metadata["creation_complete_at"] != clkTime.Format(time.RFC3339) {
 		t.Fatalf("creation_complete_at = %q, want %q — sweep guard would treat healed bead as stale without this stamp",
 			got.Metadata["creation_complete_at"], clkTime.Format(time.RFC3339))
+	}
+	if receipt := sessionpkg.PromptReceiptFromMetadata(got.Metadata); receipt != (sessionpkg.PromptReceipt{Version: "v5", SHA: "recovered-sha"}) {
+		t.Fatalf("recovered prompt receipt = %+v, want recovered launch receipt", receipt)
 	}
 }
 
@@ -4233,8 +4240,9 @@ func TestCommitStartResult_AtomicBatchLandsStateAndClaimClearTogether(t *testing
 			candidate: startCandidate{
 				info: sessiontest.SeedBead(t, bead),
 				tp: TemplateParams{
-					SessionName:  "sky",
-					TemplateName: "helper",
+					SessionName:   "sky",
+					TemplateName:  "helper",
+					PromptReceipt: &sessionpkg.PromptReceipt{Version: "v4", SHA: "rendered-sha"},
 				},
 			},
 			coreHash: "core",
@@ -4266,6 +4274,9 @@ func TestCommitStartResult_AtomicBatchLandsStateAndClaimClearTogether(t *testing
 	}
 	if got.Metadata["pending_create_claim"] != "" {
 		t.Fatalf("pending_create_claim = %q, want cleared atomically with state transition", got.Metadata["pending_create_claim"])
+	}
+	if receipt := sessionpkg.PromptReceiptFromMetadata(got.Metadata); receipt != (sessionpkg.PromptReceipt{Version: "v4", SHA: "rendered-sha"}) {
+		t.Fatalf("prompt receipt = %+v, want launch receipt", receipt)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -139,6 +141,7 @@ var (
 	initDirIfReadyInitAndHookDir      = initAndHookDir
 	initDirIfReadyWaitForManagedDolt  = waitForManagedDoltInitReady
 	initAndHookDirWaitForScopeReady   = waitForBeadsScopeReadyAfterRecovery
+	writeAllRoutesForStartup          = writeAllRoutes
 )
 
 func isRetryableManagedDoltLifecycleError(err error) bool {
@@ -232,9 +235,22 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 	// Regenerate routes for cross-rig routing.
 	if len(cfg.Rigs) > 0 {
 		allRigs := collectRigRoutes(cityPath, cfg)
-		if err := writeAllRoutes(allRigs); err != nil {
+		if err := writeStartupRoutes(allRigs, stderr); err != nil {
 			return fmt.Errorf("writing routes: %w", err)
 		}
+	}
+	return nil
+}
+
+func writeStartupRoutes(allRigs []rigRoute, stderr io.Writer) error {
+	if err := writeAllRoutesForStartup(allRigs); err != nil {
+		if isReadOnlyFilesystemError(err) {
+			if stderr != nil {
+				fmt.Fprintf(stderr, "gc start: warning: writing routes skipped for read-only bead scope: %v\n", err) //nolint:errcheck // best-effort warning
+			}
+			return nil
+		}
+		return err
 	}
 	return nil
 }
@@ -507,10 +523,7 @@ func initAndHookDir(cityPath, dir, prefix string) error {
 	if usesPostgres, err := scopeUsesPostgresBackendForInit(cityPath, dir); err != nil {
 		return err
 	} else if usesPostgres {
-		if err := installBeadHooks(dir, cityPath); err != nil {
-			return fmt.Errorf("install hooks at %s: %w", dir, err)
-		}
-		return nil
+		return installBeadHooksIfAllowed(dir, cityPath)
 	}
 	doltDatabase := canonicalScopeDoltDatabase(cityPath, dir, prefix)
 	if err := normalizeCanonicalBdScopeFilesForInit(cityPath, dir, prefix, doltDatabase); err != nil {
@@ -544,10 +557,21 @@ func initAndHookDir(cityPath, dir, prefix string) error {
 		}
 	}
 	// Non-fatal: hooks are convenience (event forwarding), not critical.
+	return installBeadHooksIfAllowed(dir, cityPath)
+}
+
+func installBeadHooksIfAllowed(dir, cityPath string) error {
 	if err := installBeadHooks(dir, cityPath); err != nil {
+		if isReadOnlyFilesystemError(err) {
+			return nil
+		}
 		return fmt.Errorf("install hooks at %s: %w", dir, err)
 	}
 	return nil
+}
+
+func isReadOnlyFilesystemError(err error) bool {
+	return errors.Is(err, iofs.ErrPermission) || errors.Is(err, syscall.EROFS)
 }
 
 func scopeUsesPostgresBackendForInit(cityPath, dir string) (bool, error) {
@@ -1942,7 +1966,23 @@ func providerLifecycleProcessEnvWithError(cityPath, provider string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
+	env = restoreProviderLifecycleSafeReferenceEnv(env)
 	return providerLifecycleProcessEnvFromBase(cityPath, provider, env), nil
+}
+
+func restoreProviderLifecycleSafeReferenceEnv(env []string) []string {
+	for _, key := range []string{
+		// This value is a Kubernetes Secret object name, not a credential.
+		"GC_K8S_IMAGE_PULL_SECRET",
+	} {
+		value, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		env = removeEnvKey(env, key)
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 func providerLifecycleProcessEnvForScopeInitWithError(cityPath, scopeRoot, provider string) ([]string, error) {

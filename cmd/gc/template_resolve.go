@@ -54,6 +54,14 @@ type TemplateParams struct {
 	Command string
 	// Prompt is the fully rendered prompt (with beacon).
 	Prompt string
+	// PromptReceipt records the rendered template projection associated with
+	// Prompt: template substitution plus configured injected/appended fragments,
+	// before the runtime beacon, assigned-skills appendix, or initial-message
+	// envelope are added. It is a drift-grouping receipt, not a hash of the full
+	// provider input envelope. Nil means this TemplateParams did not observe
+	// prompt rendering (for example, a legacy/test-constructed value); a non-nil
+	// zero value is an observed prompt-less launch and clears stale provenance.
+	PromptReceipt *session.PromptReceipt
 	// Env is the merged environment (passthrough + provider + agent + passthrough vars).
 	Env map[string]string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
@@ -348,7 +356,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if p.city != nil {
 		beadsCfg = p.city.Beads
 	}
-	prompt = renderPrompt(p.fs, p.cityPath, p.cityName, cfgAgent.PromptTemplate, PromptContext{
+	renderedPrompt := renderPromptWithMeta(p.fs, p.cityPath, p.cityName, cfgAgent.PromptTemplate, PromptContext{
 		CityRoot:                p.cityPath,
 		AgentName:               qualifiedName,
 		TemplateName:            cfgAgent.Name,
@@ -369,12 +377,18 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		InstructionsFile:        instructionsFileForAgent(cfgAgent, p.workspace, p.providers),
 		Env:                     cfgAgent.Env,
 	}, p.sessionTemplate, p.stderr, packDirs, fragments, p.beadStore)
+	prompt = renderedPrompt.Text
+	promptReceipt := &session.PromptReceipt{
+		Version: renderedPrompt.Version,
+		SHA:     renderedPrompt.SHA,
+	}
 	hasHooks := config.AgentHasHooks(cfgAgent, p.workspace, resolved.Name, p.providers)
 	beacon := runtime.FormatBeaconAt(p.cityName, qualifiedName, !hasHooks, p.beaconTime)
 	suppressStartupPrompt := suppressStartupPromptForAgent(cfgAgent)
 	switch {
 	case suppressStartupPrompt:
 		prompt = ""
+		promptReceipt = &session.PromptReceipt{}
 	case prompt != "":
 		prompt = beacon + "\n\n" + prompt
 	default:
@@ -665,6 +679,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	params := TemplateParams{
 		Command:          command,
 		Prompt:           prompt,
+		PromptReceipt:    promptReceipt,
 		Env:              env,
 		Upstream:         cfgAgent.Upstream,
 		Hints:            hints,

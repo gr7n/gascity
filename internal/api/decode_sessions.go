@@ -7,19 +7,21 @@ import "github.com/gastownhall/gascity/internal/api/genclient"
 // sessionResponse fields that the CLI formatter reads so cmd/gc/ never
 // imports genclient directly.
 type SessionView struct {
-	ID          string `json:"id"`
-	Template    string `json:"template"`
-	State       string `json:"state"`
-	Reason      string `json:"reason"`
-	Title       string `json:"title"`
-	Alias       string `json:"alias"`
-	SessionName string `json:"session_name"`
-	WorkDir     string `json:"work_dir"`
-	CreatedAt   string `json:"created_at"`
-	LastActive  string `json:"last_active"`
-	Attached    bool   `json:"attached"`
-	Running     bool   `json:"running"`
-	LastOutput  string `json:"last_output"`
+	ID            string `json:"id"`
+	Template      string `json:"template"`
+	State         string `json:"state"`
+	Reason        string `json:"reason"`
+	Title         string `json:"title"`
+	Alias         string `json:"alias"`
+	SessionName   string `json:"session_name"`
+	WorkDir       string `json:"work_dir"`
+	CreatedAt     string `json:"created_at"`
+	LastActive    string `json:"last_active"`
+	Attached      bool   `json:"attached"`
+	Running       bool   `json:"running"`
+	LastOutput    string `json:"last_output"`
+	PromptVersion string `json:"prompt_version"`
+	PromptSHA     string `json:"prompt_sha"`
 }
 
 // sessionViewFromGen translates one genclient.SessionResponse into a
@@ -34,6 +36,12 @@ func sessionViewFromGen(g genclient.SessionResponse) SessionView {
 		CreatedAt:   g.CreatedAt,
 		Attached:    g.Attached,
 		Running:     g.Running,
+	}
+	if g.PromptVersion != nil {
+		out.PromptVersion = *g.PromptVersion
+	}
+	if g.PromptSha != nil {
+		out.PromptSHA = *g.PromptSha
 	}
 	if g.WorkDir != nil {
 		out.WorkDir = *g.WorkDir

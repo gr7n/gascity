@@ -13,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/runtime"
+	sessionhybrid "github.com/gastownhall/gascity/internal/runtime/hybrid"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
@@ -31,6 +32,159 @@ func TestTmuxConfigFromSessionPreservesExplicitSocket(t *testing.T) {
 	cfg := tmuxConfigFromSession(sc, "city", "/tmp/city-a")
 	if cfg.SocketName != "custom-socket" {
 		t.Fatalf("SocketName = %q, want %q", cfg.SocketName, "custom-socket")
+	}
+}
+
+func TestHybridRemoteMatcherSupportsCommaAndWhitespaceLists(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		value   string
+		want    bool
+	}{
+		{name: "comma first", pattern: "k8s-canary,rig/web-worker", value: "k8s-canary", want: true},
+		{name: "comma second", pattern: "k8s-canary,rig/web-worker", value: "rig/web-worker-2", want: true},
+		{name: "trimmed comma", pattern: " k8s-canary ,  rig/web-worker ", value: "rig/web-worker", want: true},
+		{name: "space list", pattern: "k8s-canary rig/web-worker", value: "rig/web-worker-5", want: true},
+		{name: "newline list", pattern: "k8s-canary\nrig/web-worker\treviewer", value: "reviewer-1", want: true},
+		{name: "unlisted", pattern: "k8s-canary, rig/web-worker", value: "rig/planner", want: false},
+		{name: "empty", pattern: " , \n\t ", value: "anything", want: false},
+		{name: "empty candidate", pattern: "k8s-canary", value: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hybridRemoteMatcher(tc.pattern)(tc.value); got != tc.want {
+				t.Fatalf("hybridRemoteMatcher(%q)(%q) = %v, want %v", tc.pattern, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHybridRemoteStartMatcherUsesDurableStartupIdentity(t *testing.T) {
+	match := hybridRemoteStartMatcher("k8s-canary, rig/web-worker")
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{name: "s-gr-7sgzx", env: map[string]string{"GC_TEMPLATE": "k8s-canary"}},
+		{name: "s-gr-7sgzy", env: map[string]string{"GC_AGENT": "rig/web-worker"}},
+		{name: "s-gr-7sgzz", env: map[string]string{"GC_ALIAS": "k8s-canary-overnight"}},
+		{name: "s-gr-7sha0", env: map[string]string{"GC_SESSION_NAME": "rig/web-worker-3"}},
+		{name: "k8s-canary-direct", env: nil},
+	} {
+		if !match(tc.name, runtime.Config{Env: tc.env}) {
+			t.Fatalf("match(%q, %#v) = false, want true", tc.name, tc.env)
+		}
+	}
+
+	if match("s-gr-local", runtime.Config{Env: map[string]string{"GC_TEMPLATE": "reviewer"}}) {
+		t.Fatal("local startup identity matched remote pattern")
+	}
+}
+
+func TestRegisterHybridRemoteRoutesUsesDurableSessionMetadata(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	const sessionName = "s-gr-7sgzx"
+	if err := remote.Start(t.Context(), sessionName, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	hybrid := sessionhybrid.New(local, remote, func(string) bool { return false })
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "gr-7sgzx",
+		Type:   session.BeadType,
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": sessionName,
+			"template":     "rig/web-worker",
+			"provider":     "codex",
+			"alias":        "friendly-name-that-should-not-matter",
+		},
+	}})
+
+	registerHybridRemoteRoutes(hybrid, snapshot, "k8s-canary, rig/web-worker")
+
+	if _, err := hybrid.Peek(sessionName, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", sessionName) != 0 {
+		t.Fatal("Peek routed to local for snapshot-seeded remote session")
+	}
+	if remote.CountCalls("Peek", sessionName) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", sessionName))
+	}
+}
+
+func TestRegisterHybridRemoteRoutesIgnoresAliasOnlyMatch(t *testing.T) {
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	const sessionName = "s-gr-local"
+	hybrid := sessionhybrid.New(local, remote, func(string) bool { return false })
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "gr-local",
+		Type:   session.BeadType,
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": sessionName,
+			"template":     "reviewer",
+			"provider":     "codex",
+			"alias":        "k8s-canary-please",
+		},
+	}})
+
+	registerHybridRemoteRoutes(hybrid, snapshot, "k8s-canary")
+
+	if _, err := hybrid.Peek(sessionName, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", sessionName) != 1 {
+		t.Fatalf("local Peek calls = %d, want 1", local.CountCalls("Peek", sessionName))
+	}
+	if remote.CountCalls("Peek", sessionName) != 0 {
+		t.Fatal("alias-only match routed to remote")
+	}
+}
+
+func TestResolveSessionTransportProviderSeedsHybridBeforeWrapping(t *testing.T) {
+	oldBuild := buildSessionProviderByName
+	t.Cleanup(func() { buildSessionProviderByName = oldBuild })
+
+	local, remote := runtime.NewFake(), runtime.NewFake()
+	hybrid := sessionhybrid.New(local, remote, func(string) bool { return false })
+	buildSessionProviderByName = func(_ *config.City, _ string, _ config.SessionConfig, _, _ string) (runtime.Provider, error) {
+		return hybrid, nil
+	}
+	const sessionName = "s-gr-randomized-runtime-id"
+	if err := remote.Start(t.Context(), sessionName, runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "gr-seeded",
+		Type:   session.BeadType,
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": sessionName,
+			"template":     "rig/web-worker",
+		},
+	}})
+	cfg := &config.City{Session: config.SessionConfig{Provider: "hybrid", RemoteMatch: "local-only, rig/web-worker"}}
+
+	sp, err := resolveSessionTransportProvider(sessionProviderContext{
+		providerName: "hybrid",
+		cfg:          cfg,
+		sc:           cfg.Session,
+		cityName:     "gr7n",
+		cityPath:     "/city",
+	}, snapshot)
+	if err != nil {
+		t.Fatalf("resolveSessionTransportProvider: %v", err)
+	}
+	if _, err := sp.Peek(sessionName, 20); err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if local.CountCalls("Peek", sessionName) != 0 {
+		t.Fatal("resolved provider lost durable remote route before return")
+	}
+	if remote.CountCalls("Peek", sessionName) != 1 {
+		t.Fatalf("remote Peek calls = %d, want 1", remote.CountCalls("Peek", sessionName))
 	}
 }
 
@@ -1079,6 +1233,52 @@ func TestLoadProviderSessionSnapshotLoadsStoreWithoutACPAgents(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("openSessionProviderStore called %d times, want 1", calls)
+	}
+}
+
+func TestLoadProviderSessionSnapshotIncludesTypeOnlySessionBeads(t *testing.T) {
+	oldOpen := openSessionProviderStore
+	t.Cleanup(func() { openSessionProviderStore = oldOpen })
+
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Type: session.BeadType,
+		Metadata: map[string]string{
+			"template":     "rig/web-worker",
+			"session_name": "s-gr-type-only",
+		},
+	}); err != nil {
+		t.Fatalf("Create(type-only session): %v", err)
+	}
+	openSessionProviderStore = func(string) (beads.Store, error) { return store, nil }
+
+	snapshot := loadProviderSessionSnapshot(sessionProviderContext{
+		providerName: "hybrid",
+		cityPath:     "/tmp/city",
+	})
+	if snapshot == nil {
+		t.Fatal("loadProviderSessionSnapshot() = nil, want snapshot")
+	}
+	if got := snapshot.FindSessionNameByTemplate("rig/web-worker"); got != "s-gr-type-only" {
+		t.Fatalf("type-only session name = %q, want s-gr-type-only", got)
+	}
+}
+
+func TestLoadProviderSessionSnapshotPreservesLoadError(t *testing.T) {
+	oldOpen := openSessionProviderStore
+	t.Cleanup(func() { openSessionProviderStore = oldOpen })
+
+	wantErr := errors.New("session store unavailable")
+	openSessionProviderStore = func(string) (beads.Store, error) { return nil, wantErr }
+	snapshot := loadProviderSessionSnapshot(sessionProviderContext{
+		providerName: "hybrid",
+		cityPath:     "/tmp/city",
+	})
+	if snapshot == nil {
+		t.Fatal("loadProviderSessionSnapshot() = nil, want degraded snapshot")
+	}
+	if !errors.Is(snapshot.LoadError(), wantErr) {
+		t.Fatalf("snapshot.LoadError() = %v, want %v", snapshot.LoadError(), wantErr)
 	}
 }
 

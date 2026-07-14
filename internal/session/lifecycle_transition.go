@@ -329,6 +329,10 @@ type CommitStartedPatchInput struct {
 	// nothing stamps nothing. priming_attempted_at is never emitted here.
 	PrimedAt   time.Time
 	PromptHash string
+	// PromptReceipt is the rendered template-projection provenance observed for
+	// this start; runtime delivery envelopes are outside the receipt boundary.
+	// Nil preserves legacy absence; non-nil writes or clears both receipt keys.
+	PromptReceipt *PromptReceipt
 }
 
 // CommitStartedPatch records a successful runtime start atomically with the
@@ -378,6 +382,9 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 	if !input.PrimedAt.IsZero() && input.PromptHash != "" {
 		patch[PrimedAtMetadataKey] = input.PrimedAt.UTC().Format(time.RFC3339)
 		patch[PromptHashMetadataKey] = input.PromptHash
+	}
+	for key, value := range PromptReceiptPatch(input.PromptReceipt) {
+		patch[key] = value
 	}
 	return patch
 }

@@ -57,6 +57,17 @@ func mustProviderLifecycleProcessEnv(t *testing.T, cityPath, provider string) []
 	return env
 }
 
+func envEntriesMapForTest(entries []string) map[string]string {
+	env := map[string]string{}
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	return env
+}
+
 // TestEnsureBeadsProvider_file verifies that file provider is a no-op.
 func TestEnsureBeadsProvider_file(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
@@ -87,14 +98,7 @@ func TestProviderLifecycleProcessEnvProjectsCanonicalDoltPaths(t *testing.T) {
 	t.Setenv("GC_DOLT_LOCK_FILE", "/tmp/wrong-lock")
 	t.Setenv("GC_DOLT_CONFIG_FILE", "/tmp/wrong-config")
 
-	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
-	env := map[string]string{}
-	for _, entry := range envEntries {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			env[key] = value
-		}
-	}
+	env := envEntriesMapForTest(mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath)))
 
 	packStateDir := citylayout.PackStateDir(wantCityPath, "dolt")
 	want := map[string]string{
@@ -115,20 +119,32 @@ func TestProviderLifecycleProcessEnvProjectsCanonicalDoltPaths(t *testing.T) {
 
 func TestProviderLifecycleProcessEnvPropagatesManagedDoltTestMode(t *testing.T) {
 	cityPath := t.TempDir()
-	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
-	env := map[string]string{}
-	for _, entry := range envEntries {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			env[key] = value
-		}
-	}
+	env := envEntriesMapForTest(mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath)))
 
 	if got := env[managedDoltTestModeEnv]; got != "1" {
 		t.Fatalf("providerLifecycleProcessEnv()[%s] = %q, want 1", managedDoltTestModeEnv, got)
 	}
 	if got := env[managedDoltTestParentPIDEnv]; got == "" {
 		t.Fatalf("providerLifecycleProcessEnv()[%s] missing", managedDoltTestParentPIDEnv)
+	}
+}
+
+func TestProviderLifecycleProcessEnvKeepsK8sImagePullSecretReference(t *testing.T) {
+	cityPath := t.TempDir()
+	provider := "exec:/tmp/gc-beads-k8s"
+	setScopedBeadsProviderForTest(t, cityPath, provider)
+	setTestEnv(t, map[string]string{
+		"GC_K8S_IMAGE_PULL_SECRET": "ghcr-pull",
+		"GR7N_9ROUTER_API_KEY":     "must-not-leak",
+	})
+
+	env := envEntriesMapForTest(mustProviderLifecycleProcessEnv(t, cityPath, provider))
+
+	if got := env["GC_K8S_IMAGE_PULL_SECRET"]; got != "ghcr-pull" {
+		t.Fatalf("GC_K8S_IMAGE_PULL_SECRET = %q, want ghcr-pull", got)
+	}
+	if got := env["GR7N_9ROUTER_API_KEY"]; got != "" {
+		t.Fatalf("GR7N_9ROUTER_API_KEY leaked as %q", got)
 	}
 }
 
@@ -4681,8 +4697,10 @@ dolt.user: city-user
 	}
 	captureFile := filepath.Join(t.TempDir(), "init-env-city")
 	script := writeGcBeadsBdInitEnvCaptureScript(t, captureFile)
-	t.Setenv("GC_BEADS", "exec:"+script)
-	t.Setenv("GC_BEADS_SCOPE_ROOT", cityPath)
+	setTestEnv(t, map[string]string{
+		"GC_BEADS":            "exec:" + script,
+		"GC_BEADS_SCOPE_ROOT": cityPath,
+	})
 	t.Setenv("GC_DOLT_HOST", "ambient.invalid")
 	t.Setenv("GC_DOLT_PORT", "9999")
 	t.Setenv("GC_PACK_STATE_DIR", "/wrong/.gc/runtime/packs/dolt")
@@ -4735,8 +4753,10 @@ dolt.user: rig-user
 	}
 	captureFile := filepath.Join(t.TempDir(), "init-env-rig")
 	script := writeGcBeadsBdInitEnvCaptureScript(t, captureFile)
-	t.Setenv("GC_BEADS", "exec:"+script)
-	t.Setenv("GC_BEADS_SCOPE_ROOT", cityPath)
+	setTestEnv(t, map[string]string{
+		"GC_BEADS":            "exec:" + script,
+		"GC_BEADS_SCOPE_ROOT": cityPath,
+	})
 	t.Setenv("GC_DOLT_HOST", "ambient.invalid")
 	t.Setenv("GC_DOLT_PORT", "9999")
 	t.Setenv("GC_PACK_STATE_DIR", "/wrong/.gc/runtime/packs/dolt")
@@ -5392,6 +5412,79 @@ exit 99
 	}
 	if _, err := os.Stat(filepath.Join(rigPath, ".beads", "hooks", "on_create")); !os.IsNotExist(err) {
 		t.Fatalf("gc must not install bd event hooks for inherited postgres rig (stat err=%v)", err)
+	}
+}
+
+func TestInitAndHookDirToleratesReadOnlyHookInstallForInheritedCityPostgresRig(t *testing.T) {
+	cityPath, rigPath, _ := writeInheritedCityPostgresRigFixture(t, "")
+	callsFile := filepath.Join(t.TempDir(), "provider-calls.log")
+	script := filepath.Join(t.TempDir(), "gc-beads-bd")
+	scriptBody := fmt.Sprintf(`#!/bin/sh
+set -eu
+printf '%%s
+' "$*" >> %q
+exit 99
+`, callsFile)
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setTestEnv(t, map[string]string{
+		"GC_BEADS":            "exec:" + script,
+		"GC_BEADS_SCOPE_ROOT": cityPath,
+	})
+
+	beadsDir := filepath.Join(rigPath, ".beads")
+	if err := os.Chmod(beadsDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(beadsDir, 0o755)
+	})
+
+	if err := initAndHookDir(cityPath, rigPath, "pg"); err != nil {
+		t.Fatalf("initAndHookDir: %v", err)
+	}
+	if data, err := os.ReadFile(callsFile); err == nil {
+		t.Fatalf("provider init should not run for inherited postgres rig; calls:\n%s", data)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read provider calls: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(rigPath, ".beads", "hooks", "on_create")); !os.IsNotExist(err) {
+		t.Fatalf("read-only hook install should not create hook, stat err = %v", err)
+	}
+}
+
+func TestStartBeadsLifecycleToleratesReadOnlyRoutesForInheritedCityPostgresRig(t *testing.T) {
+	cityPath, rigPath, _ := writeInheritedCityPostgresRigFixture(t, "")
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "demo"},
+		Rigs: []config.Rig{{
+			Name:   "pg",
+			Path:   rigPath,
+			Prefix: "pg",
+		}},
+	}
+
+	oldWriteAllRoutesForStartup := writeAllRoutesForStartup
+	writeAllRoutesForStartup = func(rigs []rigRoute) error {
+		if len(rigs) != 2 {
+			t.Fatalf("startup route count = %d, want 2", len(rigs))
+		}
+		if rigs[0].AbsDir != cityPath || rigs[1].AbsDir != rigPath {
+			t.Fatalf("startup routes = %#v, want city then rig", rigs)
+		}
+		return fmt.Errorf("writing routes for %q: %w", rigs[1].Prefix, syscall.EROFS)
+	}
+	t.Cleanup(func() {
+		writeAllRoutesForStartup = oldWriteAllRoutesForStartup
+	})
+
+	var stderr bytes.Buffer
+	if err := startBeadsLifecycle(cityPath, "", cfg, &stderr); err != nil {
+		t.Fatalf("startBeadsLifecycle: %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "writing routes skipped for read-only bead scope") {
+		t.Fatalf("stderr = %q, want read-only routes warning", got)
 	}
 }
 

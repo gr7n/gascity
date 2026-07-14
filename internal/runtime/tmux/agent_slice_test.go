@@ -53,18 +53,23 @@ func TestAgentSliceWrapsNewSessionWithCommandAndEnv(t *testing.T) {
 	if len(exec.calls) == 0 {
 		t.Fatal("no tmux calls recorded")
 	}
-	args := exec.calls[0]
-	got := args[len(args)-1]
+	respawn := findCall(exec.calls, "respawn-pane")
+	if respawn == nil {
+		t.Fatalf("no respawn-pane call recorded: %v", exec.calls)
+	}
+	got := respawn[len(respawn)-1]
 	// The env -u prefix must end up INSIDE the scope wrapper so the unset
 	// still applies to the agent process.
 	want := "systemd-run --user --scope --slice=gascity-agents.slice --collect --quiet -- sh -c 'env -u LC_ALL claude'"
 	if got != want {
 		t.Fatalf("pane command = %q, want %q", got, want)
 	}
-	// The -e session env flags must survive wrapping.
-	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
-		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	joined := strings.Join(slices.Concat(exec.calls...), "\x00")
+	if strings.Contains(joined, "en_US.UTF-8") {
+		t.Fatalf("session env value leaked into tmux argv: %v", exec.calls)
+	}
+	if findCall(exec.calls, "source-file") == nil {
+		t.Fatalf("no source-file call recorded for session env: %v", exec.calls)
 	}
 }
 
@@ -159,9 +164,14 @@ func TestAgentSliceEmptyCommandNotWrapped(t *testing.T) {
 	if err := tm.NewSessionWithCommandAndEnv("gc-test-empty", "/work", "", map[string]string{"LANG": "C"}); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
-	args := exec.calls[0]
-	if got := args[len(args)-1]; got != "" {
-		t.Fatalf("pane command = %q, want empty", got)
+	respawn := findCall(exec.calls, "respawn-pane")
+	if respawn == nil {
+		t.Fatalf("no respawn-pane call recorded: %v", exec.calls)
+	}
+	for _, arg := range respawn {
+		if strings.Contains(arg, "systemd-run") {
+			t.Fatalf("empty pane command should not be wrapped: %v", respawn)
+		}
 	}
 }
 

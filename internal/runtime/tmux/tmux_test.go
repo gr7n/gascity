@@ -1865,6 +1865,43 @@ func TestNewSessionWithCommandAndEnv(t *testing.T) {
 	}
 }
 
+// TestNewSessionWithCommandAndEnvSpecialCharsReachProcess verifies that
+// values containing tmux-config and shell metacharacters survive the
+// source-file env path byte-for-byte into the initial process environment.
+func TestNewSessionWithCommandAndEnvSpecialCharsReachProcess(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	tm := testTmux()
+	sessionName := "gt-test-env-special-" + fmt.Sprintf("%d", time.Now().UnixNano()%10000)
+	_ = tm.KillSession(sessionName)
+
+	want := `x 'quote' $dollar #hash \back "double"  spaces`
+	outFile := filepath.Join(t.TempDir(), "envdump.txt")
+	env := map[string]string{"GC_TEST_SPECIAL": want}
+	cmd := fmt.Sprintf("printenv GC_TEST_SPECIAL > %s; sleep 5", outFile)
+	if err := tm.NewSessionWithCommandAndEnv(sessionName, "", cmd, env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(outFile)
+		if err == nil && len(data) > 0 {
+			if got := strings.TrimSuffix(string(data), "\n"); got != want {
+				t.Fatalf("process env GC_TEST_SPECIAL = %q, want %q", got, want)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for env dump file %s (last err: %v)", outFile, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestSetGetRemoveEnvironment(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")
@@ -1972,6 +2009,29 @@ func TestNudgeSubmitDebounceUsesKimiProviderHint(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 
 	if err := tm.SetEnvironment(sessionName, "GC_PROVIDER", "kimi"); err != nil {
+		t.Fatalf("SetEnvironment: %v", err)
+	}
+	if got, want := tm.nudgeSubmitDebounce(sessionName), 1500*time.Millisecond; got != want {
+		t.Fatalf("nudgeSubmitDebounce = %s, want %s", got, want)
+	}
+}
+
+// TestNudgeSubmitDebounceUsesKimiFamilyHint mirrors the plain-kimi test for a
+// wrapped alias: the debounce gate normalizes GC_PROVIDER to its provider
+// family, so "kimi-pro" gets the same slow-paste debounce as "kimi".
+func TestNudgeSubmitDebounceUsesKimiFamilyHint(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	tm := testTmux()
+	sessionName := "gt-test-kimi-family-debounce-" + fmt.Sprintf("%d", time.Now().UnixNano()%10000)
+	if err := tm.NewSession(sessionName, os.TempDir()); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+
+	if err := tm.SetEnvironment(sessionName, "GC_PROVIDER", "kimi-pro"); err != nil {
 		t.Fatalf("SetEnvironment: %v", err)
 	}
 	if got, want := tm.nudgeSubmitDebounce(sessionName), 1500*time.Millisecond; got != want {

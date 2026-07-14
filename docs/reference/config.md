@@ -535,6 +535,7 @@ NamedSession defines a canonical persistent session backed by an agent template.
 | `scope` | string |  |  | Scope defines where this named session is instantiated in pack expansion: "city" (one per city) or "rig" (one per rig). Omit the field for an unscoped session instantiated in both city and rig expansion contexts. Enum: `city`, `rig` |
 | `dir` | string |  |  | Dir is the identity prefix for rig-scoped named sessions after pack expansion. Empty means city-scoped. |
 | `mode` | string |  |  | Mode controls when the controller ensures this named session is live. "on_demand" (default): reserve identity and materialize when work or an explicit reference requires it. "always": keep the canonical session controller-managed. Note: mode="always" is independent of min_active_sessions; both produce sessions, and gc doctor reports accidental duplicate-pool combinations. Enum: `on_demand`, `always` |
+| `operator_visibility` | string |  |  | OperatorVisibility is optional operator UI metadata. Core scheduling treats it as advisory and does not validate or interpret it. |
 
 ## NamedSessionPatch
 
@@ -680,7 +681,7 @@ ProviderSpec defines a named provider's startup parameters.
 | `prompt_flag` | string |  |  | PromptFlag is the CLI flag used when prompt_mode is "flag" (e.g. "--prompt"). |
 | `ready_delay_ms` | integer |  |  | ReadyDelayMs is milliseconds to wait after launch before the provider is considered ready. |
 | `ready_prompt_prefix` | string |  |  | ReadyPromptPrefix is the string prefix that indicates the provider is ready for input. |
-| `process_names` | []string |  |  | ProcessNames lists process names to look for when checking if the provider is running. |
+| `process_names` | []string |  |  | ProcessNames lists process names to look for when checking if the provider is running. For custom wrapper providers that launch one of several built-in CLIs decided per session (e.g. a router command that execs claude or codex), list the underlying CLI names here: when exactly one observed name maps to a known transcript family, the session bead learns that family as its provider_kind, enabling transcript discovery and family-sensitive behavior. |
 | `emits_permission_warning` | boolean |  |  | EmitsPermissionWarning is tri-state: nil = inherit, &true = enable, &false = explicit disable. |
 | `accept_startup_dialogs` | boolean |  |  | AcceptStartupDialogs is tri-state: nil = default startup dialog handling, &true = force dialog acceptance, &false = suppress it for providers that handle permissions entirely through launch flags. |
 | `env` | map[string]string |  |  | Env sets additional environment variables for the provider process. |
@@ -800,7 +801,7 @@ SessionConfig holds session provider settings.
 | `startup_timeout` | string |  | `60s` | StartupTimeout is how long to wait for each agent's Start() call before treating it as failed. Duration string (e.g., "60s", "2m"). Defaults to "60s". |
 | `progress_stall_timeout` | string |  |  | ProgressStallTimeout, when set, enables progress-aware session recycling: a desired, alive, claim-less session on a healthy provider whose last provider-reported activity is older than this duration is restarted fresh. Such a session has likely parked (e.g. its turn ended on a provider auth error) and will not self-recover. Set this above the longest legitimate alive-idle period for the city; values below 5m are clamped to 5m. Duration string (e.g. "30m"). Unset/zero disables it. |
 | `socket` | string |  |  | Socket specifies the tmux socket name for per-city isolation. When set, all tmux commands use "tmux -L &lt;socket&gt;" to connect to a dedicated server. When empty, defaults to the city name (workspace.name) — giving every city its own tmux server automatically. Set explicitly to override. |
-| `remote_match` | string |  |  | RemoteMatch is a substring pattern for the hybrid provider to route sessions to the remote (K8s) backend. Sessions whose names contain this pattern go to K8s; all others stay local (tmux). Overridden by the GC_HYBRID_REMOTE_MATCH env var if set. |
+| `remote_match` | string |  |  | RemoteMatch is a comma- or whitespace-separated list of patterns for the hybrid provider to route sessions to the remote (K8s) backend. A session routes remotely when its runtime name or durable startup/session identity contains a listed pattern; all others stay local (tmux). Overridden by the GC_HYBRID_REMOTE_MATCH env var if set. |
 
 ## SessionSleepConfig
 

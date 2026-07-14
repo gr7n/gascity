@@ -14,7 +14,10 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/promptmeta"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
+	workdirutil "github.com/gastownhall/gascity/internal/workdir"
 	"github.com/spf13/cobra"
 )
 
@@ -76,6 +79,11 @@ When agent-name is omitted, ` + "`GC_ALIAS`" + ` is used (falling back to ` + "`
 If agent-name matches a configured agent with a prompt_template,
 that template is output. Otherwise outputs a default worker prompt.
 
+With --json, bytes reports the emitted content size and prompt_version /
+prompt_sha report the rendered template projection when observed. The SHA
+includes configured template fragments and excludes runtime delivery envelopes
+such as hook formatting and launch beacons.
+
 Pass --strict to fail on debugging mistakes instead of silently falling
 back to the default prompt. Strict errors on:
 
@@ -94,7 +102,8 @@ to empty output from valid conditional logic, or on suspended states
 	cmd.RunE = func(_ *cobra.Command, args []string) error {
 		if jsonOut {
 			var buf strings.Builder
-			if doPrimeWithHookFormat(args, &buf, stderr, hookMode, hookFormat, strictMode) != 0 {
+			var receipt session.PromptReceipt
+			if doPrimeWithHookFormatAndReceipt(args, &buf, stderr, hookMode, hookFormat, strictMode, &receipt) != 0 {
 				return errExit
 			}
 			agentName, _ := primeInvocationAgentName(args)
@@ -105,6 +114,8 @@ to empty output from valid conditional logic, or on suspended states
 				HookFormat:    hookFormat,
 				Content:       buf.String(),
 				Bytes:         buf.Len(),
+				PromptVersion: receipt.Version,
+				PromptSHA:     receipt.SHA,
 			})
 		}
 		if doPrimeWithHookFormat(args, stdout, stderr, hookMode, hookFormat, strictMode) != 0 {
@@ -126,6 +137,8 @@ type primeJSONResult struct {
 	HookFormat    string `json:"hook_format,omitempty"`
 	Content       string `json:"content"`
 	Bytes         int    `json:"bytes"`
+	PromptVersion string `json:"prompt_version,omitempty"`
+	PromptSHA     string `json:"prompt_sha,omitempty"`
 }
 
 // doPrime exists as the public non-strict entry point so callers don't
@@ -152,6 +165,10 @@ func doPrimeWithMode(args []string, stdout, stderr io.Writer, hookMode, strictMo
 	return doPrimeWithHookFormat(args, stdout, stderr, hookMode, "", strictMode)
 }
 
+func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode bool, hookFormat string, strictMode bool) int {
+	return doPrimeWithHookFormatAndReceipt(args, stdout, stderr, hookMode, hookFormat, strictMode, nil)
+}
+
 func primeInvocationAgentName(args []string) (string, bool) {
 	agentName := os.Getenv("GC_ALIAS")
 	if agentName == "" {
@@ -173,7 +190,7 @@ func primeInvocationAgentName(args []string) (string, bool) {
 	return strings.TrimSpace(agentName), sessionTemplateContext
 }
 
-func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode bool, hookFormat string, strictMode bool) int {
+func doPrimeWithHookFormatAndReceipt(args []string, stdout, stderr io.Writer, hookMode bool, hookFormat string, strictMode bool, receiptOut *session.PromptReceipt) int {
 	agentName, sessionTemplateContext := primeInvocationAgentName(args)
 	var hookContext primeHookContext
 	suppressHookPrompt := false
@@ -201,7 +218,16 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: no city config found: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
+		// Hook invocations without a resolvable city cannot be attributed to a
+		// Gas City session. Stay silent instead of injecting the generic worker
+		// protocol into an unrelated provider conversation. Explicit/manual
+		// `gc prime` keeps the historical fallback below.
+		prompt := defaultPrimePrompt
+		if hookMode {
+			prompt = ""
+		}
+		setPrimePromptReceipt(receiptOut, "", promptmeta.SHA(prompt))
+		writePrimePromptWithFormat(stdout, "", "", prompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
 	}
 	cfg, err := loadCityConfig(cityPath, stderr)
@@ -210,7 +236,12 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: loading city config: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
+		prompt := defaultPrimePrompt
+		if hookMode {
+			prompt = ""
+		}
+		setPrimePromptReceipt(receiptOut, "", promptmeta.SHA(prompt))
+		writePrimePromptWithFormat(stdout, "", "", prompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
 	}
 	resolveRigPaths(cityPath, cfg.Rigs)
@@ -279,6 +310,17 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 		runHookSideEffects()
 	}
 
+	if hookMode && !primeHookHasSessionContext(cityPath, len(resolvedAgents) > 0) {
+		// A user-level/global SessionStart hook can run in every Codex task.
+		// GC_MANAGED_SESSION_HOOK marks the hook file as GC-managed; it does
+		// not prove that the current conversation is a Gas City runtime
+		// session. Require runtime identity, an explicit configured runtime
+		// role, or a structurally managed agent workdir before emitting any
+		// role or generic worker prompt.
+		writePrimePromptWithFormat(stdout, "", "", "", true, hookFormat, false)
+		return 0
+	}
+
 	for _, a := range resolvedAgents {
 		if isAgentEffectivelySuspended(cfg, &a) {
 			return 0
@@ -314,10 +356,14 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 				cfg.AgentDefaults.AppendFragments,
 			)
 			packDirs := cfg.PackDirsForRig(ctx.RigName)
-			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
+			rendered := renderPromptWithMeta(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
 				packDirs, fragments, nil)
-			if prompt != "" {
-				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, prompt, hookMode, hookFormat, suppressHookPrompt)
+			if rendered.Text != "" {
+				setPrimePromptReceipt(receiptOut, rendered.Version, rendered.SHA)
+				if !suppressStartupPromptForAgent(&a) {
+					persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{Version: rendered.Version, SHA: rendered.SHA})
+				}
+				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, rendered.Text, hookMode, hookFormat, suppressHookPrompt)
 				return 0
 			}
 			// File is present but rendered empty. Treat as a legitimate
@@ -340,6 +386,11 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			}
 			if promptFile != "" {
 				if content, fErr := os.ReadFile(promptFile); fErr == nil {
+					sha := promptmeta.SHA(string(content))
+					setPrimePromptReceipt(receiptOut, "", sha)
+					if !suppressHookPrompt {
+						persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{SHA: sha})
+					}
 					writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt)
 					return 0
 				}
@@ -351,8 +402,45 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 	// when the agent has no prompt_template and doesn't match a builtin
 	// worker prompt — a supported config shape, so the default prompt is
 	// the correct output even under --strict.
+	defaultSHA := promptmeta.SHA(defaultPrimePrompt)
+	setPrimePromptReceipt(receiptOut, "", defaultSHA)
+	if !suppressHookPrompt {
+		persistPrimePromptReceipt(cityPath, cfg, hookMode, session.PromptReceipt{SHA: defaultSHA})
+	}
 	writePrimePromptWithFormat(stdout, cityName, agentName, defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
 	return 0
+}
+
+func setPrimePromptReceipt(out *session.PromptReceipt, version, sha string) {
+	if out == nil {
+		return
+	}
+	out.Version = version
+	out.SHA = sha
+}
+
+// persistPrimePromptReceipt covers direct-start sessions whose provider hook
+// is the component that renders the startup prompt. Controller-prepared starts
+// persist the same receipt in their atomic start commit. Missing/legacy hook
+// identity is an honest no-observation and stays silent so a user-level global
+// hook cannot make unrelated conversations noisy.
+func persistPrimePromptReceipt(cityPath string, cfg *config.City, hookMode bool, receipt session.PromptReceipt) {
+	if !hookMode || strings.TrimSpace(cityPath) == "" {
+		return
+	}
+	sessionID := strings.TrimSpace(os.Getenv("GC_SESSION_ID"))
+	if sessionID == "" {
+		return
+	}
+	store, err := openCityStoreAt(cityPath)
+	if err != nil {
+		return
+	}
+	front := cliSessionFrontDoor(store, cfg, cityPath)
+	if _, err := front.Get(sessionID); err != nil {
+		return
+	}
+	_ = front.RecordPromptReceipt(sessionID, receipt)
 }
 
 func primeAgentCandidates(agentName string, hookMode bool, cityPath string) []string {
@@ -444,6 +532,53 @@ func primeHookAgentCandidatesFromPath(path string) []string {
 		}
 	}
 	return nil
+}
+
+// primeHookHasSessionContext reports whether a hook invocation is attributable
+// to a Gas City-managed session. The managed-hook marker alone is deliberately
+// insufficient: user-level provider hooks may carry it into every conversation.
+// Runtime sessions receive both GC_SESSION_ID and GC_SESSION_NAME. The managed
+// .gc/agents workdir fallback preserves providers whose startup hook runs before
+// those environment variables are visible.
+func primeHookHasSessionContext(cityPath string, resolvedAgent bool) bool {
+	sessionID := strings.TrimSpace(os.Getenv("GC_SESSION_ID"))
+	if sessionID != "" && strings.TrimSpace(os.Getenv("GC_SESSION_NAME")) != "" {
+		return true
+	}
+	if sessionID != "" && strings.TrimSpace(cityPath) != "" {
+		if store, err := openCityStoreAt(cityPath); err == nil {
+			if bead, err := store.Get(sessionID); err == nil && session.IsSessionBeadOrRepairable(bead) {
+				return true
+			}
+		}
+	}
+	if !resolvedAgent {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("GC_AGENT")) != "" || strings.TrimSpace(os.Getenv("GC_TEMPLATE")) != "" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv(managedSessionHookEnv)) != "1" || strings.TrimSpace(cityPath) == "" {
+		return false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	cityAbs, err := filepath.Abs(cityPath)
+	if err != nil {
+		return false
+	}
+	cwdAbs, err := filepath.Abs(cwd)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(cityAbs), filepath.Clean(cwdAbs))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(filepath.Clean(rel), string(os.PathSeparator))
+	return len(parts) >= 3 && parts[0] == ".gc" && parts[1] == "agents"
 }
 
 func prependHookBeacon(cityName, agentName, prompt string) string {
@@ -692,6 +827,10 @@ func buildPrimeContextForBeads(cityPath, cityName string, a *config.Agent, rigs 
 	// Working directory.
 	if gcDir := os.Getenv("GC_DIR"); gcDir != "" {
 		ctx.WorkDir = gcDir
+	} else if workDir, err := workdirutil.ResolveWorkDirPathStrict(cityPath, cityName, ctx.AgentName, *a, rigs); err == nil {
+		ctx.WorkDir = workDir
+	} else if stderr != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: could not resolve work_dir for %s: %v\n", ctx.AgentName, err)
 	}
 
 	// Rig context.

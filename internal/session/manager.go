@@ -499,6 +499,13 @@ type Info struct {
 	// verbatim (a "true"/"false" string). Kept as a raw string mirror like
 	// ManualSessionMetadata so the persisted value round-trips exactly.
 	ConfigWakeSuppressedMetadata string // config_wake_suppressed (raw)
+
+	// PromptVersion is the human-readable version from prompt template
+	// frontmatter. PromptSHA identifies the rendered template projection, not
+	// any runtime delivery envelope added afterward. Both are empty for legacy
+	// sessions that predate prompt receipts.
+	PromptVersion string
+	PromptSHA     string
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

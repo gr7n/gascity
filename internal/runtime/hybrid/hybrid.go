@@ -4,6 +4,7 @@ package hybrid
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -12,9 +13,13 @@ import (
 // Provider routes session operations to a local or remote provider
 // based on a name-matching function.
 type Provider struct {
-	local    runtime.Provider
-	remote   runtime.Provider
-	isRemote func(name string) bool
+	local         runtime.Provider
+	remote        runtime.Provider
+	isRemote      func(name string) bool
+	isRemoteStart func(name string, cfg runtime.Config) bool
+
+	mu          sync.RWMutex
+	remoteNames map[string]struct{}
 }
 
 var (
@@ -24,29 +29,110 @@ var (
 	_ runtime.InterruptBoundaryWaitProvider = (*Provider)(nil)
 	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
 	_ runtime.RelaunchProvider              = (*Provider)(nil)
+	_ runtime.LivenessObserver              = (*Provider)(nil)
 )
 
 // New creates a hybrid provider. isRemote returns true for sessions
 // that should be managed by the remote provider.
 func New(local, remote runtime.Provider, isRemote func(string) bool) *Provider {
-	return &Provider{local: local, remote: remote, isRemote: isRemote}
+	return NewWithStartMatcher(local, remote, isRemote, func(name string, _ runtime.Config) bool {
+		return isRemote != nil && isRemote(name)
+	})
+}
+
+// NewWithStartMatcher creates a hybrid provider that can use startup config as
+// routing evidence. Runtime session names may be opaque and randomized, while
+// the config environment retains durable identities such as GC_TEMPLATE.
+func NewWithStartMatcher(local, remote runtime.Provider, isRemote func(string) bool, isRemoteStart func(string, runtime.Config) bool) *Provider {
+	if isRemote == nil {
+		isRemote = func(string) bool { return false }
+	}
+	if isRemoteStart == nil {
+		isRemoteStart = func(name string, _ runtime.Config) bool { return isRemote(name) }
+	}
+	return &Provider{
+		local:         local,
+		remote:        remote,
+		isRemote:      isRemote,
+		isRemoteStart: isRemoteStart,
+		remoteNames:   make(map[string]struct{}),
+	}
 }
 
 func (p *Provider) route(name string) runtime.Provider {
-	if p.isRemote(name) {
+	if p.isKnownRemote(name) || p.isRemote(name) {
 		return p.remote
 	}
 	return p.local
 }
 
+func (p *Provider) routeStart(name string, cfg runtime.Config) (runtime.Provider, bool) {
+	if p.isKnownRemote(name) || p.isRemoteStart(name, cfg) {
+		return p.remote, true
+	}
+	return p.local, false
+}
+
+func (p *Provider) isKnownRemote(name string) bool {
+	if name == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.remoteNames[name]
+	return ok
+}
+
+func (p *Provider) rememberRemote(name string) {
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.remoteNames[name] = struct{}{}
+}
+
+// RouteRemote marks a runtime name as remote using durable evidence gathered
+// outside the provider, such as a persisted session bead snapshot.
+func (p *Provider) RouteRemote(name string) {
+	p.rememberRemote(name)
+}
+
+func (p *Provider) forgetRemote(name string) {
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.remoteNames, name)
+}
+
+// UnrouteRemote removes a previously seeded durable remote route.
+func (p *Provider) UnrouteRemote(name string) {
+	p.forgetRemote(name)
+}
+
 // Start delegates to the routed backend.
 func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) error {
-	return p.route(name).Start(ctx, name, cfg)
+	backend, remote := p.routeStart(name, cfg)
+	if err := backend.Start(ctx, name, cfg); err != nil {
+		return err
+	}
+	if remote {
+		p.rememberRemote(name)
+	} else {
+		p.forgetRemote(name)
+	}
+	return nil
 }
 
 // Stop delegates to the routed backend.
 func (p *Provider) Stop(name string) error {
-	return p.route(name).Stop(name)
+	if err := p.route(name).Stop(name); err != nil {
+		return err
+	}
+	p.forgetRemote(name)
+	return nil
 }
 
 // Interrupt delegates to the routed backend.
@@ -82,6 +168,14 @@ func (p *Provider) Attach(name string) error {
 // ProcessAlive delegates to the routed backend.
 func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	return p.route(name).ProcessAlive(name, processNames)
+}
+
+// ObserveLiveness delegates to the routed backend, preserving provider-native
+// observations (e.g. matched process names) when the backend supports them.
+// Without this, [runtime.ObserveLiveness] would only see the hybrid wrapper's
+// boolean IsRunning/ProcessAlive fallback.
+func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
+	return runtime.ObserveLiveness(p.route(name), name, processNames)
 }
 
 // Nudge delegates to the routed backend.

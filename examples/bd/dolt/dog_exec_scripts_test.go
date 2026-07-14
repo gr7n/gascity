@@ -1,6 +1,7 @@
 package dolt_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,10 +13,19 @@ import (
 	"github.com/gastownhall/gascity/internal/orders"
 )
 
+const (
+	dogScriptCommandTimeout     = 2 * time.Minute
+	compactScriptCommandTimeout = 2 * time.Minute
+	dogScriptCommandWaitDelay   = 5 * time.Second
+)
+
 func runDogScriptCommand(t *testing.T, scriptName, binDir, cityPath, dataDir string, extraEnv ...string) (string, error) {
 	t.Helper()
 	root := repoRoot(t)
-	cmd := exec.Command("bash", filepath.Join(root, "assets", "scripts", scriptName))
+	ctx, cancel := context.WithTimeout(context.Background(), dogScriptCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(root, "assets", "scripts", scriptName))
+	cmd.WaitDelay = dogScriptCommandWaitDelay
 	cmd.Env = append(filteredEnv(
 		"PATH",
 		"GC_CITY_PATH",
@@ -47,6 +57,9 @@ func runDogScriptCommand(t *testing.T, scriptName, binDir, cityPath, dataDir str
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("%s timed out after %s: %w", scriptName, dogScriptCommandTimeout, ctx.Err())
+	}
 	return string(out), err
 }
 
@@ -132,6 +145,8 @@ func newCompactScriptFixture(t *testing.T) compactScriptFixture {
 
 	binDir := t.TempDir()
 	gcLog := writeCompactFakeGC(t, binDir)
+	writeFastTimeoutShim(t, binDir)
+	writeCompactManagedRuntimeProbeShims(t, binDir, port, os.Getpid())
 	doltLog := writeCompactFakeDolt(t, binDir)
 	stateFile := filepath.Join(binDir, "head-state")
 	if err := os.WriteFile(stateFile, []byte("headcommit\n"), 0o644); err != nil {
@@ -161,8 +176,11 @@ func (f compactScriptFixture) run(t *testing.T, mode string, extraEnv ...string)
 
 func (f compactScriptFixture) runWithArgs(t *testing.T, mode string, args []string, extraEnv ...string) (string, error) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), compactScriptCommandTimeout)
+	defer cancel()
 	scriptArgs := append([]string{filepath.Join(f.root, "commands", "compact", "run.sh")}, args...)
-	cmd := exec.Command("sh", scriptArgs...)
+	cmd := exec.CommandContext(ctx, "sh", scriptArgs...)
+	cmd.WaitDelay = dogScriptCommandWaitDelay
 	cmd.Env = append(filteredEnv(
 		"PATH",
 		"GC_CITY_PATH",
@@ -176,6 +194,7 @@ func (f compactScriptFixture) runWithArgs(t *testing.T, mode string, args []stri
 		"GC_DOLT_COMPACT_THRESHOLD_COMMITS",
 		"GC_DOLT_COMPACT_CALL_TIMEOUT_SECS",
 		"GC_DOLT_COMPACT_PUSH_TIMEOUT_SECS",
+		"GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS",
 		"GC_DOLT_COMPACT_DRY_RUN",
 		"GC_DOLT_COMPACT_ONLY_DBS",
 		"GC_DOLT_COMPACT_REMOTE",
@@ -200,6 +219,7 @@ func (f compactScriptFixture) runWithArgs(t *testing.T, mode string, args []stri
 		"GC_DOLT_MANAGED_LOCAL=1",
 		"GC_DOLT_COMPACT_CALL_TIMEOUT_SECS=5",
 		"GC_DOLT_COMPACT_PUSH_TIMEOUT_SECS=5",
+		"GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS=0",
 		"GC_FAKE_DOLT_COMPACT_MODE="+mode,
 		"GC_FAKE_DOLT_COUNT_FILE="+filepath.Join(f.binDir, "row-count-calls"),
 		"GC_FAKE_DOLT_STATE_FILE="+f.stateFile,
@@ -207,6 +227,9 @@ func (f compactScriptFixture) runWithArgs(t *testing.T, mode string, args []stri
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("compact script mode %s timed out after %s: %w", mode, compactScriptCommandTimeout, ctx.Err())
+	}
 	return string(out), err
 }
 
@@ -355,11 +378,32 @@ func assertCompactBeadsQuarantineAlert(t *testing.T, fixture compactScriptFixtur
 	}
 }
 
+func writeCompactManagedRuntimeProbeShims(t *testing.T, binDir string, port, pid int) {
+	t.Helper()
+	writeExecutable(t, filepath.Join(binDir, "lsof"), fmt.Sprintf(`#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    -iTCP:%d)
+      printf '%%d\n' %d
+      exit 0
+      ;;
+  esac
+done
+exit 1
+`, port, pid))
+	writeExecutable(t, filepath.Join(binDir, "nc"), fmt.Sprintf(`#!/bin/sh
+if [ "${1:-}" = "-z" ] && [ "${2:-}" = "127.0.0.1" ] && [ "${3:-}" = "%d" ]; then
+  exit 0
+fi
+exit 1
+`, port))
+}
+
 func writeCompactFakeDolt(t *testing.T, binDir string) string {
 	t.Helper()
 	logPath := filepath.Join(binDir, "dolt.log")
-	writeExecutable(t, filepath.Join(binDir, "dolt"), fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
+	writeExecutable(t, filepath.Join(binDir, "dolt"), fmt.Sprintf(`#!/bin/sh
+set -eu
 log=%s
 mode="${GC_FAKE_DOLT_COMPACT_MODE:-success}"
 count_file="${GC_FAKE_DOLT_COUNT_FILE:-}"
@@ -925,10 +969,12 @@ case "$query" in
     exit 64
     ;;
   *"DOLT_RESET"*)
-    if [[ "$query" == *"--hard"* ]]; then
-      set_head headcommit
-      exit 0
-    fi
+    case "$query" in
+      *"--hard"*)
+        set_head headcommit
+        exit 0
+        ;;
+    esac
     if [ "$mode" = "flatten_failure" ]; then
       printf 'reset exploded\n' >&2
       exit 44
@@ -1046,9 +1092,12 @@ func TestCompactScriptToleratesSlowRigListDiscovery(t *testing.T) {
 	// back to a city-only filesystem scan that misses external rig
 	// databases, so they are never compacted (gascity#2740). Answer after
 	// 7s and require discovery to still use the rig list.
+	writeFastTimeoutShim(t, fixture.binDir)
 	writeExecutable(t, filepath.Join(fixture.binDir, "gc"), `#!/bin/sh
 if [ "${1:-}" = "rig" ] && [ "${2:-}" = "list" ]; then
-  sleep 7
+  if [ "${GC_FAST_RIG_LIST:-}" != "1" ]; then
+    sleep 7
+  fi
   printf '{"rigs":[]}\n'
   exit 0
 fi
@@ -1660,9 +1709,9 @@ func TestCompactScriptPreservesPendingPushCreatedAtAcrossUnresolvedRetries(t *te
 		t.Fatalf("initial compact should leave unverified remote push pending: %v\n%s", err, firstOut)
 	}
 	pendingPush := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-pending-push", "beads")
-	createdAt := compactMarkerValue(t, pendingPush, "created_at")
+	createdAt := time.Now().UTC().Add(-time.Hour).Format("2006-01-02T15:04:05Z")
+	replaceCompactMarkerCreatedAt(t, pendingPush, createdAt)
 
-	time.Sleep(1100 * time.Millisecond)
 	secondOut, err := fixture.run(t, "remote_ahead", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
 	if err == nil {
 		t.Fatalf("second retry should remain manually deferred while remote HEAD is unverified:\n%s", secondOut)
@@ -1671,7 +1720,6 @@ func TestCompactScriptPreservesPendingPushCreatedAtAcrossUnresolvedRetries(t *te
 		t.Fatalf("unresolved retry refreshed pending-push marker age: before=%s after=%s\n%s", createdAt, got, secondOut)
 	}
 
-	time.Sleep(1100 * time.Millisecond)
 	thirdOut, err := fixture.run(t, "remote_ancestry_probe_failure", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
 	if err != nil {
 		t.Fatalf("ancestry-probe failure should keep retry deferred with marker intact: %v\n%s", err, thirdOut)
@@ -3689,6 +3737,24 @@ func TestCompactScriptBareGCRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestCompactScriptRejectsInvalidPreflightRetrySleep(t *testing.T) {
+	fixture := newCompactScriptFixture(t)
+	out, err := fixture.run(t, "success",
+		"GC_DOLT_COMPACT_THRESHOLD_COMMITS=500",
+		"GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS=bogus")
+	if err == nil {
+		t.Fatalf("compact must reject invalid preflight retry sleep:\n%s", out)
+	}
+	if !strings.Contains(out, "invalid GC_DOLT_COMPACT_PREFLIGHT_RETRY_SLEEP_SECS=bogus") {
+		t.Fatalf("compact output missing invalid preflight retry sleep diagnostic:\n%s", out)
+	}
+	if logData, err := os.ReadFile(fixture.doltLog); err == nil {
+		if strings.Contains(string(logData), "DOLT_GC") {
+			t.Fatalf("invalid env value must exit before any DOLT_GC call:\n%s", logData)
+		}
+	}
+}
+
 func TestCompactScriptBareGCDisabledWhenEnvFalsy(t *testing.T) {
 	fixture := newCompactScriptFixture(t)
 	out, err := fixture.run(t, "below_threshold",
@@ -3985,9 +4051,23 @@ exit 0
 
 func writeBSDLikeGrep(t *testing.T, binDir string) {
 	t.Helper()
-	realGrep, err := exec.LookPath("grep")
-	if err != nil {
-		t.Fatalf("find grep: %v", err)
+	realGrep := ""
+	for _, candidate := range []string{"/usr/bin/grep", "/bin/grep"} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			realGrep = candidate
+			break
+		}
+	}
+	if realGrep == "" {
+		found, err := exec.LookPath("grep")
+		if err != nil {
+			t.Fatalf("find grep: %v", err)
+		}
+		if filepath.Dir(found) == binDir {
+			t.Fatalf("real grep resolved to test fake path %s", found)
+		}
+		realGrep = found
 	}
 	writeExecutable(t, filepath.Join(binDir, "grep"), fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail

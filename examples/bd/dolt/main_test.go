@@ -2,6 +2,7 @@ package dolt_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -21,5 +22,15 @@ func TestMain(m *testing.M) {
 func TestDoltEventFlushDisabledInTestProcess(t *testing.T) {
 	if os.Getenv("DOLT_DISABLE_EVENT_FLUSH") != "true" {
 		t.Fatal("DOLT_DISABLE_EVENT_FLUSH not set to true by TestMain — dolt subprocesses will hang for up to 10 min on event flush")
+	}
+}
+
+func TestFilteredEnvScrubsShellStartupHooks(t *testing.T) {
+	t.Setenv("BASH_ENV", "/tmp/should-not-leak")
+	t.Setenv("ENV", "/tmp/should-not-leak")
+	for _, entry := range filteredEnv() {
+		if strings.HasPrefix(entry, "BASH_ENV=") || strings.HasPrefix(entry, "ENV=") {
+			t.Fatalf("filteredEnv leaked shell startup hook: %s", entry)
+		}
 	}
 }

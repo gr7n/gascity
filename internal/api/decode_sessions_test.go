@@ -11,20 +11,24 @@ func TestSessionsFromGenList_Valid(t *testing.T) {
 	lastActive := "2026-04-23T12:00:00Z"
 	reason := "config"
 	workDir := "/tmp/gc/workspaces/mayor"
+	promptVersion := "v3"
+	promptSHA := "rendered-sha"
 	items := []genclient.SessionResponse{
 		{
-			Id:          "gc-abc",
-			Template:    "mayor",
-			State:       "active",
-			Title:       "Overseer",
-			SessionName: "mayor",
-			CreatedAt:   "2026-04-23T10:00:00Z",
-			Attached:    true,
-			Running:     true,
-			Alias:       &alias,
-			LastActive:  &lastActive,
-			Reason:      &reason,
-			WorkDir:     &workDir,
+			Id:            "gc-abc",
+			Template:      "mayor",
+			State:         "active",
+			Title:         "Overseer",
+			SessionName:   "mayor",
+			CreatedAt:     "2026-04-23T10:00:00Z",
+			Attached:      true,
+			Running:       true,
+			Alias:         &alias,
+			LastActive:    &lastActive,
+			Reason:        &reason,
+			WorkDir:       &workDir,
+			PromptVersion: &promptVersion,
+			PromptSha:     &promptSHA,
 		},
 		{
 			Id:          "gc-xyz",
@@ -43,18 +47,20 @@ func TestSessionsFromGenList_Valid(t *testing.T) {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
 	want0 := SessionView{
-		ID:          "gc-abc",
-		Template:    "mayor",
-		State:       "active",
-		Reason:      "config",
-		Title:       "Overseer",
-		Alias:       "mayor",
-		SessionName: "mayor",
-		WorkDir:     "/tmp/gc/workspaces/mayor",
-		CreatedAt:   "2026-04-23T10:00:00Z",
-		LastActive:  "2026-04-23T12:00:00Z",
-		Attached:    true,
-		Running:     true,
+		ID:            "gc-abc",
+		Template:      "mayor",
+		State:         "active",
+		Reason:        "config",
+		Title:         "Overseer",
+		Alias:         "mayor",
+		SessionName:   "mayor",
+		WorkDir:       "/tmp/gc/workspaces/mayor",
+		CreatedAt:     "2026-04-23T10:00:00Z",
+		LastActive:    "2026-04-23T12:00:00Z",
+		Attached:      true,
+		Running:       true,
+		PromptVersion: "v3",
+		PromptSHA:     "rendered-sha",
 	}
 	if got[0] != want0 {
 		t.Errorf("got[0] = %+v\nwant    = %+v", got[0], want0)

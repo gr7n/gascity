@@ -8,6 +8,8 @@ usage: scripts/test-local-parallel <fast|cmd-gc-process|integration|full>
 
 Environment:
   LOCAL_TEST_JOBS        max concurrent jobs (default: detected CPU count)
+  LOCAL_TEST_GO_TIMEOUT  timeout for fast unit package sweeps (default: 20m)
+  LOCAL_TEST_GO_P        package parallelism for fast unit sweeps (default: 4)
   CMD_GC_PROCESS_TOTAL  cmd/gc shard count (default: 6)
 USAGE
 }
@@ -42,6 +44,8 @@ detect_cpus() {
 
 local_jobs="${LOCAL_TEST_JOBS:-$(detect_cpus)}"
 cmd_gc_total="${CMD_GC_PROCESS_TOTAL:-6}"
+local_go_timeout="${LOCAL_TEST_GO_TIMEOUT:-20m}"
+local_go_p="${LOCAL_TEST_GO_P:-4}"
 
 if ! [[ "$local_jobs" =~ ^[0-9]+$ && "$local_jobs" -gt 0 ]]; then
   echo "LOCAL_TEST_JOBS must be a positive integer" >&2
@@ -49,6 +53,18 @@ if ! [[ "$local_jobs" =~ ^[0-9]+$ && "$local_jobs" -gt 0 ]]; then
 fi
 if ! [[ "$cmd_gc_total" =~ ^[0-9]+$ && "$cmd_gc_total" -gt 0 ]]; then
   echo "CMD_GC_PROCESS_TOTAL must be a positive integer" >&2
+  exit 1
+fi
+if ! [[ "$local_go_p" =~ ^[0-9]+$ && "$local_go_p" -gt 0 ]]; then
+  echo "LOCAL_TEST_GO_P must be a positive integer" >&2
+  exit 1
+fi
+if [[ -z "$local_go_timeout" ]]; then
+  echo "LOCAL_TEST_GO_TIMEOUT must be a Go duration such as 20m" >&2
+  exit 1
+fi
+if ! [[ "$local_go_timeout" =~ ^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$ ]]; then
+  echo "LOCAL_TEST_GO_TIMEOUT must be a Go duration such as 20m" >&2
   exit 1
 fi
 
@@ -73,7 +89,12 @@ add_fsys_compile_job() {
 
 add_unit_core_job() {
   add_job "unit-core" \
-    'GC_FAST_UNIT=1 go test $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"')'
+    'GC_FAST_UNIT=1 go test -p='"$local_go_p"' -count=1 -timeout '"$local_go_timeout"' $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"' | grep -v '"'"'^github.com/gastownhall/gascity/examples/bd/dolt$'"'"')'
+}
+
+add_dolt_example_job() {
+  add_job "unit-dolt-example" \
+    'GC_FAST_UNIT=1 go test -count=1 -timeout '"$local_go_timeout"' ./examples/bd/dolt'
 }
 
 add_cmd_gc_shards() {
@@ -122,6 +143,7 @@ case "$mode" in
   fast)
     add_fsys_compile_job
     add_unit_core_job
+    add_dolt_example_job
     add_cmd_gc_shards "unit-cmd-gc" "1" ""
     ;;
   cmd-gc-process)
@@ -133,6 +155,7 @@ case "$mode" in
   full)
     add_fsys_compile_job
     add_unit_core_job
+    add_dolt_example_job
     add_cmd_gc_shards "cmd-gc-process" "0" ""
     add_integration_jobs
     ;;

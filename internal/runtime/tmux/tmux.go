@@ -431,16 +431,27 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	return nil
 }
 
-// NewSessionWithCommandAndEnv creates a new detached tmux session with environment
-// variables set via -e flags. This ensures the initial shell process inherits the
-// correct environment from the session, rather than inheriting from the tmux server
-// or parent process. The -e flags set session-level environment before the shell
-// starts, preventing stale env vars (e.g., GT_ROLE from a parent mayor session)
-// from leaking into crew/polecat shells.
+// NewSessionWithCommandAndEnv creates a new detached tmux session with
+// session-level environment variables applied before the command starts.
+// This ensures the initial process inherits the correct environment from the
+// session rather than from the tmux server or parent process, preventing
+// stale env vars (e.g., GT_ROLE from a parent mayor session) from leaking
+// into crew/polecat shells.
 //
-// The command should still use 'exec env' for WaitForCommand detection compatibility,
-// but -e provides defense-in-depth for the initial shell environment.
-// Requires tmux >= 3.2.
+// Environment values deliberately never appear on a process command line.
+// An earlier implementation passed them as `new-session -e KEY=VALUE`
+// arguments, which exposed every value — including credentials such as
+// provider OAuth tokens — to all local users via the process table
+// (`ps -ef`, /proc/<pid>/cmdline) for the lifetime of the tmux client
+// invocation. Instead, the session is created with an inert placeholder
+// command, the environment is loaded server-side from a private (0600)
+// temp file via `source-file`, and the real command is started with
+// `respawn-pane -k`, which spawns it with the session environment applied —
+// the same environment semantics as -e without any value in any argv.
+//
+// The command should still use 'exec env' for WaitForCommand detection
+// compatibility; the session environment provides defense-in-depth for the
+// initial shell environment.
 func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env map[string]string) error {
 	if err := validateSessionName(name); err != nil {
 		return err
@@ -448,30 +459,31 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 	if err := t.probeServerAlive(); err != nil {
 		return err
 	}
-	args := []string{"new-session", "-d", "-s", name}
-	if workDir != "" {
-		args = append(args, "-c", workDir)
-	}
-	// Add -e flags to set environment variables in the session before the shell starts.
-	// Keys are sorted for deterministic behavior.
+	// Split env into set and unset (empty value) keys, sorted for
+	// deterministic behavior. Keys are validated because they are spliced
+	// into an `env -u` command prefix and a generated tmux command file;
+	// reject anything that could be parsed as syntax in either context.
 	keys := make([]string, 0, len(env))
 	for k := range env {
+		if err := validateEnvKey(k); err != nil {
+			return err
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var unsetKeys []string
+	var setKeys, unsetKeys []string
 	for _, k := range keys {
 		if env[k] == "" {
 			// Empty values mean "unset this var". Collect for env -u prefix.
 			unsetKeys = append(unsetKeys, k)
 		} else {
-			args = append(args, "-e", fmt.Sprintf("%s=%s", k, env[k]))
+			setKeys = append(setKeys, k)
 		}
 	}
 	// For vars that need unsetting, prefix the command with env -u flags.
-	// tmux -e sets session-level env but the shell process still inherits
-	// from the tmux server's global environment. env -u ensures the var
-	// is actually absent from the child process.
+	// Session-level environment cannot mask a variable present in the tmux
+	// server's global environment; env -u ensures the var is actually
+	// absent from the child process.
 	if len(unsetKeys) > 0 && command != "" {
 		var prefix string
 		for _, k := range unsetKeys {
@@ -479,16 +491,123 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 		}
 		command = "env" + prefix + " " + command
 	}
-	// Add the command as the last argument
-	args = append(args, t.wrapPaneCommand(command))
-	_, err := t.run(args...)
-	if err != nil {
+	if len(setKeys) == 0 {
+		// Nothing to set at session level: single-step create with the
+		// command as the pane's initial process.
+		args := []string{"new-session", "-d", "-s", name}
+		if workDir != "" {
+			args = append(args, "-c", workDir)
+		}
+		args = append(args, t.wrapPaneCommand(command))
+		if _, err := t.run(args...); err != nil {
+			return err
+		}
+	} else if err := t.newSessionEnvFirst(name, workDir, command, env, setKeys); err != nil {
 		return err
 	}
 	_ = t.ConfigureServer()
 	// tmux 3.3+: reset window-size from manual to latest (see NewSession).
 	t.run("set-option", "-wt", name, "window-size", "latest") //nolint:errcheck // best-effort
 	return nil
+}
+
+// envFirstPlaceholderCommand keeps the pane alive between session creation
+// and respawn-pane delivering the real command. The duration only needs to
+// outlive the two tmux calls in between; it is killed by respawn-pane -k.
+const envFirstPlaceholderCommand = "sleep 86400"
+
+// newSessionEnvFirst creates a session whose environment is fully applied
+// before the real command starts, without any value transiting a process
+// command line:
+//
+//  1. new-session runs an inert placeholder so the session (and its
+//     environment table) exists,
+//  2. set-environment commands are loaded server-side via source-file from
+//     a private temp file,
+//  3. respawn-pane -k replaces the placeholder with the real command, which
+//     spawns with the session environment applied.
+//
+// If a later step fails the partially-built session is killed so callers
+// never observe a session that is missing its environment.
+func (t *Tmux) newSessionEnvFirst(name, workDir, command string, env map[string]string, setKeys []string) error {
+	args := []string{"new-session", "-d", "-s", name}
+	if workDir != "" {
+		args = append(args, "-c", workDir)
+	}
+	args = append(args, envFirstPlaceholderCommand)
+	if _, err := t.run(args...); err != nil {
+		return err
+	}
+	if err := t.applySessionEnvFromFile(name, env, setKeys); err != nil {
+		_ = t.KillSession(name)
+		return fmt.Errorf("applying session environment: %w", err)
+	}
+	respawn := []string{"respawn-pane", "-k", "-t", name}
+	if workDir != "" {
+		respawn = append(respawn, "-c", workDir)
+	}
+	if command != "" {
+		respawn = append(respawn, t.wrapPaneCommand(command))
+	}
+	if _, err := t.run(respawn...); err != nil {
+		_ = t.KillSession(name)
+		return fmt.Errorf("starting session command: %w", err)
+	}
+	return nil
+}
+
+// applySessionEnvFromFile sets session environment variables by writing
+// set-environment commands to a private temp file and loading it with
+// source-file. The file (created 0600 by CreateTemp and removed before
+// returning) is the only place values appear outside the tmux server, so
+// they are never visible in the process table. The =name target form
+// requires an exact session-name match, matching new-session -e semantics.
+func (t *Tmux) applySessionEnvFromFile(session string, env map[string]string, keys []string) error {
+	f, err := os.CreateTemp("", "gc-session-env-*.tmux")
+	if err != nil {
+		return err
+	}
+	path := f.Name()
+	defer os.Remove(path) //nolint:errcheck // best-effort cleanup
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString("set-environment -t ")
+		b.WriteString(quoteTmuxWord("=" + session))
+		b.WriteString(" ")
+		b.WriteString(quoteTmuxWord(k))
+		b.WriteString(" ")
+		b.WriteString(quoteTmuxWord(env[k]))
+		b.WriteString("\n")
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	_, err = t.run("source-file", path)
+	return err
+}
+
+// envKeyPattern matches portable environment variable names.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validateEnvKey(k string) error {
+	if !envKeyPattern.MatchString(k) {
+		return fmt.Errorf("invalid environment variable name %q", k)
+	}
+	return nil
+}
+
+// quoteTmuxWord returns s as a single-quoted word for the tmux configuration
+// parser. Inside single quotes the parser treats every character literally
+// (no $-expansion, comments, or escapes) and quoted strings may span
+// newlines. An embedded single quote is emitted as a close quote, a
+// backslash-escaped quote, and a reopen quote, which the parser
+// concatenates into a single word, mirroring POSIX shell quoting.
+func quoteTmuxWord(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // EnsureSessionFresh ensures a session is available and healthy.
@@ -1342,7 +1461,7 @@ func (t *Tmux) providerEnv(target string) string {
 }
 
 func (t *Tmux) requiresHiddenAttachedInterrupt(target string) bool {
-	switch t.providerEnv(target) {
+	switch providerEnvFamily(t.providerEnv(target)) {
 	case "gemini":
 		return true
 	case "":
@@ -1941,8 +2060,45 @@ func (t *Tmux) shouldSendEscapeBeforeEnter(target string) bool {
 	return true
 }
 
-func providerEnvSkipsEscape(provider string) bool {
+// knownProviderEnvFamilies are the provider families the tmux behavior gates
+// (escape-before-enter, hidden attached interrupt, interrupt boundary, nudge
+// debounce) have specific knowledge of.
+var knownProviderEnvFamilies = map[string]bool{
+	"antigravity": true,
+	"claude":      true,
+	"codex":       true,
+	"copilot":     true,
+	"gemini":      true,
+	"grok":        true,
+	"kimi":        true,
+	"mimocode":    true,
+	"opencode":    true,
+	"pi":          true,
+}
+
+// providerEnvFamily normalizes a GC_PROVIDER environment value to its
+// provider family for behavior gates. It returns "" when the value is empty
+// or names a custom provider whose family the name does not reveal, so that
+// callers fall back to process-tree detection instead of assuming default
+// behavior for a provider they know nothing about.
+func providerEnvFamily(provider string) string {
 	family := sessionlog.ProviderFamily(provider)
+	if knownProviderEnvFamilies[family] {
+		return family
+	}
+	// claude variants (claude, claude-eco, ...) fall through ProviderFamily
+	// unchanged; match them by name like the transcript layer does.
+	if strings.Contains(strings.ToLower(family), "claude") {
+		return "claude"
+	}
+	return ""
+}
+
+func providerEnvSkipsEscape(provider string) bool {
+	family := providerEnvFamily(provider)
+	if family == "" {
+		return false
+	}
 	for _, noEscape := range providersSkippingEscapeBeforeEnter {
 		if family == noEscape {
 			return true
@@ -1956,8 +2112,8 @@ func (t *Tmux) targetLooksLikeNoEscapeProvider(target string) bool {
 }
 
 func (t *Tmux) nudgeSubmitDebounce(target string) time.Duration {
-	provider := t.providerEnv(target)
-	if provider == "kimi" || (provider == "" && t.targetLooksLikeProvider(target, "kimi")) {
+	family := providerEnvFamily(t.providerEnv(target))
+	if family == "kimi" || (family == "" && t.targetLooksLikeProvider(target, "kimi")) {
 		return 1500 * time.Millisecond
 	}
 	return 500 * time.Millisecond
@@ -3094,14 +3250,16 @@ func waitForIdlePoll(ctx context.Context) error {
 // acknowledgement before the next user turn is injected.
 func (t *Tmux) WaitForInterruptBoundary(ctx context.Context, session string, since time.Time, timeout time.Duration) error {
 	provider, _ := t.GetEnvironment(session, "GC_PROVIDER")
-	switch strings.TrimSpace(provider) {
+	family := providerEnvFamily(provider)
+	switch family {
 	case "", "codex":
-		// Continue below. Empty provider env can happen in tests or with
-		// older sessions; fall back to process-tree detection.
+		// Continue below. An empty family covers tests, older sessions, and
+		// custom wrapper providers whose family the name does not reveal;
+		// fall back to process-tree detection.
 	default:
 		return runtime.ErrInteractionUnsupported
 	}
-	if strings.TrimSpace(provider) == "" && !t.targetLooksLikeProvider(session, "codex") {
+	if family == "" && !t.targetLooksLikeProvider(session, "codex") {
 		return runtime.ErrInteractionUnsupported
 	}
 	codexHome, err := t.GetEnvironment(session, "CODEX_HOME")

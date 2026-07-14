@@ -37,6 +37,11 @@ type sessionResponse struct {
 	// timestamp for this session.
 	LastNudgeDeliveredAt string `json:"last_nudge_delivered_at,omitempty"`
 	Attached             bool   `json:"attached"`
+	// PromptVersion and PromptSHA expose the persisted startup prompt receipt.
+	// They remain absent for legacy sessions whose rendered bytes were never
+	// observed.
+	PromptVersion string `json:"prompt_version,omitempty" doc:"Template version from the persisted startup prompt receipt. Absent for legacy or prompt-less sessions."`
+	PromptSHA     string `json:"prompt_sha,omitempty" doc:"SHA-256 of the rendered template projection (including configured template fragments, excluding runtime delivery envelopes). Absent for legacy or prompt-less sessions."`
 
 	// Classification fields derived from config (for dashboard grouping).
 	Rig  string `json:"rig,omitempty"`
@@ -95,18 +100,20 @@ func sessionToResponse(info session.Info, cfg *config.City) sessionResponse {
 	}
 	rig, _ := config.ParseQualifiedName(info.Template)
 	r := sessionResponse{
-		ID:          info.ID,
-		Template:    info.Template,
-		State:       string(info.State),
-		Title:       info.Title,
-		Alias:       info.Alias,
-		Provider:    provider,
-		DisplayName: displayName,
-		SessionName: info.SessionName,
-		WorkDir:     info.WorkDir,
-		CreatedAt:   info.CreatedAt.Format(time.RFC3339),
-		Attached:    info.Attached,
-		Rig:         rig,
+		ID:            info.ID,
+		Template:      info.Template,
+		State:         string(info.State),
+		Title:         info.Title,
+		Alias:         info.Alias,
+		Provider:      provider,
+		DisplayName:   displayName,
+		SessionName:   info.SessionName,
+		WorkDir:       info.WorkDir,
+		CreatedAt:     info.CreatedAt.Format(time.RFC3339),
+		Attached:      info.Attached,
+		PromptVersion: info.PromptVersion,
+		PromptSHA:     info.PromptSHA,
+		Rig:           rig,
 	}
 	// Populate pool and agent_kind from config lookup. The pool field is
 	// the agent's base name (e.g., "polecat"), useful for dashboard type

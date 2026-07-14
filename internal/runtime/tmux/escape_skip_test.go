@@ -19,6 +19,7 @@ func TestProviderEnvSkipsEscapeBeforeEnter(t *testing.T) {
 		{provider: "gemini", want: true},
 		{provider: "grok", want: true},
 		{provider: "kimi", want: true},
+		{provider: "mimocode", want: true},
 		{provider: "opencode", want: true},
 		{provider: "pi", want: true},
 		{provider: "antigravity", want: true},
@@ -29,12 +30,9 @@ func TestProviderEnvSkipsEscapeBeforeEnter(t *testing.T) {
 		// families.
 		{provider: "antigravity-max", want: true},
 		{provider: "codex-mini", want: true},
-		// claude has no substring case in sessionlog.ProviderFamily, so a
-		// non-exact claude-derived value falls through to the default
-		// Escape-before-Enter submit. Aliased claude providers are
-		// unaffected in practice because GC_PROVIDER is already resolved
-		// to the ancestor family "claude".
-		{provider: "claude-mini", want: false},
+		// Derived provider names normalize through sessionlog.ProviderFamily
+		// before matching the skip list.
+		{provider: "claude-mini", want: true},
 		// Unknown providers keep the default Escape-before-Enter submit.
 		{provider: "", want: false},
 		{provider: "some-unknown-provider", want: false},

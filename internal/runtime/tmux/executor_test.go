@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,6 +44,43 @@ func (f *fakeExecutor) executeCtx(_ context.Context, args []string) (string, err
 	return f.execute(args)
 }
 
+// envFileSnapshotExecutor extends fakeExecutor by capturing the contents of
+// the source-file argument at execution time — the env file is removed
+// before NewSessionWithCommandAndEnv returns, so it must be read mid-call.
+type envFileSnapshotExecutor struct {
+	fakeExecutor
+	envFileContents string
+	envFileErr      error
+}
+
+func (e *envFileSnapshotExecutor) execute(args []string) (string, error) {
+	for i, a := range args {
+		if a == "source-file" && i+1 < len(args) {
+			data, err := os.ReadFile(args[i+1])
+			e.envFileContents = string(data)
+			e.envFileErr = err
+		}
+	}
+	return e.fakeExecutor.execute(args)
+}
+
+func (e *envFileSnapshotExecutor) executeCtx(_ context.Context, args []string) (string, error) {
+	return e.execute(args)
+}
+
+// findCall returns the first recorded call whose first tmux word (after the
+// runCtx-prepended flags) matches cmd, or nil.
+func findCall(calls [][]string, cmd string) []string {
+	for _, c := range calls {
+		for _, a := range c {
+			if a == cmd {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
 func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	exec := &fakeExecutor{}
 	tm := NewTmux()
@@ -56,17 +94,121 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	if err := tm.NewSessionWithCommandAndEnv("gc-test-locale-clear", "", "claude", env); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
-	if len(exec.calls) == 0 {
-		t.Fatal("no tmux calls recorded")
+	respawn := findCall(exec.calls, "respawn-pane")
+	if respawn == nil {
+		t.Fatalf("no respawn-pane call recorded: %v", exec.calls)
+	}
+	if got := respawn[len(respawn)-1]; got != "env -u LC_ALL -u LC_CTYPE claude" {
+		t.Fatalf("command = %q, want env -u LC_ALL -u LC_CTYPE claude", got)
+	}
+}
+
+// TestNewSessionWithCommandAndEnvValuesNeverInArgv is the security
+// regression test for the env-in-argv exposure: environment values
+// (credentials such as provider OAuth tokens) must never appear in any tmux
+// command line, where they would be visible to every local user via the
+// process table. Values may only transit the private env file consumed by
+// source-file.
+func TestNewSessionWithCommandAndEnvValuesNeverInArgv(t *testing.T) {
+	const secret = "sk-test-FAKE-secret-value"
+	exec := &envFileSnapshotExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	env := map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": secret,
+		"GC_INSTANCE_TOKEN":       "abc123",
+		"TRICKY":                  "has 'quote', $dollar, #hash and\nnewline",
+	}
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-env-argv", "/tmp", "claude", env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
 
-	args := exec.calls[0]
-	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
-		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	for _, call := range exec.calls {
+		for _, arg := range call {
+			if strings.Contains(arg, secret) {
+				t.Fatalf("env value leaked into tmux argv: %v", call)
+			}
+		}
 	}
-	if got := args[len(args)-1]; got != "env -u LC_ALL -u LC_CTYPE claude" {
-		t.Fatalf("command = %q, want env -u LC_ALL -u LC_CTYPE claude", got)
+
+	// Sequence: placeholder new-session, then source-file, then respawn-pane
+	// carrying the real command.
+	newSession := findCall(exec.calls, "new-session")
+	if newSession == nil || newSession[len(newSession)-1] != envFirstPlaceholderCommand {
+		t.Fatalf("new-session should run the placeholder, got %v", newSession)
+	}
+	if findCall(exec.calls, "source-file") == nil {
+		t.Fatalf("no source-file call recorded: %v", exec.calls)
+	}
+	respawn := findCall(exec.calls, "respawn-pane")
+	if respawn == nil || respawn[len(respawn)-1] != "claude" {
+		t.Fatalf("respawn-pane should carry the command, got %v", respawn)
+	}
+
+	// The env file must contain every value, quoted for the tmux config
+	// parser, targeting the exact session name.
+	if exec.envFileErr != nil {
+		t.Fatalf("reading env file during source-file: %v", exec.envFileErr)
+	}
+	want := strings.Join([]string{
+		"set-environment -t '=gc-test-env-argv' 'CLAUDE_CODE_OAUTH_TOKEN' '" + secret + "'",
+		"set-environment -t '=gc-test-env-argv' 'GC_INSTANCE_TOKEN' 'abc123'",
+		"set-environment -t '=gc-test-env-argv' 'TRICKY' 'has '\\''quote'\\'', $dollar, #hash and\nnewline'",
+	}, "\n") + "\n"
+	if exec.envFileContents != want {
+		t.Fatalf("env file contents:\n%q\nwant:\n%q", exec.envFileContents, want)
+	}
+}
+
+// TestNewSessionWithCommandAndEnvNoSetVarsSingleStep verifies the fast path:
+// with no values to set (nil env or unset-only), the session is created in a
+// single new-session call with the command as the initial process, exactly
+// as NewSessionWithCommand would.
+func TestNewSessionWithCommandAndEnvNoSetVarsSingleStep(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-env-fast", "", "claude", map[string]string{"LC_ALL": ""}); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	newSession := findCall(exec.calls, "new-session")
+	if newSession == nil || newSession[len(newSession)-1] != "env -u LC_ALL claude" {
+		t.Fatalf("new-session should carry the command directly, got %v", newSession)
+	}
+	if findCall(exec.calls, "source-file") != nil || findCall(exec.calls, "respawn-pane") != nil {
+		t.Fatalf("no source-file/respawn-pane expected without set vars: %v", exec.calls)
+	}
+}
+
+func TestNewSessionWithCommandAndEnvRejectsInvalidKey(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-env-badkey", "", "claude", map[string]string{"BAD KEY": "v"})
+	if err == nil || !strings.Contains(err.Error(), "invalid environment variable name") {
+		t.Fatalf("err = %v, want invalid environment variable name", err)
+	}
+	if len(exec.calls) != 0 {
+		t.Fatalf("no tmux calls expected after key validation failure: %v", exec.calls)
+	}
+}
+
+func TestQuoteTmuxWord(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"plain", "'plain'"},
+		{"", "''"},
+		{"a b", "'a b'"},
+		{"$HOME #x \\y", "'$HOME #x \\y'"},
+		{"it's", `'it'\''s'`},
+		{"line1\nline2", "'line1\nline2'"},
+	}
+	for _, c := range cases {
+		if got := quoteTmuxWord(c.in); got != c.want {
+			t.Errorf("quoteTmuxWord(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

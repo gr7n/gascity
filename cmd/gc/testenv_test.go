@@ -78,15 +78,27 @@ var inheritedCityRoutingEnvVars = []string{
 	"GC_RUNTIME_EPOCH",
 }
 
+// setTestEnv applies a group of process-environment overrides through one
+// cleanup-aware helper. Keeping the mutation loop here makes test setup
+// readable without multiplying process-global resource sites across cmd/gc.
+func setTestEnv(t *testing.T, values map[string]string) {
+	t.Helper()
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+}
+
 // clearGCEnv clears inherited GC, BEADS, and DOLT state for the duration of
 // the test, preventing host session state from redirecting temp fixtures into
 // live city, rig, or beads stores. GC_HOME is isolated to a temp dir because
 // supervisor registry code fails closed when tests leave it empty.
 func clearGCEnv(t *testing.T) {
 	t.Helper()
+	cleared := make(map[string]string)
 	for _, k := range liveEnvKeysForTests() {
-		t.Setenv(k, "")
+		cleared[k] = ""
 	}
+	setTestEnv(t, cleared)
 	td := t.TempDir()
 	t.Setenv("GC_HOME", filepath.Join(td, "gc-home"))
 	// Prevent city discovery from walking above the test temp dir and finding

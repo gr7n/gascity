@@ -43,7 +43,10 @@ func repoRoot(t *testing.T) string {
 // route runtime.sh at the production state file. The explicit keys
 // argument remains for non-GC_/DOLT_ scrubbing such as PATH.
 func filteredEnv(keys ...string) []string {
-	blocked := make(map[string]struct{}, len(keys))
+	blocked := map[string]struct{}{
+		"BASH_ENV": {},
+		"ENV":      {},
+	}
 	for _, key := range keys {
 		blocked[key] = struct{}{}
 	}
@@ -275,23 +278,9 @@ func TestHealthScriptDoesNotInvokeDoltLog(t *testing.T) {
 // live rig DB present on disk but absent from dropped.names must NOT appear in
 // orphans (acting on that false positive could delete a live rig ledger).
 func TestHealthOrphansFromCleanupAuthority(t *testing.T) {
-	if _, err := exec.LookPath("dolt"); err != nil {
-		t.Skip("dolt not installed; skipping")
-	}
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not installed; skipping")
 	}
-	if _, errT := exec.LookPath("timeout"); errT != nil {
-		if _, errG := exec.LookPath("gtimeout"); errG != nil {
-			t.Skip("neither timeout nor gtimeout installed; skipping")
-		}
-	}
-
-	// TCP-reachable but never speaks MySQL → server.reachable=false, so the
-	// per-database (open_beads) probe is skipped and we exercise the orphan
-	// path in isolation.
-	port, cleanup := startDeadTCPListener(t)
-	defer cleanup()
 
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
@@ -314,6 +303,9 @@ func TestHealthOrphansFromCleanupAuthority(t *testing.T) {
 	// dry-run authority: stale_orphan is the only drop candidate; the live rig
 	// DBs are protected. Any other gc call (e.g. `gc rig list`) is a no-op.
 	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "lsof"), "#!/bin/sh\nexit 1\n")
+	writeExecutable(t, filepath.Join(binDir, "nc"), "#!/bin/sh\nexit 1\n")
+	writeExecutable(t, filepath.Join(binDir, "dolt"), "#!/bin/sh\nexit 1\n")
 	stub := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"dolt-cleanup\" ]; then\n" +
 		"  printf '%s' '{\"ok\":true,\"rigs_protected\":[{\"rig\":\"gchq\",\"db\":\"hq\"},{\"rig\":\"gco\",\"db\":\"gco\"},{\"rig\":\"tga\",\"db\":\"tga\"}],\"dropped\":{\"count\":1,\"names\":[\"stale_orphan\"]}}'\n" +
@@ -332,7 +324,7 @@ func TestHealthOrphansFromCleanupAuthority(t *testing.T) {
 		"GC_PACK_DIR="+root,
 		"GC_DOLT_DATA_DIR="+dataDir,
 		"GC_DOLT_HOST=127.0.0.1",
-		"GC_DOLT_PORT="+strconv.Itoa(port),
+		"GC_DOLT_PORT=3306",
 		"GC_DOLT_USER=root",
 		"GC_DOLT_PASSWORD=",
 		"GC_HEALTH_SKIP_ZOMBIE_SCAN=1",
@@ -414,9 +406,12 @@ func TestHealthScriptToleratesSlowRigListDiscovery(t *testing.T) {
 	// `gc dolt-cleanup`) fails, so orphan detection takes the metadata
 	// referenced-set fallback, which protects extdb only when the rig-list
 	// result was consumed instead of the city-only scan.
+	writeFastTimeoutShim(t, binDir)
 	writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
 if [ "${1:-}" = "rig" ] && [ "${2:-}" = "list" ]; then
-  sleep 7
+  if [ "${GC_FAST_RIG_LIST:-}" != "1" ]; then
+    sleep 7
+  fi
   printf '{"rigs":[{"path": "`+extRig+`"}]}\n'
   exit 0
 fi
@@ -599,6 +594,7 @@ func TestRuntimeScriptPortPrecedenceToleratesInconclusiveLsof(t *testing.T) {
 		name        string
 		lsofBody    string
 		ncBody      func(port string) string
+		timeoutEnv  []string
 		wantManaged bool
 		wantExit78  bool
 	}{
@@ -619,7 +615,18 @@ exit 1
 		},
 		{
 			name:     "mismatched lsof pid still rejects port",
-			lsofBody: "#!/bin/sh\necho $$\nsleep 5\n",
+			lsofBody: "#!/bin/sh\necho 999999999\n",
+			ncBody: func(_ string) string {
+				return `#!/bin/sh
+exit 0
+`
+			},
+			wantExit78: true,
+		},
+		{
+			name:       "timed out lsof rejects managed state",
+			lsofBody:   "#!/bin/sh\nsleep 5\n",
+			timeoutEnv: []string{"GC_FAKE_TIMEOUT_LSOF_TIMEOUT=1"},
 			ncBody: func(_ string) string {
 				return `#!/bin/sh
 exit 0
@@ -660,6 +667,14 @@ exit 1
 			writeManagedRuntimeStateForScript(t, cityPath, port)
 			writeExecutable(t, filepath.Join(fakeBin, "lsof"), tt.lsofBody)
 			writeExecutable(t, filepath.Join(fakeBin, "nc"), tt.ncBody(managedPort))
+			writeExecutable(t, filepath.Join(fakeBin, "ps"), `#!/bin/sh
+if [ "${1:-}" = "-p" ] && [ "${2:-}" = "999999999" ]; then
+  echo " 999999999"
+  exit 0
+fi
+exit 1
+`)
+			writeFastTimeoutShim(t, fakeBin)
 
 			cmd := exec.Command("sh", "-c", `. "$GC_PACK_DIR/assets/scripts/runtime.sh"; printf '%s\n' "$GC_DOLT_PORT"`)
 			cmd.Env = filteredEnv("GC_CITY_PATH", "GC_PACK_DIR", "GC_DOLT_PORT", "GC_DOLT_HOST", "PATH")
@@ -668,6 +683,7 @@ exit 1
 				"GC_PACK_DIR="+root,
 				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 			)
+			cmd.Env = append(cmd.Env, tt.timeoutEnv...)
 			out, err := cmd.CombinedOutput()
 			if tt.wantExit78 {
 				assertRuntimePortExit78(t, err, out, filepath.Join(cityPath, ".gc", "runtime", "packs", "dolt", "dolt-state.json"), cityPath)
@@ -1099,6 +1115,47 @@ exit 0
 			t.Fatalf("fake dolt args missing %q; got:\n%s\nhealth output:\n%s", want, args, out)
 		}
 	}
+}
+
+func writeFastTimeoutShim(t *testing.T, binDir string) {
+	t.Helper()
+	body := `#!/bin/sh
+if [ "${1:-}" != "--kill-after=2" ]; then
+  printf 'unexpected timeout args: %s\n' "$*" >&2
+  exit 97
+fi
+shift
+limit="${1:-}"
+shift
+case "$limit" in
+  ''|*[!0-9]*)
+    printf 'unexpected timeout limit: %s\n' "$limit" >&2
+    exit 97
+    ;;
+esac
+if [ "${1:-}" = "gc" ] && [ "${2:-}" = "rig" ] && [ "${3:-}" = "list" ]; then
+  if [ "$limit" -lt 30 ]; then
+    printf 'gc rig list timeout too small: %s\n' "$limit" >&2
+    exit 97
+  fi
+  GC_FAST_RIG_LIST=1 "$@"
+  exit $?
+fi
+if [ "${1:-}" = "lsof" ]; then
+  if [ "$limit" -gt 2 ]; then
+    printf 'lsof timeout too large: %s\n' "$limit" >&2
+    exit 97
+  fi
+  if [ "${GC_FAKE_TIMEOUT_LSOF_TIMEOUT:-}" = "1" ]; then
+    exit 124
+  fi
+  GC_FAST_LSOF=1 "$@"
+  exit $?
+fi
+exec "$@"
+`
+	writeExecutable(t, filepath.Join(binDir, "timeout"), body)
+	writeExecutable(t, filepath.Join(binDir, "gtimeout"), body)
 }
 
 // TestHealthScriptZombieScanExcludesRigLocalServers verifies that

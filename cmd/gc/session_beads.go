@@ -226,6 +226,34 @@ func stampResolvedProviderSessionMetadata(meta map[string]string, resolved *conf
 	}
 }
 
+// stampObservedProviderKindInfo records the effective CLI family for sessions on
+// custom providers whose family cannot be derived from config: no builtin
+// ancestor and a provider name the transcript layer does not recognize. A
+// wrapper provider that picks the underlying CLI per session (e.g. a router
+// command that launches claude for some sessions and codex for others) leaves
+// the bead without a usable transcript family, so transcript discovery misses
+// and the dashboard falls back to pane capture. The runtime's process_names
+// observation identifies which CLI is actually running; when exactly one
+// observed hint maps to a known transcript family, stamp it as provider_kind
+// so transcript discovery and family-sensitive behaviors apply. The
+// family decision (write-once, ambiguity handling) lives in
+// session.ObservedProviderKindFromInfo so cmd/gc stays off the sessionlog import
+// boundary; this wrapper only performs the typed single-key store write and
+// returns the coherently folded Info snapshot.
+func stampObservedProviderKindInfo(store *session.Store, info session.Info, matchedProcessNames []string) session.Info {
+	if !store.Backed() || strings.TrimSpace(info.ID) == "" {
+		return info
+	}
+	family := session.ObservedProviderKindFromInfo(info, matchedProcessNames)
+	if family == "" {
+		return info
+	}
+	if err := store.SetMarker(info.ID, "provider_kind", family); err != nil {
+		return info
+	}
+	return info.ApplyPatch(session.MetadataPatch{"provider_kind": family})
+}
+
 // queueChangedResolvedProviderSessionMetadata queues the resolved-provider
 // projection fields (provider, provider_kind, builtin_ancestor) whenever the
 // freshly resolved value differs from what is stored, mirroring the command
@@ -1596,6 +1624,13 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			meta["live_hash"] = liveHash
 			meta["session_origin"] = origin
 			meta["synced_at"] = now.Format("2006-01-02T15:04:05Z07:00")
+			// A start-pending bead can safely carry the exact template-projection
+			// receipt prepared for its imminent launch. Do not backfill an
+			// already-live adopted runtime: its historical rendered template is
+			// not observable.
+			if createState != "active" {
+				meta = session.WithPromptReceiptMetadata(meta, tp.PromptReceipt)
+			}
 			if !isPoolInstance {
 				meta["session_name"] = sn
 			}

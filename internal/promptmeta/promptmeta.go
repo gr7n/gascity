@@ -4,8 +4,12 @@
 //
 //   - "What version is running?" — answered by FrontMatter.Version, a
 //     human-meaningful string declared in the template's frontmatter.
-//   - "What exact bytes ran for this bead?" — answered by SHA of the
-//     rendered prompt, computed after text/template substitution.
+//   - "What rendered template projection ran for this bead?" — answered by
+//     SHA after text/template substitution and configured template fragments.
+//
+// The hash is deliberately scoped to that stable template projection. Runtime
+// delivery envelopes (for example a launch beacon or an assigned-skills
+// appendix) may be added later and are not part of this drift-grouping hash.
 //
 // Both fields are propagated through session metadata into WorkerOperation
 // payloads (1a) so dashboards and `gc analyze` can group by version and
@@ -167,10 +171,11 @@ func stripSurroundingQuotes(s string) string {
 	return s
 }
 
-// SHA returns a hex-encoded SHA-256 hash of the rendered prompt content.
-// Used as `prompt_sha` to forensically identify the exact bytes that ran
-// for a given session, distinguishing two runs that share a prompt_version
-// but diverged because of an unbumped template edit.
+// SHA returns a hex-encoded SHA-256 hash of rendered template content. Used as
+// `prompt_sha` to identify the stable template projection for a session,
+// distinguishing two runs that share a prompt_version but diverged because of
+// an unbumped template edit. Callers may add runtime delivery envelopes later;
+// those bytes are intentionally outside this hash.
 //
 // Returns the empty string when rendered is empty so callers can detect
 // "no prompt" (e.g. a session created from inline command, not a template)

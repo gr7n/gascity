@@ -168,6 +168,12 @@ func (h *SessionHandle) populateOperationEventIdentity(payload *operationEventPa
 		if strings.TrimSpace(payload.AgentName) == "" {
 			payload.AgentName = strings.TrimSpace(info.Alias)
 		}
+		if strings.TrimSpace(payload.PromptVersion) == "" {
+			payload.PromptVersion = strings.TrimSpace(info.PromptVersion)
+		}
+		if strings.TrimSpace(payload.PromptSHA) == "" {
+			payload.PromptSHA = strings.TrimSpace(info.PromptSHA)
+		}
 		// Per-operation run-root resolution off the session bead's own run chain
 		// (workflow_id || molecule_id || gc.root_bead_id-or-self || bead id ||
 		// session id for manual chat), shared with the compute-fact emitter via

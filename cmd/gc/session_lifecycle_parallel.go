@@ -2032,6 +2032,7 @@ func commitStartResultTraced(
 		Now:                 clk.Now(),
 		PrimedAt:            primedAt,
 		PromptHash:          promptHash,
+		PromptReceipt:       tp.PromptReceipt,
 	})
 	storedMCPSnapshot, err := sessionpkg.EncodeMCPServersSnapshot(result.prepared.cfg.MCPServers)
 	if err != nil {
@@ -2292,6 +2293,7 @@ func recoverRunningPendingCreate(
 		Now:                 now,
 		PrimedAt:            primedAt,
 		PromptHash:          promptHash,
+		PromptReceipt:       tp.PromptReceipt,
 	})
 	if err := sessionFrontDoor(store).ApplyPatch(info.ID, metadata); err != nil {
 		if trace != nil {
