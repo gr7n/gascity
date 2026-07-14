@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Gas City agent container image — binary layer.
 #
 # Built on top of gc-agent-base (Dockerfile.base) which has all system
@@ -11,27 +12,48 @@
 # Full rebuild (base + agent):
 #   make docker-base docker-agent
 #
-# The gc binary should be built first and placed in the build context root:
-#   go build -o gc ./cmd/gc
-
-# Local build-layer image produced by Dockerfile.base, not a registry pull.
+# gc and bd are built, and br is fetched, in source-bound BuildKit stages.
+# Fleet therefore needs only the exact Gas City checkout plus the digest-pinned
+# base artifact; no host-prepared binaries are part of the build contract.
+ARG IMAGE_GO_BUILDER=docker.io/library/golang:1.26.5-bookworm@sha256:5ab8e9af080c5f58dab00dd8055ea9309ec54c47722681b5ee8d0a3602f85316
 ARG BASE_IMAGE=gc-agent-base:latest
+FROM ${IMAGE_GO_BUILDER} AS gascity-build
+ARG GASCITY_COMMIT
+WORKDIR /src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl jq \
+    && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN --mount=type=cache,id=gascity-go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=gascity-go-build,target=/root/.cache/go-build,sharing=locked \
+    test "${#GASCITY_COMMIT}" -eq 40 \
+    && case "$GASCITY_COMMIT" in *[!0-9a-f]*) exit 1 ;; esac \
+    && .github/scripts/build-bd-image.sh /out/bd \
+    && CGO_ENABLED=0 go build \
+       -trimpath \
+       -buildvcs=false \
+       -ldflags "-X main.version=dev -X main.commit=${GASCITY_COMMIT} -X main.date=1970-01-01T00:00:00Z" \
+       -o /out/gc ./cmd/gc \
+    && ldd /out/gc 2>&1 | grep -q "not a dynamic executable"
+
+# Validate br on the same libc/runtime base on which agents execute it.
+FROM ${BASE_IMAGE} AS br-tool
+USER root
+WORKDIR /src
+COPY deps.env .github/scripts/install-br-archive.sh ./
+RUN --mount=type=cache,id=gascity-tool-downloads,target=/root/.cache/gr7n-downloads,sharing=locked \
+    GR7N_TOOL_DOWNLOAD_CACHE=/root/.cache/gr7n-downloads \
+    BR_INSTALL_BIN_DIR=/out ./install-br-archive.sh "$(sed -n 's/^BR_VERSION=//p' deps.env)"
+
 FROM ${BASE_IMAGE}
 
 # Build-time copies and ownership fixes require root; the final image drops
 # back to gcagent below.
 USER root
 
-# bd (beads) CLI — copied from build context.
-# Build with: cp $(which bd) . && docker build ...
-COPY bd /usr/local/bin/bd
-
-# br (beads_rust) CLI — copied from build context.
-# Build with: cp $(which br) . && docker build ...
-COPY br /usr/local/bin/br
-
-# gc binary — copied from build context.
-COPY gc /usr/local/bin/gc
+COPY --from=gascity-build /out/bd /usr/local/bin/bd
+COPY --from=br-tool /out/br /usr/local/bin/br
+COPY --from=gascity-build /out/gc /usr/local/bin/gc
 
 # gc-beads-br script for the exec:beads protocol.
 COPY contrib/beads-scripts/gc-beads-br /usr/local/bin/gc-beads-br

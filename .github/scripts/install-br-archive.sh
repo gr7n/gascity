@@ -136,16 +136,26 @@ if [[ -x "$target" ]]; then
 else
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL -o "${tmp}/${archive}" \
-    "https://github.com/Dicklesworthstone/beads_rust/releases/download/${tag}/${archive}"
-  actual_sha="$(sha256_file "${tmp}/${archive}")"
+  archive_path="${tmp}/${archive}"
+  if [[ -n "${GR7N_TOOL_DOWNLOAD_CACHE:-}" ]]; then
+    mkdir -p "$GR7N_TOOL_DOWNLOAD_CACHE"
+    archive_path="${GR7N_TOOL_DOWNLOAD_CACHE}/${archive}"
+  fi
+  if [[ ! -f "$archive_path" ]]; then
+    partial="${archive_path}.partial.$$"
+    curl -fsSL -o "$partial" \
+      "https://github.com/Dicklesworthstone/beads_rust/releases/download/${tag}/${archive}"
+    mv "$partial" "$archive_path"
+  fi
+  actual_sha="$(sha256_file "$archive_path")"
   if [[ "$actual_sha" != "$expected_sha" ]]; then
+    rm -f "$archive_path"
     echo "br checksum mismatch for ${tag}/${platform_tuple}" >&2
     echo "expected: $expected_sha" >&2
     echo "actual:   $actual_sha" >&2
     exit 1
   fi
-  tar -xzf "${tmp}/${archive}" -C "$tmp"
+  tar -xzf "$archive_path" -C "$tmp"
   src="${tmp}/br"
   if [[ ! -x "$src" ]]; then
     src="$(find "$tmp" -type f -name br -perm -111 | head -n 1)"

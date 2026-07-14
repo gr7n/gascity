@@ -155,11 +155,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        with:
-          go-version-file: go.mod
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -170,20 +165,6 @@ jobs:
           bin_dir="${RUNNER_TEMP}/gascity-trivy-bin"
           TRIVY_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-trivy-archive.sh "${TRIVY_VERSION}"
           echo "$bin_dir" >> "$GITHUB_PATH"
-
-      - name: Prepare image build inputs
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          . ./deps.env
-          bin_dir="${RUNNER_TEMP}/gascity-container-scan-bin"
-          mkdir -p "$bin_dir"
-          BD_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-bd-archive.sh "$BD_VERSION"
-          BR_INSTALL_BIN_DIR="$bin_dir" .github/scripts/install-br-archive.sh "$BR_VERSION"
-          go build -o gc ./cmd/gc
-          cp -f "$bin_dir/bd" bd
-          cp -f "$bin_dir/br" br
 
       - name: Build local images
         run: |
@@ -199,6 +180,7 @@ jobs:
           docker build \
             -f contrib/k8s/Dockerfile.agent \
             --build-arg BASE_IMAGE=gc-agent-base:latest \
+            --build-arg GASCITY_COMMIT="$IMAGE_TAG" \
             -t "gc-agent:${IMAGE_TAG}" \
             .
           docker tag "gc-agent:${IMAGE_TAG}" gc-agent:latest
