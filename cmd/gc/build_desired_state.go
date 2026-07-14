@@ -2932,18 +2932,28 @@ func computePoolTriggerBindingPatch(info session.Info, request SessionRequest, w
 	if workspace := packWorkspaceSlug(request); strings.TrimSpace(info.PackWorkspace) != workspace {
 		metadata[beadmeta.PackWorkspaceMetadataKey] = workspace
 	}
-	// Only use a newly derived work dir when the binding is new or re-pointed.
-	// Resume and wake requests for the same trigger may omit WorkBeadTitle; in
-	// that case re-derivation drops the title suffix from the path the launcher
-	// actually created. Preserve the recorded canonical path and keep the legacy
-	// twin synchronized with it.
+	// Same-trigger reconciles may omit the title suffix the launcher used, so
+	// preserve the recorded path. A live resume-mode session can also claim a
+	// retry bead without restarting; in that case the process remains in its
+	// existing cwd even though the trigger changes. The concrete session id and
+	// durable current-bead marker distinguish that continuation from an asleep,
+	// fresh, or otherwise reusable session that will start in a newly derived
+	// worktree.
 	if workDir != "" {
 		targetWorkDir := workDir
 		existingWorkDir := strings.TrimSpace(info.WorkDirCanonical)
 		if existingWorkDir == "" {
 			existingWorkDir = strings.TrimSpace(info.WorkDir)
 		}
-		if oldWorkBeadID == workBeadID && existingWorkDir != "" {
+		currentWorkBeadID := strings.TrimSpace(info.CurrentlyProcessingBeadID)
+		liveResumeContinuation := oldWorkBeadID != workBeadID &&
+			request.Tier == "resume" &&
+			request.SessionBeadID == info.ID &&
+			info.State == session.StateActive &&
+			info.WakeMode != "fresh" &&
+			currentWorkBeadID != "" &&
+			(currentWorkBeadID == oldWorkBeadID || currentWorkBeadID == workBeadID)
+		if existingWorkDir != "" && (oldWorkBeadID == workBeadID || liveResumeContinuation) {
 			targetWorkDir = existingWorkDir
 		}
 		if strings.TrimSpace(info.WorkDirCanonical) != targetWorkDir {
