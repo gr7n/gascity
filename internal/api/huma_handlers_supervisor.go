@@ -97,7 +97,8 @@ type asyncAcceptedResponse struct {
 
 // SupervisorCityCreateInput is the input for POST /v0/city.
 type SupervisorCityCreateInput struct {
-	Body cityCreateRequest
+	IdempotencyKey string `header:"Idempotency-Key" required:"false" doc:"Idempotency key for safe retries."`
+	Body           cityCreateRequest
 }
 
 // SupervisorCityCreateOutput is the response for POST /v0/city.
@@ -213,6 +214,12 @@ func (sm *SupervisorMux) registerSupervisorRoutes() {
 	// completion is signaled via request.result.city.create or request.failed.
 	huma.Post(sm.humaAPI, "/v0/city", sm.humaHandleCityCreate, addMutationCSRFParam, func(op *huma.Operation) {
 		op.DefaultStatus = http.StatusAccepted
+		// Enumerating any error drops Huma's catch-all `default` response, so
+		// list every status this op actually emits: 401/403 from the
+		// write-auth/CSRF middleware, 409 (already initialized / init in
+		// progress / idempotency-in-flight), 501 when the supervisor has no
+		// initializer (the controller-embedded mux). Huma auto-adds 422/500.
+		op.Errors = append(op.Errors, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusNotImplemented)
 	})
 	// Async unregister: returns 202 after the registry entry is removed
 	// and the supervisor is signaled. request.result.city.unregister or
@@ -358,11 +365,41 @@ func (sm *SupervisorMux) humaHandleProviderReadiness(ctx context.Context, input 
 // started the city runtime. See engdocs/architecture/api-control-plane.md
 // §1-§2 on the object model + typed events; §4 on the event registry.
 func (sm *SupervisorMux) humaHandleCityCreate(ctx context.Context, input *SupervisorCityCreateInput) (*SupervisorCityCreateOutput, error) {
-	dir := input.Body.Dir
+	// Idempotency: scaffold at most once per Idempotency-Key (supervisor-scope
+	// cache — there is no per-city Server yet for a city being created). The
+	// cached value is the full accepted body, so a replay returns the ORIGINAL
+	// request_id (the client's correlation handle on /v0/events/stream) and
+	// the original pre-create event cursor — recomputing either on replay
+	// would break result-event correlation.
+	accepted, err := withIdempotency(sm.idem, "/v0/city", input.IdempotencyKey, input.Body,
+		func() (asyncAcceptedResponse, error) {
+			return sm.scaffoldCityOnce(ctx, input.Body)
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	out := &SupervisorCityCreateOutput{
+		Status: http.StatusAccepted,
+	}
+	out.Body = accepted
+	return out, nil
+}
+
+// scaffoldCityOnce performs the one-shot city scaffold+register work behind
+// POST /v0/city and returns the accepted {request_id, event_cursor} body. It is
+// the operation wrapped by the supervisor idempotency cache in
+// humaHandleCityCreate: on the first request for a given Idempotency-Key it
+// resolves the target directory, scaffolds and registers the city, and stores
+// the request_id correlation for the reconciler. On a replay the cache
+// short-circuits before this runs, so it never executes twice for the same key.
+func (sm *SupervisorMux) scaffoldCityOnce(ctx context.Context, body cityCreateRequest) (asyncAcceptedResponse, error) {
+	var zero asyncAcceptedResponse
+	dir := body.Dir
 	if !filepath.IsAbs(dir) {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, apierr.Internal.Msg(fmt.Sprintf("internal: resolving home dir: %v", err))
+			return zero, apierr.Internal.Msg(fmt.Sprintf("internal: resolving home dir: %v", err))
 		}
 		dir = filepath.Join(home, dir)
 	}
@@ -373,49 +410,49 @@ func (sm *SupervisorMux) humaHandleCityCreate(ctx context.Context, input *Superv
 	// in test configurations that build a SupervisorMux without an
 	// initializer.
 	if cityDirAlreadyInitialized(dir) {
-		return nil, apierr.ConflictWrongState.Msg("conflict: city already initialized at " + dir)
+		return zero, apierr.ConflictWrongState.Msg("conflict: city already initialized at " + dir)
 	}
 
 	if sm.initializer == nil {
-		return nil, apierr.NotImplemented.Msg("city creation is not available in this supervisor (no initializer wired)")
+		return zero, apierr.NotImplemented.Msg("city creation is not available in this supervisor (no initializer wired)")
 	}
 
 	reqID, err := newRequestID()
 	if err != nil {
-		return nil, apierr.Internal.Msg(fmt.Sprintf("generating request ID: %v", err))
+		return zero, apierr.Internal.Msg(fmt.Sprintf("generating request ID: %v", err))
 	}
 	eventCursor, cursorErr := sm.currentSupervisorEventCursor()
 	if cursorErr != nil {
-		return nil, apierr.Internal.Msg(cursorErr.Error())
+		return zero, apierr.Internal.Msg(cursorErr.Error())
 	}
 	pendingStored := false
 	if store, ok := sm.resolver.(PendingRequestStore); ok {
 		if err := store.StorePendingRequestID(dir, reqID); err != nil {
 			if errors.Is(err, ErrPendingRequestExists) {
-				return nil, apierr.OperationInProgress.Msg("conflict: city initialization already in progress at " + dir)
+				return zero, apierr.OperationInProgress.Msg("conflict: city initialization already in progress at " + dir)
 			}
-			return nil, apierr.Internal.Msg(fmt.Sprintf("storing pending request ID: %v", err))
+			return zero, apierr.Internal.Msg(fmt.Sprintf("storing pending request ID: %v", err))
 		}
 		pendingStored = true
 	}
 
 	result, scaffoldErr := sm.initializer.Scaffold(ctx, cityinit.InitRequest{
 		Dir:                   dir,
-		Provider:              input.Body.Provider,
-		StartCommand:          input.Body.StartCommand,
-		BootstrapProfile:      input.Body.BootstrapProfile,
+		Provider:              body.Provider,
+		StartCommand:          body.StartCommand,
+		BootstrapProfile:      body.BootstrapProfile,
 		SkipProviderReadiness: true,
 	})
 	postRegisterFailed := false
 	switch {
 	case errors.Is(scaffoldErr, cityinit.ErrAlreadyInitialized):
 		sm.clearPendingCityRequestID(dir, pendingStored)
-		return nil, apierr.ConflictWrongState.Msg("conflict: city already initialized at " + dir)
+		return zero, apierr.ConflictWrongState.Msg("conflict: city already initialized at " + dir)
 	case errors.Is(scaffoldErr, cityinit.ErrInvalidDirectory),
 		errors.Is(scaffoldErr, cityinit.ErrInvalidProvider),
 		errors.Is(scaffoldErr, cityinit.ErrInvalidBootstrapProfile):
 		sm.clearPendingCityRequestID(dir, pendingStored)
-		return nil, apierr.ValidationFailed.Msg(scaffoldErr.Error())
+		return zero, apierr.ValidationFailed.Msg(scaffoldErr.Error())
 	case errors.Is(scaffoldErr, cityinit.ErrPostRegisterFailure):
 		failureReqID := reqID
 		if consumedReqID, ok := sm.consumePendingCityRequestID(dir, pendingStored); ok {
@@ -425,18 +462,13 @@ func (sm *SupervisorMux) humaHandleCityCreate(ctx context.Context, input *Superv
 		postRegisterFailed = true
 	case scaffoldErr != nil:
 		sm.clearPendingCityRequestID(dir, pendingStored)
-		return nil, apierr.Internal.Msg(scaffoldErr.Error())
+		return zero, apierr.Internal.Msg(scaffoldErr.Error())
 	}
 
 	if !pendingStored && !postRegisterFailed {
 		emitCityCreateSucceeded(sm.resolver, reqID, result, dir)
 	}
-
-	out := &SupervisorCityCreateOutput{
-		Status: http.StatusAccepted,
-	}
-	out.Body = asyncAcceptedResponse{RequestID: reqID, EventCursor: eventCursor}
-	return out, nil
+	return asyncAcceptedResponse{RequestID: reqID, EventCursor: eventCursor}, nil
 }
 
 func (sm *SupervisorMux) clearPendingCityRequestID(cityPath string, stored bool) {
