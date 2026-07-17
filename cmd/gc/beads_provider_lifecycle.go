@@ -186,6 +186,9 @@ func isRetryableManagedDoltLifecycleError(err error) bool {
 // Called by gc start and controller config reload. Rigs must have absolute
 // paths before calling (resolve relative paths first).
 func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer) error {
+	if err := applyPostgresScopeManifest(cityPath, cfg); err != nil {
+		return fmt.Errorf("applying postgres scope manifest: %w", err)
+	}
 	if err := validateCanonicalCompatDoltDrift(cityPath, cfg); err != nil {
 		return err
 	}
@@ -600,6 +603,8 @@ func allowLegacyDoltMetadataRepair(fs fsys.FS, path string, err error) bool {
 		PostgresPort     string `json:"postgres_port"`
 		PostgresUser     string `json:"postgres_user"`
 		PostgresDatabase string `json:"postgres_database"`
+		PostgresDSN      string `json:"postgres_dsn"`
+		PostgresSchema   string `json:"postgres_schema"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return false
@@ -610,7 +615,9 @@ func allowLegacyDoltMetadataRepair(fs fsys.FS, path string, err error) bool {
 	return strings.TrimSpace(raw.PostgresHost) == "" &&
 		strings.TrimSpace(raw.PostgresPort) == "" &&
 		strings.TrimSpace(raw.PostgresUser) == "" &&
-		strings.TrimSpace(raw.PostgresDatabase) == ""
+		strings.TrimSpace(raw.PostgresDatabase) == "" &&
+		strings.TrimSpace(raw.PostgresDSN) == "" &&
+		strings.TrimSpace(raw.PostgresSchema) == ""
 }
 
 // verifyManagedDoltDatabaseExistsAfterInit confirms the named database is
