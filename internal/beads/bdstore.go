@@ -2654,9 +2654,10 @@ func (s *BdStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 			continue
 		}
 		result = append(result, bead)
-		if q.Limit > 0 && len(result) >= q.Limit {
-			break
-		}
+	}
+	SortReady(result)
+	if q.Limit > 0 && len(result) > q.Limit {
+		result = result[:q.Limit]
 	}
 	if parseErr != nil {
 		if len(result) == 0 {

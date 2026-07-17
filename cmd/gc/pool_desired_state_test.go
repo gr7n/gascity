@@ -717,7 +717,8 @@ func TestComputePoolDesiredStates_ResumePriorityOrder(t *testing.T) {
 	cfg := &config.City{
 		Agents: []config.Agent{poolAgent("claude", "", intPtr(2), 0)},
 	}
-	// 3 assigned beads with different priorities, max=2. Highest priority wins.
+	// 3 assigned beads with different priorities, max=2. Beads P0-first
+	// priority semantics select the two lowest numeric values.
 	work := []beads.Bead{
 		workBead("w-low", "claude", "s1", "in_progress", 1),
 		workBead("w-high", "claude", "s2", "in_progress", 10),
@@ -734,12 +735,27 @@ func TestComputePoolDesiredStates_ResumePriorityOrder(t *testing.T) {
 	if len(result) != 1 || len(result[0].Requests) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(result[0].Requests))
 	}
-	// Highest priority resume requests should be accepted.
-	if result[0].Requests[0].BeadPriority != 10 {
-		t.Errorf("first priority = %d, want 10", result[0].Requests[0].BeadPriority)
+	if result[0].Requests[0].BeadPriority != 1 {
+		t.Errorf("first priority = %d, want 1", result[0].Requests[0].BeadPriority)
 	}
 	if result[0].Requests[1].BeadPriority != 5 {
 		t.Errorf("second priority = %d, want 5", result[0].Requests[1].BeadPriority)
+	}
+}
+
+func TestApplyNestedCapsPreservesResumeBeforeNewAdmission(t *testing.T) {
+	cfg := &config.City{Agents: []config.Agent{poolAgent("claude", "", intPtr(1), 0)}}
+	requests := []SessionRequest{
+		{Template: "claude", Tier: "new", WorkBeadID: "new-p0", BeadPriority: 0},
+		{Template: "claude", Tier: "resume", SessionBeadID: "live", WorkBeadID: "resume-p4", BeadPriority: 4},
+	}
+
+	result := applyNestedCaps(cfg, requests, nil, nil)
+	if len(result) != 1 || len(result[0].Requests) != 1 {
+		t.Fatalf("result = %#v, want one admitted request", result)
+	}
+	if got := result[0].Requests[0]; got.Tier != "resume" || got.SessionBeadID != "live" {
+		t.Fatalf("admitted = %#v, want existing resume protected from new admission", got)
 	}
 }
 

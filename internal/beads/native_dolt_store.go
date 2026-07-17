@@ -1250,7 +1250,6 @@ func (s *NativeDoltStore) Ready(queries ...ReadyQuery) ([]Bead, error) {
 		var beads []Bead
 		seen := make(map[string]bool)
 		now := time.Now().UTC()
-	statusLoop:
 		for _, status := range nativeDoltOpenReadyStatuses {
 			filter := beadslib.WorkFilter{Status: status}
 			if q.TierMode == TierBoth || q.TierMode == TierWisps {
@@ -1273,10 +1272,11 @@ func (s *NativeDoltStore) Ready(queries ...ReadyQuery) ([]Bead, error) {
 				}
 				seen[bead.ID] = true
 				beads = append(beads, bead)
-				if q.Limit > 0 && len(beads) >= q.Limit {
-					break statusLoop
-				}
 			}
+		}
+		SortReady(beads)
+		if q.Limit > 0 && len(beads) > q.Limit {
+			beads = beads[:q.Limit]
 		}
 		out = beads
 		return nil
