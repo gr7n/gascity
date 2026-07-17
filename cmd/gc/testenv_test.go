@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/processenv"
 )
 
 // gcEnvVars lists the GC_* identity and session-routing variables that
@@ -103,6 +104,7 @@ func clearProcessLiveEnvForTests() {
 
 func TestClearProcessLiveEnvForTestsUnsetsInheritedState(t *testing.T) {
 	cleared := []string{
+		"CLAUDE_CODE_OAUTH_TOKEN",
 		"BEADS_ACTOR",
 		"BEADS_DIR",
 		"DOLT_CONFIG_PATH",
@@ -174,7 +176,7 @@ func liveEnvKeysForTests() []string {
 		if !ok || preserveTestControlEnv(k) {
 			continue
 		}
-		if strings.HasPrefix(k, "GC_") || strings.HasPrefix(k, "BEADS_") || strings.HasPrefix(k, "DOLT_") {
+		if strings.HasPrefix(k, "GC_") || strings.HasPrefix(k, "BEADS_") || strings.HasPrefix(k, "DOLT_") || processenv.IsProviderCredentialEnv(k) {
 			keys[k] = struct{}{}
 		}
 	}
