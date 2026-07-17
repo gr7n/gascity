@@ -412,6 +412,10 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	if all == nil {
 		all = []beads.Bead{}
 	}
+	// Each store guarantees the same Ready ordering, but concatenating stores
+	// does not. Re-sort after federation so admission observes one company-wide
+	// priority -> created_at -> ID order independent of rig enumeration.
+	beads.SortReady(all)
 
 	index := s.latestIndex()
 	return &ListOutput[beads.Bead]{
