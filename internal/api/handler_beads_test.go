@@ -867,6 +867,9 @@ func TestBeadReadyFederationUsesGlobalCanonicalOrder(t *testing.T) {
 	if len(resp.Items) != 2 || resp.Items[0].ID != rigBead.ID || resp.Items[1].ID != cityBead.ID {
 		t.Fatalf("ready order = %+v, want global P0 %s before P2 %s", resp.Items, rigBead.ID, cityBead.ID)
 	}
+	if resp.Items[0].StoreRef != "rig:myrig" || resp.Items[1].StoreRef != "city:"+state.cityName {
+		t.Fatalf("ready store refs = %+v, want reconstructable rig and city ownership", resp.Items)
+	}
 }
 
 // TestBeadReadyDedupesCityAliasedStore mirrors the production wiring where
