@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 )
 
@@ -144,10 +145,10 @@ func rigScopedHookRig(cfg *config.City, agentIdentity string) string {
 	return ""
 }
 
-// firstStoreWithWork runs command against each store in order and returns the
-// output and store of the FIRST store that reports ready work (applying the same
-// normalize + unready-filter that doHook uses, so a store with only
-// deferred/blocked rows is not treated as a hit). run is injectable for tests.
+// firstStoreWithWork runs command against every store and returns the store
+// containing the globally first Ready bead: priority, then created_at, then ID.
+// This keeps admission independent of federation/config order. The same
+// normalize + unready-filter as doHook excludes deferred/blocked rows.
 //
 // When no store has ready work, an error on the agent's OWN store (identified by
 // primary, not by slice position) is surfaced so emitCityWorkQueryFailure can
@@ -163,12 +164,28 @@ func firstStoreWithWork(command string, stores []hookStore, primary hookStore, r
 	var lastOut string
 	var ownStoreOut string
 	var ownStoreErr error
+	var selectedOut string
+	var selectedStore hookStore
+	var selectedBead beads.Bead
+	selected := false
+	now := time.Now()
 	for _, st := range stores {
 		out, err := run(command, st.dir, st.env)
 		if err == nil {
-			ready := filterUnreadyHookCandidates(normalizeWorkQueryOutput(strings.TrimSpace(out)), time.Now())
-			if workQueryHasReadyWork(ready) {
-				return out, st, nil
+			ready := filterUnreadyHookCandidates(normalizeWorkQueryOutput(strings.TrimSpace(out)), now)
+			candidates, decodeErr := decodeHookClaimBeads(ready)
+			if decodeErr == nil && len(candidates) > 0 {
+				best := candidates[0]
+				for _, candidate := range candidates[1:] {
+					if readyWorkLess(readyBeadPriority(candidate), candidate.CreatedAt, candidate.ID, readyBeadPriority(best), best.CreatedAt, best.ID) {
+						best = candidate
+					}
+				}
+				bestBeforeSelected := !selected || readyWorkLess(readyBeadPriority(best), best.CreatedAt, best.ID, readyBeadPriority(selectedBead), selectedBead.CreatedAt, selectedBead.ID)
+				equalReadyKey := selected && !bestBeforeSelected && !readyWorkLess(readyBeadPriority(selectedBead), selectedBead.CreatedAt, selectedBead.ID, readyBeadPriority(best), best.CreatedAt, best.ID)
+				if bestBeforeSelected || (equalReadyKey && hookStoreKey(st) < hookStoreKey(selectedStore)) {
+					selectedOut, selectedStore, selectedBead, selected = out, st, best, true
+				}
 			}
 			lastOut = out
 			continue
@@ -177,10 +194,17 @@ func firstStoreWithWork(command string, stores []hookStore, primary hookStore, r
 			ownStoreOut, ownStoreErr = out, err
 		}
 	}
+	if selected {
+		return selectedOut, selectedStore, nil
+	}
 	if ownStoreErr != nil {
 		return ownStoreOut, hookStore{}, ownStoreErr
 	}
 	return lastOut, hookStore{}, nil
+}
+
+func hookStoreKey(store hookStore) string {
+	return store.dir + "\x00" + strings.Join(store.env, "\x00")
 }
 
 // claimStoreWithFallback re-validates the discovery-selected store for
