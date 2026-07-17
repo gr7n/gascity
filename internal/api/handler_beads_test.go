@@ -839,6 +839,36 @@ func TestBeadReadyFederatesCityStore(t *testing.T) {
 	}
 }
 
+func TestBeadReadyFederationUsesGlobalCanonicalOrder(t *testing.T) {
+	state := newFakeState(t)
+	state.cityBeadStore = beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	state.stores["myrig"] = rigStore
+	p2, p0 := 2, 0
+	cityBead, err := state.cityBeadStore.Create(beads.Bead{Title: "city p2", Priority: &p2})
+	if err != nil {
+		t.Fatalf("Create(city): %v", err)
+	}
+	rigBead, err := rigStore.Create(beads.Bead{Title: "rig p0", Priority: &p0})
+	if err != nil {
+		t.Fatalf("Create(rig): %v", err)
+	}
+
+	h := newTestCityHandler(t, state)
+	req := httptest.NewRequest("GET", cityURL(state, "/beads/ready"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp struct {
+		Items []beads.Bead `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 || resp.Items[0].ID != rigBead.ID || resp.Items[1].ID != cityBead.ID {
+		t.Fatalf("ready order = %+v, want global P0 %s before P2 %s", resp.Items, rigBead.ID, cityBead.ID)
+	}
+}
+
 // TestBeadReadyDedupesCityAliasedStore mirrors the production wiring where
 // BeadStores() also returns the city store keyed by CityName(). The handler
 // must surface a city-scope ready bead exactly once and must not record a
