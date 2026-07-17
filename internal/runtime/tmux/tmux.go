@@ -131,6 +131,7 @@ var pasteBufferSeq uint64
 
 // validSessionNameRe validates session names to prevent shell injection
 var validSessionNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var validEnvironmentNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Common errors
 var (
@@ -192,6 +193,10 @@ type executor interface {
 	executeCtx(ctx context.Context, args []string) (string, error)
 }
 
+type inputExecutor interface {
+	executeInput(ctx context.Context, args []string, input []byte) (string, error)
+}
+
 // realExecutor runs actual tmux subprocesses.
 type realExecutor struct{}
 
@@ -214,6 +219,18 @@ func (realExecutor) executeCtx(ctx context.Context, args []string) (string, erro
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
+		return "", wrapError(err, stderr.String(), args)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (realExecutor) executeInput(ctx context.Context, args []string, input []byte) (string, error) {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		return "", wrapError(err, stderr.String(), args)
 	}
 	return strings.TrimSpace(stdout.String()), nil
@@ -308,6 +325,20 @@ func (t *Tmux) runCtx(ctx context.Context, args ...string) (string, error) {
 // Every invocation is bounded by tmuxSubprocessTimeout via runCtx.
 func (t *Tmux) run(args ...string) (string, error) {
 	return t.runCtx(context.Background(), args...)
+}
+
+func (t *Tmux) runInput(input []byte, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxSubprocessTimeout)
+	defer cancel()
+	allArgs := []string{"-u"}
+	if t.cfg.SocketName != "" {
+		allArgs = append(allArgs, "-L", t.cfg.SocketName)
+	}
+	allArgs = append(allArgs, args...)
+	if runner, ok := t.exec.(inputExecutor); ok {
+		return runner.executeInput(ctx, allArgs, input)
+	}
+	return t.exec.executeCtx(ctx, allArgs)
 }
 
 // wrapError wraps tmux errors with context.
@@ -431,18 +462,15 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	return nil
 }
 
-// NewSessionWithCommandAndEnv creates a new detached tmux session with environment
-// variables set via -e flags. This ensures the initial shell process inherits the
-// correct environment from the session, rather than inheriting from the tmux server
-// or parent process. The -e flags set session-level environment before the shell
-// starts, preventing stale env vars (e.g., GT_ROLE from a parent mayor session)
-// from leaking into crew/polecat shells.
-//
-// The command should still use 'exec env' for WaitForCommand detection compatibility,
-// but -e provides defense-in-depth for the initial shell environment.
-// Requires tmux >= 3.2.
+// NewSessionWithCommandAndEnv creates a detached session, loads its environment
+// through tmux's stdin-only source-file boundary, then respawns the pane with the
+// requested command. Environment values never enter a process argument vector.
 func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env map[string]string) error {
 	if err := validateSessionName(name); err != nil {
+		return err
+	}
+	environment, err := tmuxEnvironmentSource(name, env)
+	if err != nil {
 		return err
 	}
 	if err := t.probeServerAlive(); err != nil {
@@ -452,43 +480,51 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 	if workDir != "" {
 		args = append(args, "-c", workDir)
 	}
-	// Add -e flags to set environment variables in the session before the shell starts.
-	// Keys are sorted for deterministic behavior.
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var unsetKeys []string
-	for _, k := range keys {
-		if env[k] == "" {
-			// Empty values mean "unset this var". Collect for env -u prefix.
-			unsetKeys = append(unsetKeys, k)
-		} else {
-			args = append(args, "-e", fmt.Sprintf("%s=%s", k, env[k]))
-		}
-	}
-	// For vars that need unsetting, prefix the command with env -u flags.
-	// tmux -e sets session-level env but the shell process still inherits
-	// from the tmux server's global environment. env -u ensures the var
-	// is actually absent from the child process.
-	if len(unsetKeys) > 0 && command != "" {
-		var prefix string
-		for _, k := range unsetKeys {
-			prefix += " -u " + k
-		}
-		command = "env" + prefix + " " + command
-	}
-	// Add the command as the last argument
-	args = append(args, t.wrapPaneCommand(command))
-	_, err := t.run(args...)
-	if err != nil {
+	args = append(args, "sleep 86400")
+	if _, err = t.run(args...); err != nil {
 		return err
 	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = t.KillSession(name)
+		}
+	}()
+	if _, err = t.runInput([]byte(environment), "source-file", "-"); err != nil {
+		return fmt.Errorf("loading tmux session environment: %w", err)
+	}
+	respawn := []string{"respawn-pane", "-k", "-t", name}
+	if command != "" {
+		respawn = append(respawn, t.wrapPaneCommand(command))
+	}
+	if _, err = t.run(respawn...); err != nil {
+		return err
+	}
+	failed = false
 	_ = t.ConfigureServer()
 	// tmux 3.3+: reset window-size from manual to latest (see NewSession).
 	t.run("set-option", "-wt", name, "window-size", "latest") //nolint:errcheck // best-effort
 	return nil
+}
+
+func tmuxEnvironmentSource(name string, env map[string]string) (string, error) {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		if !validEnvironmentNameRe.MatchString(key) {
+			return "", fmt.Errorf("invalid environment variable name %q", key)
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var source strings.Builder
+	for _, key := range keys {
+		if env[key] == "" {
+			fmt.Fprintf(&source, "set-environment -u -t %s %s\n", shellquote.Quote(name), shellquote.Quote(key))
+		} else {
+			fmt.Fprintf(&source, "set-environment -t %s %s %s\n", shellquote.Quote(name), shellquote.Quote(key), shellquote.Quote(env[key]))
+		}
+	}
+	return source.String(), nil
 }
 
 // EnsureSessionFresh ensures a session is available and healthy.
