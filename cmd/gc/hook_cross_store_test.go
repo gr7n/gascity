@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/config"
@@ -87,9 +88,35 @@ func TestFirstStoreWithWorkReturnsFirstStoreThatHasWork(t *testing.T) {
 	if gotStore.dir != "riga" {
 		t.Fatalf("store.dir = %q, want riga", gotStore.dir)
 	}
-	// Stops at the first store with work — does not query rigb.
-	if len(calls) != 2 || calls[0] != "city" || calls[1] != "riga" {
-		t.Fatalf("calls = %v, want [city riga]", calls)
+	// Global Ready selection examines every scoped store.
+	if !slices.Equal(calls, []string{"city", "riga", "rigb"}) {
+		t.Fatalf("calls = %v, want [city riga rigb]", calls)
+	}
+}
+
+func TestFirstStoreWithWorkUsesGlobalReadyOrderAcrossStorePermutations(t *testing.T) {
+	outputs := map[string]string{
+		"city": `[{"id":"city-p2","priority":2,"created_at":"2026-07-17T10:00:00Z"}]`,
+		"riga": `[{"id":"rig-a-p0","priority":0,"created_at":"2026-07-17T11:00:00Z"}]`,
+		"rigb": `[{"id":"rig-b-p0","priority":0,"created_at":"2026-07-17T09:00:00Z"}]`,
+	}
+	for _, order := range [][]string{{"city", "riga", "rigb"}, {"rigb", "city", "riga"}, {"riga", "rigb", "city"}} {
+		stores := make([]hookStore, 0, len(order))
+		for _, dir := range order {
+			stores = append(stores, hookStore{dir: dir})
+		}
+		var calls []string
+		out, selected, err := firstStoreWithWork("q", stores, hookStore{dir: "city"}, func(_, dir string, _ []string) (string, error) {
+			calls = append(calls, dir)
+			return outputs[dir], nil
+		})
+		if err != nil || selected.dir != "rigb" || out != outputs["rigb"] {
+			t.Fatalf("order %v selected dir=%q out=%q err=%v", order, selected.dir, out, err)
+		}
+		slices.Sort(calls)
+		if !slices.Equal(calls, []string{"city", "riga", "rigb"}) {
+			t.Fatalf("order %v queried %v, want every scoped store", order, calls)
+		}
 	}
 }
 
