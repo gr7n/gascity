@@ -11,12 +11,13 @@ import (
 
 // fakeExecutor captures tmux command arguments for unit testing.
 type fakeExecutor struct {
-	calls [][]string // each call's full args
-	out   string
-	err   error
-	outs  []string
-	errs  []error
-	idx   int
+	calls  [][]string // each call's full args
+	inputs [][]byte
+	out    string
+	err    error
+	outs   []string
+	errs   []error
+	idx    int
 }
 
 func (f *fakeExecutor) execute(args []string) (string, error) {
@@ -43,15 +44,21 @@ func (f *fakeExecutor) executeCtx(_ context.Context, args []string) (string, err
 	return f.execute(args)
 }
 
+func (f *fakeExecutor) executeInput(_ context.Context, args []string, input []byte) (string, error) {
+	f.inputs = append(f.inputs, append([]byte(nil), input...))
+	return f.execute(args)
+}
+
 func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	exec := &fakeExecutor{}
 	tm := NewTmux()
 	tm.exec = exec
 
 	env := map[string]string{
-		"LANG":     "en_US.UTF-8",
-		"LC_ALL":   "",
-		"LC_CTYPE": "",
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+		"LANG":                    "en_US.UTF-8",
+		"LC_ALL":                  "",
+		"LC_CTYPE":                "",
 	}
 	if err := tm.NewSessionWithCommandAndEnv("gc-test-locale-clear", "", "claude", env); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
@@ -60,13 +67,16 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 		t.Fatal("no tmux calls recorded")
 	}
 
-	args := exec.calls[0]
-	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
-		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	for _, args := range exec.calls {
+		if strings.Contains(strings.Join(args, "\x00"), "en_US.UTF-8") || strings.Contains(strings.Join(args, "\x00"), "synthetic-oauth-secret") {
+			t.Fatalf("environment value leaked into tmux argv: %v", args)
+		}
 	}
-	if got := args[len(args)-1]; got != "env -u LC_ALL -u LC_CTYPE claude" {
-		t.Fatalf("command = %q, want env -u LC_ALL -u LC_CTYPE claude", got)
+	if len(exec.inputs) != 1 || !strings.Contains(string(exec.inputs[0]), "LANG") || !strings.Contains(string(exec.inputs[0]), "LC_ALL") || !strings.Contains(string(exec.inputs[0]), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("stdin environment source is incomplete")
+	}
+	if got := exec.calls[2][len(exec.calls[2])-1]; got != "claude" {
+		t.Fatalf("respawn command = %q, want claude", got)
 	}
 }
 
