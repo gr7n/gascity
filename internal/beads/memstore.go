@@ -394,10 +394,11 @@ func (m *MemStore) readyLocked(ctx context.Context, q ReadyQuery) ([]Bead, error
 		}
 		if !blocked {
 			result = append(result, cloneBead(b))
-			if q.Limit > 0 && len(result) >= q.Limit {
-				break
-			}
 		}
+	}
+	SortReady(result)
+	if q.Limit > 0 && len(result) > q.Limit {
+		result = result[:q.Limit]
 	}
 	return result, nil
 }

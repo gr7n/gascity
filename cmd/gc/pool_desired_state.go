@@ -3,6 +3,7 @@ package main
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -12,8 +13,9 @@ import (
 
 // SessionRequest represents a single session the reconciler should start.
 type SessionRequest struct {
-	Template     string // agent template qualified name (e.g., "gascity/claude")
-	BeadPriority int    // priority of the driving work bead
+	Template      string // agent template qualified name (e.g., "gascity/claude")
+	BeadPriority  int    // priority of the driving work bead
+	WorkCreatedAt time.Time
 	// Tier is "resume" for in-progress work with a live session,
 	// "wake-known-identity" for in-progress work whose session exited but
 	// template is configured, or "new" for ready unassigned work.
@@ -40,8 +42,10 @@ func beadPriority(b beads.Bead) int {
 	if b.Priority != nil {
 		return *b.Priority
 	}
-	return 0
+	return 2
 }
+
+func readyBeadPriority(b beads.Bead) int { return beadPriority(b) }
 
 // PoolDesiredState holds the desired state for a single agent template.
 type PoolDesiredState struct {
@@ -197,6 +201,7 @@ func computePoolDesiredStates(
 				resumeRequests = append(resumeRequests, SessionRequest{
 					Template:       template,
 					BeadPriority:   beadPriority(wb),
+					WorkCreatedAt:  wb.CreatedAt,
 					Tier:           "resume",
 					SessionBeadID:  sessionBeadID,
 					WorkBeadID:     wb.ID,
@@ -222,6 +227,7 @@ func computePoolDesiredStates(
 			resumeRequests = append(resumeRequests, SessionRequest{
 				Template:       template,
 				BeadPriority:   beadPriority(wb),
+				WorkCreatedAt:  wb.CreatedAt,
 				Tier:           "wake-known-identity",
 				WorkBeadID:     wb.ID,
 				WorkPack:       strings.TrimSpace(wb.Metadata[beadmeta.PackMetadataKey]),
@@ -292,8 +298,16 @@ func computePoolDesiredStates(
 				workWorkspace := ""
 				workStoreRef := ""
 				workParentSID := ""
+				workPriority := 2
+				var workCreatedAt time.Time
 				if demand := scaleCheckDemand[template]; len(demand.WorkBeadIDs) > j {
 					workBeadID = strings.TrimSpace(demand.WorkBeadIDs[j])
+					if demand.Priorities != nil {
+						workPriority = demand.Priorities[workBeadID]
+					}
+					if demand.CreatedAt != nil {
+						workCreatedAt = demand.CreatedAt[workBeadID]
+					}
 					if demand.Titles != nil {
 						workBeadTitle = strings.TrimSpace(demand.Titles[workBeadID])
 					}
@@ -312,6 +326,8 @@ func computePoolDesiredStates(
 				}
 				req := SessionRequest{
 					Template:       template,
+					BeadPriority:   workPriority,
+					WorkCreatedAt:  workCreatedAt,
 					Tier:           "new",
 					WorkBeadID:     workBeadID,
 					WorkBeadTitle:  workBeadTitle,
@@ -398,6 +414,8 @@ func poolInFlightNewRequests(cfg *config.City, sessionInfos []sessionpkg.Info, r
 			}
 			requests[template] = append(requests[template], SessionRequest{
 				Template:       template,
+				BeadPriority:   2,
+				WorkCreatedAt:  sb.CreatedAt,
 				Tier:           "new",
 				SessionBeadID:  sb.ID,
 				WorkBeadID:     strings.TrimSpace(sb.TriggerBeadID),
@@ -424,19 +442,11 @@ func poolSessionConsumesNewDemandInfo(info sessionpkg.Info) bool {
 }
 
 // applyNestedCaps enforces workspace, rig, and agent max_active_sessions caps.
-// Accepts requests in priority order, rejecting any that would exceed a cap.
+// Resume-like requests are protected before new admission. Within each tier,
+// Beads' canonical P0-first priority, creation time, and ID order decides the
+// bounded prefix.
 func applyNestedCaps(cfg *config.City, requests []SessionRequest, aliasHeldTemplates map[string]struct{}, trace *sessionReconcilerTraceCycle) []PoolDesiredState {
-	// Sort by priority DESC, resume tier first within same priority.
-	sort.SliceStable(requests, func(i, j int) bool {
-		if requests[i].BeadPriority != requests[j].BeadPriority {
-			return requests[i].BeadPriority > requests[j].BeadPriority
-		}
-		// Resume-like tiers before new tier at same priority.
-		if requests[i].Tier != requests[j].Tier {
-			return isResumeLikeTier(requests[i].Tier) && !isResumeLikeTier(requests[j].Tier)
-		}
-		return false
-	})
+	sort.SliceStable(requests, func(i, j int) bool { return sessionRequestLess(requests[i], requests[j]) })
 
 	limits := newNestedCapLimits(cfg)
 	usage := newNestedCapUsage()
@@ -570,21 +580,36 @@ func newNestedCapUsage() nestedCapUsage {
 func acceptedNestedCapUsage(limits nestedCapLimits, requests []SessionRequest) nestedCapUsage {
 	usage := newNestedCapUsage()
 	sorted := append([]SessionRequest(nil), requests...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if sorted[i].BeadPriority != sorted[j].BeadPriority {
-			return sorted[i].BeadPriority > sorted[j].BeadPriority
-		}
-		if sorted[i].Tier != sorted[j].Tier {
-			return isResumeLikeTier(sorted[i].Tier) && !isResumeLikeTier(sorted[j].Tier)
-		}
-		return false
-	})
+	sort.SliceStable(sorted, func(i, j int) bool { return sessionRequestLess(sorted[i], sorted[j]) })
 	for _, req := range sorted {
 		if usage.canAccept(req, limits) {
 			usage.accept(req, limits)
 		}
 	}
 	return usage
+}
+
+func sessionRequestLess(a, b SessionRequest) bool {
+	aResume, bResume := isResumeLikeTier(a.Tier), isResumeLikeTier(b.Tier)
+	if aResume != bResume {
+		return aResume
+	}
+	if a.BeadPriority != b.BeadPriority {
+		return a.BeadPriority < b.BeadPriority
+	}
+	if !a.WorkCreatedAt.Equal(b.WorkCreatedAt) {
+		if a.WorkCreatedAt.IsZero() {
+			return false
+		}
+		if b.WorkCreatedAt.IsZero() {
+			return true
+		}
+		return a.WorkCreatedAt.Before(b.WorkCreatedAt)
+	}
+	if a.WorkBeadID != b.WorkBeadID {
+		return a.WorkBeadID < b.WorkBeadID
+	}
+	return a.SessionBeadID < b.SessionBeadID
 }
 
 func capNewDemandCount(limits nestedCapLimits, usage nestedCapUsage, agent *config.Agent, demand int) int {
