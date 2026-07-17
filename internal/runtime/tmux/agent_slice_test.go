@@ -53,18 +53,19 @@ func TestAgentSliceWrapsNewSessionWithCommandAndEnv(t *testing.T) {
 	if len(exec.calls) == 0 {
 		t.Fatal("no tmux calls recorded")
 	}
-	args := exec.calls[0]
+	args := exec.calls[2]
 	got := args[len(args)-1]
-	// The env -u prefix must end up INSIDE the scope wrapper so the unset
-	// still applies to the agent process.
-	want := "systemd-run --user --scope --slice=gascity-agents.slice --collect --quiet -- sh -c 'env -u LC_ALL claude'"
+	want := "systemd-run --user --scope --slice=gascity-agents.slice --collect --quiet -- sh -c claude"
 	if got != want {
 		t.Fatalf("pane command = %q, want %q", got, want)
 	}
-	// The -e session env flags must survive wrapping.
-	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
-		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	for _, call := range exec.calls {
+		if strings.Contains(strings.Join(call, "\x00"), "en_US.UTF-8") {
+			t.Fatalf("environment value leaked into tmux argv: %v", call)
+		}
+	}
+	if len(exec.inputs) != 1 || !strings.Contains(string(exec.inputs[0]), "LANG") || !strings.Contains(string(exec.inputs[0]), "LC_ALL") {
+		t.Fatal("stdin environment source is incomplete")
 	}
 }
 
@@ -154,14 +155,14 @@ func TestAgentSliceEmptyCommandNotWrapped(t *testing.T) {
 	t.Setenv(AgentSliceEnv, "gascity-agents.slice")
 	tm, exec := newSliceTestTmux(t)
 
-	// Empty command + env-only session must keep the empty trailing arg so
-	// tmux still starts the default shell.
+	// Empty command + env-only session respawns the default shell after the
+	// stdin-only environment load.
 	if err := tm.NewSessionWithCommandAndEnv("gc-test-empty", "/work", "", map[string]string{"LANG": "C"}); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
-	args := exec.calls[0]
-	if got := args[len(args)-1]; got != "" {
-		t.Fatalf("pane command = %q, want empty", got)
+	args := exec.calls[2]
+	if got := args[len(args)-1]; got != "gc-test-empty" {
+		t.Fatalf("respawn target = %q, want session name", got)
 	}
 }
 
