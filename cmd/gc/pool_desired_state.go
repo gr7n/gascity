@@ -117,6 +117,11 @@ func computePoolDesiredStates(
 	scaleCheckDemand map[string]scaleCheckDemand,
 	trace *sessionReconcilerTraceCycle,
 ) []PoolDesiredState {
+	type inFlightTraceInput struct {
+		scaleCount int
+		sessionIDs map[string]struct{}
+	}
+	inFlightTrace := make(map[string]inFlightTraceInput)
 	// Build reverse lookup: any identifier → session bead ID.
 	// Assignee on work beads may be a bead ID, session name, alias, or
 	// a prior alias preserved in alias_history. Resume-tier dispatch
@@ -243,8 +248,6 @@ func computePoolDesiredStates(
 		}
 	}
 
-	limits := newNestedCapLimits(cfg)
-	usage := acceptedNestedCapUsage(limits, resumeRequests)
 	allRequests := append([]SessionRequest(nil), resumeRequests...)
 	resumeSessionBeadIDs := make(map[string]struct{}, len(resumeRequests))
 	for _, req := range resumeRequests {
@@ -268,28 +271,25 @@ func computePoolDesiredStates(
 			}
 			template := agent.QualifiedName()
 			scaleCount, ok := scaleCheckCounts[template]
-			if !ok {
+			if !ok || scaleCount <= 0 {
 				continue
 			}
 			if _, ok := aliasHeldTemplates[template]; ok {
 				continue
 			}
-			newCount := capNewDemandCount(limits, usage, agent, scaleCount)
-			recordNewDemandCapTrace(trace, template, agent, limits, usage, scaleCount, newCount)
+			newCount := scaleCount
 			inFlight := inFlightNewRequests[template]
 			inFlightCount := minInt(len(inFlight), newCount)
 			if scaleCount > 0 && len(inFlight) > 0 && trace != nil {
-				trace.RecordDecision(TraceSitePoolInFlightReuse, TraceReasonInFlightReuse, TraceOutcomeAccepted, template, "", traceRecordPayload{
-					"scale_check":   scaleCount,
-					"in_flight":     len(inFlight),
-					"reused":        inFlightCount,
-					"anonymous_new": newCount - inFlightCount,
-				})
+				sessionIDs := make(map[string]struct{}, len(inFlight))
+				for _, request := range inFlight {
+					sessionIDs[request.SessionBeadID] = struct{}{}
+				}
+				inFlightTrace[template] = inFlightTraceInput{scaleCount: scaleCount, sessionIDs: sessionIDs}
 			}
 			for j := 0; j < inFlightCount; j++ {
 				req := inFlight[j]
 				allRequests = append(allRequests, req)
-				usage.accept(req, limits)
 			}
 			for j := inFlightCount; j < newCount; j++ {
 				workBeadID := ""
@@ -337,12 +337,33 @@ func computePoolDesiredStates(
 					BrainParentSID: workParentSID,
 				}
 				allRequests = append(allRequests, req)
-				usage.accept(req, limits)
 			}
 		}
 	}
 
-	return applyNestedCaps(cfg, allRequests, aliasHeldTemplates, trace)
+	states := applyNestedCaps(cfg, allRequests, aliasHeldTemplates, trace)
+	for template, input := range inFlightTrace {
+		reused, anonymous := 0, 0
+		for _, state := range states {
+			if state.Template != template {
+				continue
+			}
+			for _, request := range state.Requests {
+				if request.Tier != "new" {
+					continue
+				}
+				if _, ok := input.sessionIDs[request.SessionBeadID]; ok {
+					reused++
+				} else {
+					anonymous++
+				}
+			}
+		}
+		trace.RecordDecision(TraceSitePoolInFlightReuse, TraceReasonInFlightReuse, TraceOutcomeAccepted, template, "", traceRecordPayload{
+			"scale_check": input.scaleCount, "in_flight": len(input.sessionIDs), "reused": reused, "anonymous_new": anonymous,
+		})
+	}
+	return states
 }
 
 func canonicalSingletonAliasHeldTemplates(cfg *config.City, sessionInfos []sessionpkg.Info) map[string]struct{} {
@@ -461,6 +482,9 @@ func applyNestedCaps(cfg *config.City, requests []SessionRequest, aliasHeldTempl
 		}
 		if site, reason, payload, rejected := usage.rejection(req, limits); rejected {
 			if trace != nil {
+				if req.Tier == "new" {
+					site, payload = TraceSitePoolNewDemandCap, newDemandCapRejectionPayload(req, reason, payload, limits, usage)
+				}
 				trace.RecordDecision(site, reason, TraceOutcomeRejected, template, "", payload)
 			}
 			continue
@@ -577,66 +601,31 @@ func newNestedCapUsage() nestedCapUsage {
 	}
 }
 
-func acceptedNestedCapUsage(limits nestedCapLimits, requests []SessionRequest) nestedCapUsage {
-	usage := newNestedCapUsage()
-	sorted := append([]SessionRequest(nil), requests...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sessionRequestLess(sorted[i], sorted[j]) })
-	for _, req := range sorted {
-		if usage.canAccept(req, limits) {
-			usage.accept(req, limits)
-		}
-	}
-	return usage
-}
-
 func sessionRequestLess(a, b SessionRequest) bool {
 	aResume, bResume := isResumeLikeTier(a.Tier), isResumeLikeTier(b.Tier)
 	if aResume != bResume {
 		return aResume
 	}
-	if a.BeadPriority != b.BeadPriority {
-		return a.BeadPriority < b.BeadPriority
-	}
-	if !a.WorkCreatedAt.Equal(b.WorkCreatedAt) {
-		if a.WorkCreatedAt.IsZero() {
-			return false
-		}
-		if b.WorkCreatedAt.IsZero() {
-			return true
-		}
-		return a.WorkCreatedAt.Before(b.WorkCreatedAt)
-	}
-	if a.WorkBeadID != b.WorkBeadID {
-		return a.WorkBeadID < b.WorkBeadID
+	if a.BeadPriority != b.BeadPriority || !a.WorkCreatedAt.Equal(b.WorkCreatedAt) || a.WorkBeadID != b.WorkBeadID {
+		return readyWorkLess(a.BeadPriority, a.WorkCreatedAt, a.WorkBeadID, b.BeadPriority, b.WorkCreatedAt, b.WorkBeadID)
 	}
 	return a.SessionBeadID < b.SessionBeadID
 }
 
-func capNewDemandCount(limits nestedCapLimits, usage nestedCapUsage, agent *config.Agent, demand int) int {
-	if demand <= 0 {
-		return 0
+func readyWorkLess(aPriority int, aCreated time.Time, aID string, bPriority int, bCreated time.Time, bID string) bool {
+	if aPriority != bPriority {
+		return aPriority < bPriority
 	}
-	template := agent.QualifiedName()
-	remaining := demand
-	if agentMax := limits.agentMax[template]; agentMax >= 0 {
-		remaining = minInt(remaining, agentMax-usage.agentCount[template])
-	}
-	if rig := limits.agentRig[template]; rig != "" {
-		rigMax, ok := limits.rigMax[rig]
-		if !ok {
-			rigMax = -1
+	if !aCreated.Equal(bCreated) {
+		if aCreated.IsZero() {
+			return false
 		}
-		if rigMax >= 0 {
-			remaining = minInt(remaining, rigMax-usage.rigCount[rig])
+		if bCreated.IsZero() {
+			return true
 		}
+		return aCreated.Before(bCreated)
 	}
-	if limits.workspaceMax >= 0 {
-		remaining = minInt(remaining, limits.workspaceMax-usage.workspaceCount)
-	}
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
+	return aID < bID
 }
 
 func (u nestedCapUsage) canAccept(req SessionRequest, limits nestedCapLimits) bool {
@@ -697,83 +686,36 @@ func (u *nestedCapUsage) accept(req SessionRequest, limits nestedCapLimits) {
 	u.requests = append(u.requests, req)
 }
 
-func recordNewDemandCapTrace(
-	trace *sessionReconcilerTraceCycle,
-	template string,
-	agent *config.Agent,
-	limits nestedCapLimits,
-	usage nestedCapUsage,
-	scaleCount int,
-	newCount int,
-) {
-	if trace == nil || scaleCount <= 0 || newCount >= scaleCount {
-		return
-	}
-	site, reason, capMax, current, blockers := newDemandBlockingScope(template, agent, limits, usage, newCount)
-	if site == "" {
-		return
-	}
-	blockingSessions := make([]string, 0, len(blockers))
-	blockingWork := make([]string, 0, len(blockers))
-	for _, req := range blockers {
-		if req.SessionBeadID != "" {
-			blockingSessions = append(blockingSessions, req.SessionBeadID)
-		}
-		if req.WorkBeadID != "" {
-			blockingWork = append(blockingWork, req.WorkBeadID)
+func newDemandCapRejectionPayload(req SessionRequest, reason TraceReasonCode, capPayload traceRecordPayload, limits nestedCapLimits, usage nestedCapUsage) traceRecordPayload {
+	var blockers []SessionRequest
+	for _, accepted := range usage.requests {
+		if reason == TraceReasonWorkspaceCap ||
+			(reason == TraceReasonAgentCap && accepted.Template == req.Template) ||
+			(reason == TraceReasonRigCap && limits.agentRig[accepted.Template] == limits.agentRig[req.Template]) {
+			blockers = append(blockers, accepted)
 		}
 	}
-	trace.RecordDecision(site, reason, TraceOutcomeRejected, template, "", traceRecordPayload{
-		"scale_check":          scaleCount,
-		"accepted_new":         newCount,
-		"blocked_new":          scaleCount - newCount,
-		"current":              current,
-		"max":                  capMax,
-		"blocking_sessions":    blockingSessions,
-		"blocking_work_beads":  blockingWork,
+	sessions, work := make([]string, 0, len(blockers)), make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		if blocker.SessionBeadID != "" {
+			sessions = append(sessions, blocker.SessionBeadID)
+		}
+		if blocker.WorkBeadID != "" {
+			work = append(work, blocker.WorkBeadID)
+		}
+	}
+	capMax := capPayload["agent_max"]
+	if reason == TraceReasonRigCap {
+		capMax = capPayload["rig_max"]
+	} else if reason == TraceReasonWorkspaceCap {
+		capMax = capPayload["workspace_max"]
+	}
+	return traceRecordPayload{
+		"scale_check": 1, "accepted_new": 0, "blocked_new": 1,
+		"current": capPayload["current"], "max": capMax,
+		"blocking_sessions": sessions, "blocking_work_beads": work,
 		"active_capacity_kind": string(reason),
-	})
-}
-
-func newDemandBlockingScope(
-	template string,
-	agent *config.Agent,
-	limits nestedCapLimits,
-	usage nestedCapUsage,
-	newCount int,
-) (TraceSiteCode, TraceReasonCode, int, int, []SessionRequest) {
-	if agentMax := limits.agentMax[template]; agentMax >= 0 && agentMax-usage.agentCount[template] <= newCount {
-		return TraceSitePoolNewDemandCap, TraceReasonAgentCap, agentMax, usage.agentCount[template], filterCapBlockers(usage.requests, func(req SessionRequest) bool {
-			return req.Template == template
-		})
 	}
-	if agent != nil {
-		if rig := limits.agentRig[template]; rig != "" {
-			rigMax, ok := limits.rigMax[rig]
-			if !ok {
-				rigMax = -1
-			}
-			if rigMax >= 0 && rigMax-usage.rigCount[rig] <= newCount {
-				return TraceSitePoolNewDemandCap, TraceReasonRigCap, rigMax, usage.rigCount[rig], filterCapBlockers(usage.requests, func(req SessionRequest) bool {
-					return limits.agentRig[req.Template] == rig
-				})
-			}
-		}
-	}
-	if limits.workspaceMax >= 0 && limits.workspaceMax-usage.workspaceCount <= newCount {
-		return TraceSitePoolNewDemandCap, TraceReasonWorkspaceCap, limits.workspaceMax, usage.workspaceCount, usage.requests
-	}
-	return "", "", 0, 0, nil
-}
-
-func filterCapBlockers(requests []SessionRequest, keep func(SessionRequest) bool) []SessionRequest {
-	out := make([]SessionRequest, 0, len(requests))
-	for _, req := range requests {
-		if keep(req) {
-			out = append(out, req)
-		}
-	}
-	return out
 }
 
 func minInt(a, b int) int {

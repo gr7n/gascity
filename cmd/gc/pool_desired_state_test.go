@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -741,6 +743,43 @@ func TestComputePoolDesiredStates_ResumePriorityOrder(t *testing.T) {
 	if result[0].Requests[1].BeadPriority != 5 {
 		t.Errorf("second priority = %d, want 5", result[0].Requests[1].BeadPriority)
 	}
+}
+
+func TestComputePoolDesiredStates_GlobalReadyOrderIgnoresAgentOrder(t *testing.T) {
+	max := 6
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	demand := map[string]scaleCheckDemand{
+		"agent-a": readyDemand(now, []string{"a-p5", "a-p1", "a-p0", "a-p2"}, []int{5, 1, 0, 2}),
+		"agent-b": readyDemand(now, []string{"b-p3", "b-p1b", "b-p0", "b-p1a"}, []int{3, 1, 0, 1}),
+	}
+	counts := map[string]int{"agent-a": 4, "agent-b": 4}
+	want := []string{"a-p0", "a-p1", "a-p2", "b-p0", "b-p1a", "b-p1b"}
+	for _, agents := range [][]config.Agent{
+		{poolAgent("agent-a", "", intPtr(10), 0), poolAgent("agent-b", "", intPtr(10), 0)},
+		{poolAgent("agent-b", "", intPtr(10), 0), poolAgent("agent-a", "", intPtr(10), 0)},
+	} {
+		cfg := &config.City{Workspace: config.Workspace{MaxActiveSessions: &max}, Agents: agents}
+		states := ComputePoolDesiredStatesWithDemandTraced(cfg, nil, nil, counts, demand, nil)
+		var got []string
+		for _, state := range states {
+			for _, request := range state.Requests {
+				got = append(got, request.WorkBeadID)
+			}
+		}
+		sort.Strings(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("agent order %v admitted %v, want global Ready prefix %v", []string{agents[0].Name, agents[1].Name}, got, want)
+		}
+	}
+}
+
+func readyDemand(now time.Time, ids []string, priorities []int) scaleCheckDemand {
+	demand := scaleCheckDemand{Count: len(ids), WorkBeadIDs: ids, Priorities: map[string]int{}, CreatedAt: map[string]time.Time{}}
+	for i, id := range ids {
+		demand.Priorities[id] = priorities[i]
+		demand.CreatedAt[id] = now.Add(time.Duration(i) * time.Second)
+	}
+	return demand
 }
 
 func TestApplyNestedCapsPreservesResumeBeforeNewAdmission(t *testing.T) {
