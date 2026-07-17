@@ -3,6 +3,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1863,6 +1864,112 @@ func TestNewSessionWithCommandAndEnv(t *testing.T) {
 	if gotRig != "testrig" {
 		t.Errorf("GT_RIG = %q, want %q", gotRig, "testrig")
 	}
+}
+
+func TestNewSessionWithCommandAndEnvStdinBoundaryRoundTrip(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	version, err := exec.Command("tmux", "-V").Output()
+	if err != nil {
+		t.Fatalf("tmux -V: %v", err)
+	}
+	t.Logf("validated source-file stdin boundary with %s", strings.TrimSpace(string(version)))
+
+	tm := testTmux()
+	sessionName := fmt.Sprintf("gt-test-stdin-env-%d", time.Now().UnixNano()%1000000)
+	_ = tm.KillSession(sessionName)
+	t.Cleanup(func() { _ = tm.KillSession(sessionName) })
+
+	dir := t.TempDir()
+	valueFile := filepath.Join(dir, "complex-value")
+	unsetFile := filepath.Join(dir, "unset-state")
+	scriptPath := filepath.Join(dir, "capture-env.sh")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$GC_COMPLEX_VALUE\" > " + strconv.Quote(valueFile) + "\n" +
+		"if [ \"${GC_TMUX_MUST_BE_UNSET+x}\" = x ]; then printf present; else printf unset; fi > " + strconv.Quote(unsetFile) + "\n" +
+		"exec sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write capture script: %v", err)
+	}
+
+	complexValue := "spaces 'single' \"double\"\nnext-line"
+	providerMarker := "synthetic-provider-token-" + sessionName
+	t.Setenv("GC_TMUX_MUST_BE_UNSET", "ambient-value-that-must-not-survive")
+	if err := tm.NewSessionWithCommandAndEnv(sessionName, dir, scriptPath, map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": providerMarker,
+		"GC_COMPLEX_VALUE":        complexValue,
+		"GC_TMUX_MUST_BE_UNSET":   "",
+	}); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, valueErr := os.Stat(valueFile); valueErr == nil {
+			if _, unsetErr := os.Stat(unsetFile); unsetErr == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("respawned pane did not capture its environment")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	gotValue, err := os.ReadFile(valueFile)
+	if err != nil {
+		t.Fatalf("read complex value: %v", err)
+	}
+	if string(gotValue) != complexValue {
+		t.Fatalf("pane complex value = %q, want %q", string(gotValue), complexValue)
+	}
+	gotUnset, err := os.ReadFile(unsetFile)
+	if err != nil {
+		t.Fatalf("read unset state: %v", err)
+	}
+	if string(gotUnset) != "unset" {
+		t.Fatalf("respawned pane observed explicitly unset key: %q", string(gotUnset))
+	}
+	if _, err := tm.GetEnvironment(sessionName, "GC_TMUX_MUST_BE_UNSET"); err == nil {
+		t.Fatal("session environment retained explicitly unset key")
+	}
+	gotComplex, err := tm.GetEnvironment(sessionName, "GC_COMPLEX_VALUE")
+	if err != nil {
+		t.Fatalf("GetEnvironment complex value: %v", err)
+	}
+	if gotComplex != complexValue {
+		t.Fatalf("session complex value = %q, want %q", gotComplex, complexValue)
+	}
+
+	if runtime.GOOS == "linux" {
+		found, err := processArgvContains(providerMarker)
+		if err != nil {
+			t.Fatalf("scan /proc argv: %v", err)
+		}
+		if found {
+			t.Fatal("provider credential marker appeared in a live process argv")
+		}
+	}
+}
+
+func processArgvContains(value string) (bool, error) {
+	paths, err := filepath.Glob("/proc/[0-9]*/cmdline")
+	if err != nil {
+		return false, err
+	}
+	needle := []byte(value)
+	for _, path := range paths {
+		argv, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(argv, needle) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func TestSetGetRemoveEnvironment(t *testing.T) {

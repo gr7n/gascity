@@ -338,7 +338,7 @@ func (t *Tmux) runInput(input []byte, args ...string) (string, error) {
 	if runner, ok := t.exec.(inputExecutor); ok {
 		return runner.executeInput(ctx, allArgs, input)
 	}
-	return t.exec.executeCtx(ctx, allArgs)
+	return "", errors.New("tmux executor does not support stdin input")
 }
 
 // wrapError wraps tmux errors with context.
