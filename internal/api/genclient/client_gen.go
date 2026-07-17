@@ -865,6 +865,7 @@ type Bead struct {
 	Priority     *int64             `json:"priority,omitempty"`
 	Ref          *string            `json:"ref,omitempty"`
 	Status       string             `json:"status"`
+	StoreRef     *string            `json:"store_ref,omitempty"`
 	Title        string             `json:"title"`
 	UpdatedAt    *time.Time         `json:"updated_at,omitempty"`
 }

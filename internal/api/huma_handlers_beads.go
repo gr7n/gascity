@@ -366,7 +366,7 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	var all []beads.Bead
 	var pa partialAggregator
 	seen := make(map[string]bool)
-	federate := func(label string, store beads.Store) {
+	federate := func(label, storeRef string, store beads.Store) {
 		if store == nil {
 			return
 		}
@@ -384,10 +384,12 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 			pa.success()
 		}
 		for _, b := range ready {
-			if seen[b.ID] {
+			key := storeRef + "\x00" + b.ID
+			if seen[key] {
 				continue // legacy file mode can alias the city and rig stores
 			}
-			seen[b.ID] = true
+			seen[key] = true
+			b.StoreRef = storeRef
 			all = append(all, b)
 		}
 	}
@@ -396,14 +398,14 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	// `bd ready` would never surface it. In production BeadStores() also returns
 	// the city store keyed by CityName() (cmd/gc/api_state.go), so skip that
 	// duplicate key in the rig loop below to avoid querying it twice.
-	federate("city", s.state.CityBeadStore())
+	federate("city", "city:"+s.state.CityName(), s.state.CityBeadStore())
 	cityName := s.state.CityName()
 	for _, rigName := range rigNames {
 		if rigName == cityName {
 			continue // city store already federated explicitly above; production
 			// BeadStores() also returns it under cityName (cmd/gc/api_state.go)
 		}
-		federate("rig "+rigName, stores[rigName])
+		federate("rig "+rigName, "rig:"+rigName, stores[rigName])
 	}
 	if pa.totalOutage() {
 		return nil, pa.outageError()

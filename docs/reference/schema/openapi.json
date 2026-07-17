@@ -916,6 +916,9 @@
           "status": {
             "type": "string"
           },
+          "store_ref": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
