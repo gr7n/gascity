@@ -80,6 +80,82 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithCommandAndEnvCleansUpAfterSourceFailure(t *testing.T) {
+	sourceErr := errors.New("synthetic source failure")
+	exec := &fakeExecutor{errs: []error{nil, sourceErr}}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-source-failure", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if !errors.Is(err, sourceErr) {
+		t.Fatalf("error = %v, want source failure", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-source-failure")
+}
+
+func TestNewSessionWithCommandAndEnvCleansUpAfterRespawnFailure(t *testing.T) {
+	respawnErr := errors.New("synthetic respawn failure")
+	exec := &fakeExecutor{errs: []error{nil, nil, respawnErr}}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-respawn-failure", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if !errors.Is(err, respawnErr) {
+		t.Fatalf("error = %v, want respawn failure", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-respawn-failure")
+}
+
+type noInputExecutor struct {
+	calls [][]string
+}
+
+func (e *noInputExecutor) record(args []string) (string, error) {
+	e.calls = append(e.calls, append([]string(nil), args...))
+	return "", nil
+}
+
+func (e *noInputExecutor) execute(args []string) (string, error) {
+	return e.record(args)
+}
+
+func (e *noInputExecutor) executeCtx(_ context.Context, args []string) (string, error) {
+	return e.record(args)
+}
+
+func TestNewSessionWithCommandAndEnvFailsClosedWithoutInputExecutor(t *testing.T) {
+	exec := &noInputExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	err := tm.NewSessionWithCommandAndEnv("gc-test-no-input", "", "claude", map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-secret",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support stdin input") {
+		t.Fatalf("error = %v, want fail-closed stdin support error", err)
+	}
+	assertFailedSessionKilled(t, exec.calls, "gc-test-no-input")
+	for _, args := range exec.calls {
+		if strings.Contains(strings.Join(args, "\x00"), "synthetic-oauth-secret") {
+			t.Fatalf("environment value leaked into tmux argv: %v", args)
+		}
+	}
+}
+
+func assertFailedSessionKilled(t *testing.T, calls [][]string, session string) {
+	t.Helper()
+	for _, args := range calls {
+		if len(args) >= 4 && args[len(args)-3] == "kill-session" && args[len(args)-2] == "-t" && args[len(args)-1] == session {
+			return
+		}
+	}
+	t.Fatalf("failed session %q was not killed; calls=%v", session, calls)
+}
+
 type promptFooterExecutor struct {
 	calls [][]string
 }
