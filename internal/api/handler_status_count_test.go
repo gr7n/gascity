@@ -208,7 +208,7 @@ func TestHandleStatusCounterUnsupportedFallsBackToList(t *testing.T) {
 	}
 }
 
-func TestHandleStatusReadyDeduplicatesAcrossStoresLikeCanonicalEndpoint(t *testing.T) {
+func TestHandleStatusReadyPreservesCollidingStoreLocalIDsLikeCanonicalEndpoint(t *testing.T) {
 	state := newFakeState(t)
 	first := beads.NewMemStore()
 	second := beads.NewMemStore()
@@ -227,8 +227,8 @@ func TestHandleStatusReadyDeduplicatesAcrossStoresLikeCanonicalEndpoint(t *testi
 	if status.Work.Open != 2 {
 		t.Fatalf("Work.Open = %d, want existing per-store sum 2", status.Work.Open)
 	}
-	if status.Work.Ready != 1 {
-		t.Fatalf("Work.Ready = %d, want shared ready ID deduplicated", status.Work.Ready)
+	if status.Work.Ready != 2 {
+		t.Fatalf("Work.Ready = %d, want both store-local ready IDs preserved", status.Work.Ready)
 	}
 
 	h := newTestCityHandler(t, state)
