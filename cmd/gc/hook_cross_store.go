@@ -148,7 +148,10 @@ func rigScopedHookRig(cfg *config.City, agentIdentity string) string {
 // firstStoreWithWork runs command against every store and returns the store
 // containing the globally first Ready bead: priority, then created_at, then ID.
 // This keeps admission independent of federation/config order. The same
-// normalize + unready-filter as doHook excludes deferred/blocked rows.
+// normalize + unready-filter as doHook excludes deferred/blocked rows. Custom
+// work queries may emit non-JSON output; when no decoded candidate exists, the
+// first successful opaque result with work is returned with its originating
+// store so federation does not silently replace it with a later store's output.
 //
 // When no store has ready work, an error on the agent's OWN store (identified by
 // primary, not by slice position) is surfaced so emitCityWorkQueryFailure can
@@ -168,6 +171,9 @@ func firstStoreWithWork(command string, stores []hookStore, primary hookStore, r
 	var selectedStore hookStore
 	var selectedBead beads.Bead
 	selected := false
+	var opaqueOut string
+	var opaqueStore hookStore
+	opaqueSelected := false
 	now := time.Now()
 	for _, st := range stores {
 		out, err := run(command, st.dir, st.env)
@@ -186,6 +192,8 @@ func firstStoreWithWork(command string, stores []hookStore, primary hookStore, r
 				if bestBeforeSelected || (equalReadyKey && hookStoreKey(st) < hookStoreKey(selectedStore)) {
 					selectedOut, selectedStore, selectedBead, selected = out, st, best, true
 				}
+			} else if decodeErr != nil && workQueryHasReadyWork(ready) && !opaqueSelected {
+				opaqueOut, opaqueStore, opaqueSelected = out, st, true
 			}
 			lastOut = out
 			continue
@@ -196,6 +204,9 @@ func firstStoreWithWork(command string, stores []hookStore, primary hookStore, r
 	}
 	if selected {
 		return selectedOut, selectedStore, nil
+	}
+	if opaqueSelected {
+		return opaqueOut, opaqueStore, nil
 	}
 	if ownStoreErr != nil {
 		return ownStoreOut, hookStore{}, ownStoreErr
