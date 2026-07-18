@@ -75,6 +75,16 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	if len(exec.inputs) != 1 || !strings.Contains(string(exec.inputs[0]), "LANG") || !strings.Contains(string(exec.inputs[0]), "LC_ALL") || !strings.Contains(string(exec.inputs[0]), "CLAUDE_CODE_OAUTH_TOKEN") {
 		t.Fatalf("stdin environment source is incomplete")
 	}
+	source := string(exec.inputs[0])
+	for _, key := range []string{"LC_ALL", "LC_CTYPE"} {
+		want := "set-environment -r -t 'gc-test-locale-clear' '" + key + "'\n"
+		if !strings.Contains(source, want) {
+			t.Fatalf("stdin environment source missing removal directive %q: %q", want, source)
+		}
+	}
+	if strings.Contains(source, "set-environment -u ") {
+		t.Fatalf("stdin environment source uses unset semantics that permit global fallback: %q", source)
+	}
 	if got := exec.calls[2][len(exec.calls[2])-1]; got != "claude" {
 		t.Fatalf("respawn command = %q, want claude", got)
 	}

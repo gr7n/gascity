@@ -519,7 +519,7 @@ func tmuxEnvironmentSource(name string, env map[string]string) (string, error) {
 	var source strings.Builder
 	for _, key := range keys {
 		if env[key] == "" {
-			fmt.Fprintf(&source, "set-environment -u -t %s %s\n", shellquote.Quote(name), shellquote.Quote(key))
+			fmt.Fprintf(&source, "set-environment -r -t %s %s\n", shellquote.Quote(name), shellquote.Quote(key))
 		} else {
 			fmt.Fprintf(&source, "set-environment -t %s %s %s\n", shellquote.Quote(name), shellquote.Quote(key), shellquote.Quote(env[key]))
 		}
