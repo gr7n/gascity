@@ -499,7 +499,9 @@ func cmdSlingWithJSON(args []string, isFormula, doNudge, force bool, title strin
 		Store:    store,
 		StoreRef: storeRef,
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
-			stores, skips, err := openSourceWorkflowStoresWith(cfg, cityPath, "", func(dir string) (beads.Store, error) {
+			stores, skips, err := openSourceWorkflowStoresWithProvider(cfg, cityPath, "", func(scopeRoot string) string {
+				return authoritativeBeadsProviderForScope(scopeRoot, cityPath)
+			}, func(dir string) (beads.Store, error) {
 				return openAuthoritativeStoreAtForCity(dir, cityPath)
 			})
 			if err != nil {

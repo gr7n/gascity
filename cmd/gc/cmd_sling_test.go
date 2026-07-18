@@ -4886,13 +4886,18 @@ func TestSlingSourceWorkflowStoreCandidatesUseAuthoritativeProviders(t *testing.
 	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(`{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":"gc"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensurePersistedScopeLocalFileStore(rigPath); err != nil {
+	if err := os.MkdirAll(filepath.Join(rigPath, ".beads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "metadata.json"), []byte(`{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":"local"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := &config.City{Rigs: []config.Rig{{Name: "local", Path: rigPath}}}
 	providers := make(map[string]string)
-	stores, _, err := openSourceWorkflowStoresWith(cfg, cityPath, "", func(dir string) (beads.Store, error) {
+	stores, _, err := openSourceWorkflowStoresWithProvider(cfg, cityPath, "", func(scopeRoot string) string {
+		return authoritativeBeadsProviderForScope(scopeRoot, cityPath)
+	}, func(dir string) (beads.Store, error) {
 		providers[dir] = authoritativeBeadsProviderForScope(dir, cityPath)
 		return beads.NewMemStore(), nil
 	})
@@ -4905,8 +4910,8 @@ func TestSlingSourceWorkflowStoreCandidatesUseAuthoritativeProviders(t *testing.
 	if got := providers[cityPath]; got != "bd" {
 		t.Fatalf("city candidate provider = %q, want bd despite ambient GC_BEADS=file", got)
 	}
-	if got := providers[rigPath]; got != "file" {
-		t.Fatalf("rig candidate provider = %q, want file", got)
+	if got := providers[rigPath]; got != "bd" {
+		t.Fatalf("rig candidate provider = %q, want bd despite ambient GC_BEADS=file", got)
 	}
 
 	t.Setenv("GC_BEADS", "")
