@@ -120,6 +120,47 @@ func TestFirstStoreWithWorkUsesGlobalReadyOrderAcrossStorePermutations(t *testin
 	}
 }
 
+func TestFirstStoreWithWorkFallsBackToFirstOpaqueResult(t *testing.T) {
+	stores := []hookStore{{dir: "riga"}, {dir: "city"}, {dir: "rigb"}}
+	outputs := map[string]string{
+		"riga": "PWD=/riga\nBEADS_DIR=/riga/.beads",
+		"city": "PWD=/city\nBEADS_DIR=/city/.beads",
+		"rigb": `[]`,
+	}
+	var calls []string
+	out, selected, err := firstStoreWithWork("q", stores, stores[0], func(_, dir string, _ []string) (string, error) {
+		calls = append(calls, dir)
+		return outputs[dir], nil
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if selected.dir != "riga" || out != outputs["riga"] {
+		t.Fatalf("selected dir=%q out=%q, want first opaque result from riga", selected.dir, out)
+	}
+	if !slices.Equal(calls, []string{"riga", "city", "rigb"}) {
+		t.Fatalf("calls = %v, want every scoped store queried", calls)
+	}
+}
+
+func TestFirstStoreWithWorkPrefersStructuredGlobalOrderOverOpaqueFallback(t *testing.T) {
+	stores := []hookStore{{dir: "riga"}, {dir: "city"}, {dir: "rigb"}}
+	outputs := map[string]string{
+		"riga": "PWD=/riga\nBEADS_DIR=/riga/.beads",
+		"city": `[{"id":"city-p2","priority":2,"created_at":"2026-07-17T10:00:00Z"}]`,
+		"rigb": `[{"id":"rig-b-p0","priority":0,"created_at":"2026-07-17T11:00:00Z"}]`,
+	}
+	out, selected, err := firstStoreWithWork("q", stores, stores[0], func(_, dir string, _ []string) (string, error) {
+		return outputs[dir], nil
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if selected.dir != "rigb" || out != outputs["rigb"] {
+		t.Fatalf("selected dir=%q out=%q, want globally first structured result from rigb", selected.dir, out)
+	}
+}
+
 func TestFirstStoreWithWorkReturnsLastWhenNoneHasWork(t *testing.T) {
 	stores := []hookStore{{dir: "city"}, {dir: "riga"}}
 	run := func(_, _ string, _ []string) (string, error) { return `[]`, nil }
