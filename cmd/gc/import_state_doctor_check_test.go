@@ -514,6 +514,7 @@ source = ".gc/system/packs/gastown"
 
 func TestDoDoctorRegistersImportStateCheck(t *testing.T) {
 	clearGCEnv(t)
+	t.Setenv("GC_BEADS", "file")
 	cityDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -565,6 +566,7 @@ version = "^1.0"
 
 func TestDoDoctorRunsImportStateCheckWhenImportInstallStateBroken(t *testing.T) {
 	clearGCEnv(t)
+	t.Setenv("GC_BEADS", "file")
 	cityDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -608,6 +610,7 @@ version = "^1.0"
 
 func TestDoDoctorSkipsImportStateCheckWhenCityConfigInvalid(t *testing.T) {
 	clearGCEnv(t)
+	t.Setenv("GC_BEADS", "file")
 	cityDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
