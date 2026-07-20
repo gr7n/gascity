@@ -48,3 +48,33 @@ func TestEnrichReadyProjectionForCacheSkipsMessageBeads(t *testing.T) {
 		t.Errorf("task bead IsBlocked = %v, want &false (real work must still be enriched)", got)
 	}
 }
+
+func TestEnrichReadyProjectionForCacheDisablesUnsupportedBdSQL(t *testing.T) {
+	sqlCalls := 0
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case joined == "bd version":
+			return []byte("bd version 1.1.0\n"), nil
+		case len(args) > 0 && args[0] == "sql":
+			sqlCalls++
+			return nil, fmt.Errorf("exit status 1: Error: 'bd sql' is not yet supported in embedded mode")
+		}
+		return nil, fmt.Errorf("unexpected command: %s", joined)
+	}
+	s := NewBdStore("/city", runner)
+	items := []Bead{{ID: "gr-task", Type: "task", Status: "open"}}
+
+	for range 2 {
+		out, err := s.enrichReadyProjectionForCache(items)
+		if err != nil {
+			t.Fatalf("enrichReadyProjectionForCache: %v", err)
+		}
+		if got := out[0].IsBlocked; got != nil {
+			t.Fatalf("task IsBlocked = %v, want nil without SQL projection", got)
+		}
+	}
+	if sqlCalls != 1 {
+		t.Fatalf("bd sql calls = %d, want one capability probe", sqlCalls)
+	}
+}
