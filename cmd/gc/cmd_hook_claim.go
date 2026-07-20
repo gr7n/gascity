@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,8 @@ type hookClaimJSONResult struct {
 	BeadID               string   `json:"bead_id,omitempty"`
 	Assignee             string   `json:"assignee,omitempty"`
 	Route                string   `json:"route,omitempty"`
+	RootBeadID           string   `json:"root_bead_id,omitempty"`
+	ContinuationGroup    string   `json:"continuation_group,omitempty"`
 	ContinuationAssigned []string `json:"continuation_assigned,omitempty"`
 	DrainAcknowledged    bool     `json:"drain_acknowledged,omitempty"`
 }
@@ -229,6 +232,13 @@ func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOpti
 		}
 		claimed, ok, err := ops.Claim(ctx, dir, opts.Env, candidate.ID, opts.Assignee)
 		if err != nil {
+			if ok {
+				// The atomic mutation committed, but its canonical readback failed.
+				// Stop immediately: trying another candidate or draining would strand
+				// the assignment while falsely reporting idle work.
+				fmt.Fprintf(stderr, "gc hook --claim: claimed %s but loading canonical bead failed: %v\n", candidate.ID, err) //nolint:errcheck
+				return hookClaimResult{terminal: true, code: 1}
+			}
 			// A single unclaimable candidate (a routed id whose bead was deleted,
 			// one that no longer resolves in the store this context can reach, or a
 			// transient write failure) must not wedge the whole hook. Record it and
@@ -243,8 +253,12 @@ func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOpti
 			reportHookClaimRejected(candidate, claimed, opts, ops)
 			continue
 		}
-		if claimed.Metadata == nil {
-			claimed.Metadata = candidate.Metadata
+		if len(candidate.Metadata) > 0 {
+			// bd update --claim can return a partial metadata projection. Retain
+			// candidate fields while preferring values returned by the mutation.
+			metadata := maps.Clone(candidate.Metadata)
+			maps.Copy(metadata, claimed.Metadata)
+			claimed.Metadata = metadata
 		}
 		result := hookClaimJSONResult{
 			SchemaVersion: "1",
@@ -290,6 +304,9 @@ func reportHookClaimRejected(candidate, claimed beads.Bead, opts hookClaimOption
 
 func hookClaimExistingOrAssigned(candidates []beads.Bead, opts hookClaimOptions) (hookClaimJSONResult, beads.Bead, bool) {
 	for _, candidate := range candidates {
+		if hookClaimCandidateIsMessage(candidate) {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(candidate.Status), "in_progress") &&
 			hookClaimHasIdentity(candidate.Assignee, opts.IdentityCandidates) {
 			result := hookClaimJSONResult{
@@ -306,6 +323,9 @@ func hookClaimExistingOrAssigned(candidates []beads.Bead, opts hookClaimOptions)
 		}
 	}
 	for _, candidate := range candidates {
+		if hookClaimCandidateIsMessage(candidate) {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(candidate.Status), "open") &&
 			hookClaimHasIdentity(candidate.Assignee, opts.IdentityCandidates) {
 			result := hookClaimJSONResult{
@@ -324,7 +344,21 @@ func hookClaimExistingOrAssigned(candidates []beads.Bead, opts hookClaimOptions)
 	return hookClaimJSONResult{}, beads.Bead{}, false
 }
 
+// hookClaimCandidateIsMessage reports whether candidate is a mail message
+// bead (issue_type="message"). Mail is read, not claimed as work: a message
+// bead addressed to this session's identity has the same
+// assignee-matches-identity shape as a real existing/ready assignment, so
+// without this check it was returned by hookClaimExistingOrAssigned as work
+// ahead of any real routed work waiting in the same batch (#4419) -- not by
+// race, by construction, since this function runs before
+// claimFirstEligibleHookCandidate ever sees the routed candidates.
+func hookClaimCandidateIsMessage(candidate beads.Bead) bool {
+	return strings.EqualFold(strings.TrimSpace(candidate.Type), "message")
+}
+
 func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string, stdout, stderr io.Writer) int {
+	result.RootBeadID = strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
+	result.ContinuationGroup = strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
 	stampHookClaimIdentity(bead, opts, ops, dir, stderr)
 	recordHookClaimSessionPointers(bead, opts, ops, dir, stderr)
 	assigned, err := preassignHookContinuationGroup(bead, opts, ops, dir)
@@ -431,8 +465,8 @@ func preassignHookContinuationGroup(bead beads.Bead, opts hookClaimOptions, ops 
 	return assigned, nil
 }
 
-func hookClaimWithBdStore(_ context.Context, dir string, env []string, beadID, assignee string) (beads.Bead, bool, error) {
-	store := hookClaimBdStore(dir, env, assignee)
+func hookClaimWithBdStore(ctx context.Context, dir string, env []string, beadID, assignee string) (beads.Bead, bool, error) {
+	store := hookClaimBdStoreContext(ctx, dir, env, assignee)
 	claimed, ok, err := store.Claim(beadID)
 	if err != nil {
 		return beads.Bead{}, false, err
@@ -453,7 +487,14 @@ func hookClaimWithBdStore(_ context.Context, dir string, env []string, beadID, a
 		// the caller can report the rejection rather than treat it as ours.
 		return claimed, false, nil
 	}
-	return claimed, true, nil
+	canonical, err := store.Get(beadID)
+	if err != nil {
+		return claimed, true, fmt.Errorf("reloading claimed bead %q: %w", beadID, err)
+	}
+	if !hookClaimHasIdentity(canonical.Assignee, []string{assignee}) {
+		return canonical, false, nil
+	}
+	return canonical, true, nil
 }
 
 // stampHookClaimIdentity records the claiming worker's execution identity on the

@@ -112,6 +112,29 @@ func TestEventsJSONFlagIsSilentNoOp(t *testing.T) {
 	}
 }
 
+// TestEventsAfterRequiresFollowOrWatch pins workspace-jbhq: --after /
+// --after-cursor resume a stream, so the plain list and --seq paths (which do
+// not consume them) must reject rather than silently ignore them — a dropped
+// --after otherwise returns the newest tail, masquerading as events-after-N.
+func TestEventsAfterRequiresFollowOrWatch(t *testing.T) {
+	cases := [][]string{
+		{"--after", "100"},
+		{"--after-cursor", "city-a:5"},
+		{"--after", "100", "--seq"},
+	}
+	for _, args := range cases {
+		var stdout, stderr bytes.Buffer
+		cmd := newEventsCmd(&stdout, &stderr)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err == nil {
+			t.Fatalf("args %v: expected error, got nil (stdout=%q)", args, stdout.String())
+		}
+		if !strings.Contains(stderr.String(), "require --follow or --watch") {
+			t.Fatalf("args %v: stderr = %q, want --follow/--watch guidance", args, stderr.String())
+		}
+	}
+}
+
 func TestDoEventsSeqCityUsesIndexHeader(t *testing.T) {
 	server := newEventsTestServer(t, testEventRoutes{
 		cityEvents: func(w http.ResponseWriter, _ *http.Request) {
@@ -1564,5 +1587,46 @@ func TestFetchCityEventsPaginatesSinceWindow(t *testing.T) {
 	// A drained window is complete, so no truncation notice.
 	if warn.Len() != 0 {
 		t.Fatalf("unexpected truncation notice for a fully drained window: %q", warn.String())
+	}
+}
+
+// TestDoEventsWatchReplayDrainsAfterSeq pins workspace-d5rx: the --watch --after
+// buffered replay must return EVERY event after the resume seq, not just the
+// newest page. Regression guard for the single-page fetch that dropped events
+// when more than one page arrived since the resume seq.
+func TestDoEventsWatchReplayDrainsAfterSeq(t *testing.T) {
+	const total = 1200 // > 2 pages of 500
+	allDesc := make([]cliWireEvent, 0, total)
+	for seq := total; seq >= 1; seq-- {
+		allDesc = append(allDesc, cliWireEvent{
+			Actor: "gc", Seq: int64(seq), Type: "e.t",
+			Ts: time.Unix(1700000000+int64(seq), 0).UTC(),
+		})
+	}
+	server := newEventsTestServer(t, testEventRoutes{
+		cityEvents: pagedCityEventsHandler(t, allDesc, 500),
+	})
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	// Resume from seq 100 → expect the 1100 events 101..1200, replayed in full.
+	code := doEventsWatch(eventsAPIScope{apiURL: server.URL, cityName: "mc-city"},
+		"", nil, 100, "", 30*time.Second, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doEventsWatch = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != total-100 {
+		t.Fatalf("replayed %d events, want %d (full gap after resume seq 100)", len(lines), total-100)
+	}
+	// Chronological ascending, contiguous from seq 101, no gaps across page seams.
+	for i, line := range lines {
+		var e cliWireEvent
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("unmarshal line %d: %v; line=%q", i, err, line)
+		}
+		if e.Seq != int64(i+101) {
+			t.Fatalf("event[%d].Seq = %d, want %d (ascending, contiguous from 101)", i, e.Seq, i+101)
+		}
 	}
 }
