@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api/apierr"
@@ -557,11 +558,19 @@ func (s *Server) humaHandleBeadCreate(ctx context.Context, input *BeadCreateInpu
 			if store == nil {
 				return beads.Bead{}, apierr.InvalidRequest.Msg("rig is required when multiple rigs are configured")
 			}
+			if id := strings.TrimSpace(input.Body.ID); id != "" {
+				owner, ok := store.(interface{ IDPrefix() string })
+				if !ok || len(id) > 128 || !beadIDHasConfiguredPrefix(id, owner.IDPrefix()) {
+					return beads.Bead{}, apierr.InvalidRequest.Msg("stable bead id differs from the selected scope")
+				}
+				input.Body.ID = id
+			}
 			assignee, err := s.normalizeRawBeadAssignee(ctx, input.Body.Assignee)
 			if err != nil {
 				return beads.Bead{}, apierr.InvalidRequest.Msg(err.Error())
 			}
 			created, err := store.Create(beads.Bead{
+				ID:          input.Body.ID,
 				Title:       input.Body.Title,
 				Type:        input.Body.Type,
 				Priority:    input.Body.Priority,

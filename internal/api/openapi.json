@@ -982,6 +982,10 @@
             "description": "Bead description.",
             "type": "string"
           },
+          "id": {
+            "description": "Stable full Bead ID for durable request reconciliation.",
+            "type": "string"
+          },
           "labels": {
             "description": "Bead labels.",
             "items": {
@@ -21361,6 +21365,35 @@
         "required": [
           "webhook",
           "reason"
+        ],
+        "type": "object"
+      },
+      "WorkReviewInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "Audited human actor.",
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Stable caller request ID.",
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+          },
+          "response": {
+            "description": "Reviewed human response.",
+            "maxLength": 12000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "response",
+          "actor"
         ],
         "type": "object"
       },
@@ -44770,6 +44803,219 @@
           }
         },
         "summary": "Get v0 city by city name waits"
+      }
+    },
+    "/v0/city/{cityName}/work/{id}/review": {
+      "post": {
+        "operationId": "review-work",
+        "parameters": [
+          {
+            "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+            "in": "header",
+            "name": "X-GC-Request",
+            "required": true,
+            "schema": {
+              "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Durable Work Bead ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Durable Work Bead ID.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable request ID for durable review reconciliation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "Stable request ID for durable review reconciliation.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkReviewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bead"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "X-GC-Index": {
+                "schema": {
+                  "description": "Latest event sequence number.",
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Not Implemented",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Respond to a human Work decision"
       }
     },
     "/v0/city/{cityName}/workflow/{workflow_id}": {
