@@ -1170,6 +1170,9 @@ type BeadCreateInputBody struct {
 	// Description Bead description.
 	Description *string `json:"description,omitempty"`
 
+	// Id Stable full Bead ID for durable request reconciliation.
+	Id *string `json:"id,omitempty"`
+
 	// Labels Bead labels.
 	Labels *[]string `json:"labels,omitempty"`
 
@@ -7837,6 +7840,18 @@ type WebhookRejectedPayload struct {
 	Webhook string `json:"webhook"`
 }
 
+// WorkReviewInputBody defines model for WorkReviewInputBody.
+type WorkReviewInputBody struct {
+	// Actor Audited human actor.
+	Actor string `json:"actor"`
+
+	// RequestId Stable caller request ID.
+	RequestId string `json:"request_id"`
+
+	// Response Reviewed human response.
+	Response string `json:"response"`
+}
+
 // WorkerOperationEventPayload defines model for WorkerOperationEventPayload.
 type WorkerOperationEventPayload struct {
 	// AgentName Qualified agent identity (best-effort, absent if the session has no agent_name metadata or alias).
@@ -8992,6 +9007,15 @@ type GetV0CityByCityNameWaitsParams struct {
 	Session *string `form:"session,omitempty" json:"session,omitempty"`
 }
 
+// ReviewWorkParams defines parameters for ReviewWork.
+type ReviewWorkParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+
+	// IdempotencyKey Stable request ID for durable review reconciliation.
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // DeleteV0CityByCityNameWorkflowByWorkflowIdParams defines parameters for DeleteV0CityByCityNameWorkflowByWorkflowId.
 type DeleteV0CityByCityNameWorkflowByWorkflowIdParams struct {
 	// ScopeKind Scope kind (city or rig).
@@ -9186,6 +9210,9 @@ type CreateSessionJSONRequestBody = SessionCreateBody
 
 // PostV0CityByCityNameSlingJSONRequestBody defines body for PostV0CityByCityNameSling for application/json ContentType.
 type PostV0CityByCityNameSlingJSONRequestBody = SlingInputBody
+
+// ReviewWorkJSONRequestBody defines body for ReviewWork for application/json ContentType.
+type ReviewWorkJSONRequestBody = WorkReviewInputBody
 
 // AsAdapterEventPayload returns the union data inside the EventPayload as a AdapterEventPayload
 func (t EventPayload) AsAdapterEventPayload() (AdapterEventPayload, error) {
@@ -17403,6 +17430,11 @@ type ClientInterface interface {
 	// GetV0CityByCityNameWaits request
 	GetV0CityByCityNameWaits(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ReviewWorkWithBody request with any body
+	ReviewWorkWithBody(ctx context.Context, cityName string, id string, params *ReviewWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ReviewWork(ctx context.Context, cityName string, id string, params *ReviewWorkParams, body ReviewWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameWorkflowByWorkflowId request
 	DeleteV0CityByCityNameWorkflowByWorkflowId(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -19824,6 +19856,30 @@ func (c *Client) GetV0CityByCityNameWaitById(ctx context.Context, cityName strin
 
 func (c *Client) GetV0CityByCityNameWaits(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0CityByCityNameWaitsRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReviewWorkWithBody(ctx context.Context, cityName string, id string, params *ReviewWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReviewWorkRequestWithBody(c.Server, cityName, id, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReviewWork(ctx context.Context, cityName string, id string, params *ReviewWorkParams, body ReviewWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReviewWorkRequest(c.Server, cityName, id, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -29856,6 +29912,82 @@ func NewGetV0CityByCityNameWaitsRequest(server string, cityName string, params *
 	return req, nil
 }
 
+// NewReviewWorkRequest calls the generic ReviewWork builder with application/json body
+func NewReviewWorkRequest(server string, cityName string, id string, params *ReviewWorkParams, body ReviewWorkJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewReviewWorkRequestWithBody(server, cityName, id, params, "application/json", bodyReader)
+}
+
+// NewReviewWorkRequestWithBody generates requests for ReviewWork with any type of body
+func NewReviewWorkRequestWithBody(server string, cityName string, id string, params *ReviewWorkParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/work/%s/review", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Idempotency-Key", headerParam1)
+
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest generates requests for DeleteV0CityByCityNameWorkflowByWorkflowId
 func NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest(server string, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams) (*http.Request, error) {
 	var err error
@@ -30936,6 +31068,11 @@ type ClientWithResponsesInterface interface {
 
 	// GetV0CityByCityNameWaitsWithResponse request
 	GetV0CityByCityNameWaitsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameWaitsResponse, error)
+
+	// ReviewWorkWithBodyWithResponse request with any body
+	ReviewWorkWithBodyWithResponse(ctx context.Context, cityName string, id string, params *ReviewWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReviewWorkResponse, error)
+
+	ReviewWorkWithResponse(ctx context.Context, cityName string, id string, params *ReviewWorkParams, body ReviewWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*ReviewWorkResponse, error)
 
 	// DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request
 	DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkflowByWorkflowIdResponse, error)
@@ -35247,6 +35384,36 @@ func (r GetV0CityByCityNameWaitsResponse) StatusCode() int {
 	return 0
 }
 
+type ReviewWorkResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *Bead
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r ReviewWorkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReviewWorkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DeleteV0CityByCityNameWorkflowByWorkflowIdResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -37156,6 +37323,23 @@ func (c *ClientWithResponses) GetV0CityByCityNameWaitsWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseGetV0CityByCityNameWaitsResponse(rsp)
+}
+
+// ReviewWorkWithBodyWithResponse request with arbitrary body returning *ReviewWorkResponse
+func (c *ClientWithResponses) ReviewWorkWithBodyWithResponse(ctx context.Context, cityName string, id string, params *ReviewWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReviewWorkResponse, error) {
+	rsp, err := c.ReviewWorkWithBody(ctx, cityName, id, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReviewWorkResponse(rsp)
+}
+
+func (c *ClientWithResponses) ReviewWorkWithResponse(ctx context.Context, cityName string, id string, params *ReviewWorkParams, body ReviewWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*ReviewWorkResponse, error) {
+	rsp, err := c.ReviewWork(ctx, cityName, id, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReviewWorkResponse(rsp)
 }
 
 // DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request returning *DeleteV0CityByCityNameWorkflowByWorkflowIdResponse
@@ -47019,6 +47203,88 @@ func ParseGetV0CityByCityNameWaitsResponse(rsp *http.Response) (*GetV0CityByCity
 			return nil, err
 		}
 		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReviewWorkResponse parses an HTTP response from a ReviewWorkWithResponse call
+func ParseReviewWorkResponse(rsp *http.Response) (*ReviewWorkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReviewWorkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Bead
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
 
 	}
 

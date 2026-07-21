@@ -28,8 +28,8 @@ func TestApplyPostgresScopeManifestCutsOverExactConfiguredScopes(t *testing.T) {
 	dsn := "postgresql://beads_runtime@postgres.example:5432/gr7n_beads"
 	manifest := postgresScopeManifest{
 		Schema: postgresScopeManifestSchema,
-		City:   postgresScopeManifestEntry{PostgresDSN: dsn, PostgresSchema: "company", ProjectID: "company-id"},
-		Rigs:   map[string]postgresScopeManifestEntry{"greenomes": {PostgresDSN: dsn, PostgresSchema: "greenomes", ProjectID: "greenomes-id"}},
+		City:   testPostgresScopeEntry("company", "gr7n/gr7n-platform", city, "", "gr", dsn, "company", "company-id"),
+		Rigs:   map[string]postgresScopeManifestEntry{"greenomes": testPostgresScopeEntry("greenomes", "gr7n/greenomes", rig, "greenomes", "gn", dsn, "greenomes", "greenomes-id")},
 	}
 	path := filepath.Join(t.TempDir(), "scopes.json")
 	data, _ := json.Marshal(manifest)
@@ -61,8 +61,8 @@ func TestApplyPostgresScopeManifestRejectsUnknownRig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "scopes.json")
 	manifest := postgresScopeManifest{
 		Schema: postgresScopeManifestSchema,
-		City:   postgresScopeManifestEntry{PostgresDSN: "postgresql://u@h:5432/d", PostgresSchema: "company", ProjectID: "id"},
-		Rigs:   map[string]postgresScopeManifestEntry{"ghost": {PostgresDSN: "postgresql://u@h:5432/d", PostgresSchema: "ghost", ProjectID: "id"}},
+		City:   testPostgresScopeEntry("company", "gr7n/gr7n-platform", city, "", "gr", "postgresql://u@h:5432/d", "company", "company-id"),
+		Rigs:   map[string]postgresScopeManifestEntry{"ghost": testPostgresScopeEntry("ghost", "gr7n/ghost", filepath.Join(city, "ghost"), "ghost", "gh", "postgresql://u@h:5432/d", "ghost", "ghost-id")},
 	}
 	data, _ := json.Marshal(manifest)
 	if err := os.WriteFile(path, data, 0o444); err != nil {
@@ -71,5 +71,17 @@ func TestApplyPostgresScopeManifestRejectsUnknownRig(t *testing.T) {
 	t.Setenv("GC_BEADS_POSTGRES_SCOPE_MANIFEST", path)
 	if err := applyPostgresScopeManifest(city, &config.City{}); err == nil {
 		t.Fatal("unknown rig accepted")
+	}
+}
+
+func testPostgresScopeEntry(scopeID, repository, root, rig, prefix, dsn, schema, projectID string) postgresScopeManifestEntry {
+	var rigPointer *string
+	if rig != "" {
+		rigCopy := rig
+		rigPointer = &rigCopy
+	}
+	return postgresScopeManifestEntry{
+		ScopeID: scopeID, Repository: repository, Root: root, GasCityRig: rigPointer,
+		IssuePrefix: prefix, PostgresDSN: dsn, PostgresSchema: schema, ProjectID: projectID,
 	}
 }

@@ -2125,6 +2125,30 @@ func (s *BdStore) Close(id string) error {
 	return s.close(id, reason)
 }
 
+// RespondToHuman records a human response and closes the decision through bd's
+// dedicated atomic command. The durable request fence is owned by the API
+// caller; this method deliberately performs the semantic backend action once.
+func (s *BdStore) RespondToHuman(id, response, actor string) error {
+	id = strings.TrimSpace(id)
+	response = strings.TrimSpace(response)
+	actor = strings.TrimSpace(actor)
+	if id == "" || response == "" || actor == "" {
+		return fmt.Errorf("responding to human decision: id, response, and actor are required")
+	}
+	// A response has no backend idempotency key. Never use the ordinary
+	// transient-write retry loop here: a lost response after commit is ambiguous
+	// and replaying could append/close twice. The API's durable intent fence owns
+	// reconciliation above this one-shot call.
+	_, err := s.runBDTransientWriteOutputWhen(func(error) bool { return false }, "human", "respond", id, "--response", response, "--actor", actor)
+	if err != nil {
+		if isBdNotFound(err) {
+			return fmt.Errorf("responding to human decision %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("responding to human decision %q: %w", id, err)
+	}
+	return nil
+}
+
 // CloseWithReason closes a bead with an explicit reason without first reading
 // the bead metadata. Callers that need close_reason persisted for audit trails
 // should write metadata before calling this method.

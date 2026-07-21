@@ -51,6 +51,10 @@ var ErrConditionalReleaseUnsupported = errors.New("conditional assignment releas
 // unconditional write. See ConditionalWriter for the full contract.
 var ErrConditionalWriteUnsupported = errors.New("conditional writes unsupported")
 
+// ErrHumanResponseUnsupported reports that a store cannot execute bd's atomic
+// human-decision response operation.
+var ErrHumanResponseUnsupported = errors.New("human response unsupported")
+
 // ErrBDSilentFallback reports that a bd-backed store operation saw bd exit
 // successfully after falling back to on-disk JSONL auto-import mode. BdStore
 // surfaces this as an error for reads and writes because the command may have
@@ -207,6 +211,34 @@ type ConditionalWriter interface {
 	// (false, nil) on a genuine value mismatch (the caller lost), and (false,
 	// err) for everything else.
 	CompareAndSetMetadataKey(id, key, expected, next string) (bool, error)
+}
+
+// HumanResponder is the narrow capability used to answer a durable human
+// decision. Implementations must append the response and close the decision as
+// one backend command; callers must not emulate this with a generic update plus
+// close because a crash between those writes loses the decision boundary.
+type HumanResponder interface {
+	RespondToHuman(id, response, actor string) error
+}
+
+// HumanResponderHandleProvider lets wrappers expose a runtime-dependent human
+// response handle without making it part of the broad Store interface.
+type HumanResponderHandleProvider interface {
+	HumanResponderHandle() (HumanResponder, bool)
+}
+
+// HumanResponderFor resolves the optional human-decision capability.
+func HumanResponderFor(store Store) (HumanResponder, bool) {
+	if store == nil {
+		return nil, false
+	}
+	if responder, ok := store.(HumanResponder); ok {
+		return responder, true
+	}
+	if provider, ok := store.(HumanResponderHandleProvider); ok {
+		return provider.HumanResponderHandle()
+	}
+	return nil, false
 }
 
 // ErrEmptyConditionalUpdate reports an UpdateIfMatch with no fields to apply.
