@@ -16,9 +16,14 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 )
 
-const postgresScopeManifestSchema = "gascity.beads-postgres-scopes.v1"
+const postgresScopeManifestSchema = "gascity.beads-postgres-scopes.v2"
 
-var postgresSchemaName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+var (
+	postgresSchemaName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	workScopeIDName    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	workRepository     = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	workIssuePrefix    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,15}$`)
+)
 
 type postgresScopeManifest struct {
 	Schema string                                `json:"schema"`
@@ -27,9 +32,14 @@ type postgresScopeManifest struct {
 }
 
 type postgresScopeManifestEntry struct {
-	PostgresDSN    string `json:"postgres_dsn"`
-	PostgresSchema string `json:"postgres_schema"`
-	ProjectID      string `json:"project_id"`
+	ScopeID        string  `json:"scope_id"`
+	Repository     string  `json:"repository"`
+	Root           string  `json:"root"`
+	GasCityRig     *string `json:"gascity_rig"`
+	IssuePrefix    string  `json:"issue_prefix"`
+	PostgresDSN    string  `json:"postgres_dsn"`
+	PostgresSchema string  `json:"postgres_schema"`
+	ProjectID      string  `json:"project_id"`
 }
 
 // applyPostgresScopeManifest installs password-free native Beads metadata for
@@ -66,6 +76,9 @@ func applyPostgresScopeManifest(cityPath string, cfg *config.City) error {
 	if cfg == nil {
 		return fmt.Errorf("postgres scope manifest requires city config")
 	}
+	if manifest.City.GasCityRig != nil {
+		return fmt.Errorf("postgres scope manifest city entry must not name a rig")
+	}
 	resolveRigPaths(cityPath, cfg.Rigs)
 	if err := installPostgresScopeMetadata(cityPath, manifest.City); err != nil {
 		return fmt.Errorf("installing city postgres metadata: %w", err)
@@ -77,6 +90,9 @@ func applyPostgresScopeManifest(cityPath string, cfg *config.City) error {
 		entry, ok := manifest.Rigs[rig.Name]
 		if !ok {
 			return fmt.Errorf("postgres scope manifest is missing configured rig %q", rig.Name)
+		}
+		if entry.GasCityRig == nil || *entry.GasCityRig != rig.Name {
+			return fmt.Errorf("postgres scope manifest rig identity differs for %q", rig.Name)
 		}
 		if err := installPostgresScopeMetadata(rig.Path, entry); err != nil {
 			return fmt.Errorf("installing rig %q postgres metadata: %w", rig.Name, err)
@@ -91,6 +107,10 @@ func applyPostgresScopeManifest(cityPath string, cfg *config.City) error {
 }
 
 func installPostgresScopeMetadata(scopeRoot string, entry postgresScopeManifestEntry) error {
+	scopeID := strings.TrimSpace(entry.ScopeID)
+	repository := strings.TrimSpace(entry.Repository)
+	root := filepath.Clean(strings.TrimSpace(entry.Root))
+	issuePrefix := strings.TrimSpace(entry.IssuePrefix)
 	dsn := strings.TrimSpace(entry.PostgresDSN)
 	schema := strings.TrimSpace(entry.PostgresSchema)
 	projectID := strings.TrimSpace(entry.ProjectID)
@@ -101,7 +121,10 @@ func installPostgresScopeMetadata(scopeRoot string, entry postgresScopeManifestE
 	if _, hasPassword := parsed.User.Password(); hasPassword {
 		return fmt.Errorf("postgres_dsn must not contain a password")
 	}
-	if !postgresSchemaName.MatchString(schema) || projectID == "" {
+	if !workScopeIDName.MatchString(scopeID) ||
+		!workRepository.MatchString(repository) ||
+		root != filepath.Clean(scopeRoot) || !workIssuePrefix.MatchString(issuePrefix) ||
+		!postgresSchemaName.MatchString(schema) || projectID == "" {
 		return fmt.Errorf("postgres_schema or project_id is invalid")
 	}
 	if info, err := os.Stat(scopeRoot); err != nil || !info.IsDir() {
