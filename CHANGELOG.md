@@ -21,9 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **A run-centered dashboard and API.** Run detail now combines the formula
-  stage ladder, structured transcripts, live session identity, token rate, and
-  estimated burn rate. Session and run reads use typed, paginated API surfaces
-  backed by warm projections instead of ad hoc wire shapes.
+  stage ladder, structured transcripts, token rate, and estimated burn rate.
+  Session and run reads use typed, paginated API surfaces backed by warm
+  projections instead of ad hoc wire shapes.
 - **Durable usage and lifecycle observability.** Model, compute, and lifecycle
   facts feed local usage history and OpenTelemetry metrics. End-of-interval
   transcript sweeps keep live pool sessions' token and cost rates current even
@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Production workflow controls.** Formulas v2 gained stronger retry,
   fan-out, drain, scope, artifact, and finalization behavior, plus better live
   status and event evidence for operators.
+- **An experimental OpenClaw bridge proof of concept.** The private package
+  under `contrib/openclaw-bridge` explores iMessage and Telegram connectors; it
+  is not a supported provider pack or a shipped connector artifact.
 
 ### Changed
 
@@ -52,9 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Pool sessions no longer lose or strand work while draining, restarting, or
-  reusing capacity.** Claim ownership, session pointers, wake budgets, slot
-  selection, and confirmed-dead cleanup are now fenced against stale or partial
-  observations.
+  reusing capacity.** Claim ownership, wake budgets, slot selection, and
+  confirmed-dead cleanup are now fenced against stale or partial observations.
 - **Formula control routing retries transient configuration reads.** Attempt
   spawn and fan-out no longer quarantine an in-flight run because of a
   momentary config/include read failure; a successfully loaded configuration
@@ -67,9 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI drains paginated event windows, request paths avoid unbounded scans, tmux
   sessions keep their shared server, and structured transcripts preserve tool
   and error frames.
-- **Live run cost fields populate for long-lived pool sessions.** Session IDs
-  are stamped at claim and terminal intervals sweep model usage exactly once,
-  restoring `tokens/min` and `burn/hr` in run detail (PRs #4435 and #4436).
+- **Live run cost fields populate for long-lived pool sessions.**
+  End-of-interval model-usage sweeps account for each transcript window once,
+  restoring `tokens/min` and `burn/hr` in run detail (PR #4436).
 
 ## [1.3.0] - 2026-06-18
 
