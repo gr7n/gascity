@@ -516,7 +516,7 @@ test_rebase_lib_calls_guard_before_force_with_lease() {
     guard_line="$(grep -n "assert_bead_still_claimed" "$rebase_lib" 2>/dev/null | tail -1 | cut -d: -f1)"
     # SC2016 intentional: literal-text search of rebase-resolve-lib.sh source.
     # shellcheck disable=SC2016
-    push_line="$(grep -n 'git push --force-with-lease origin "\$branch"' "$rebase_lib" 2>/dev/null | tail -1 | cut -d: -f1)"
+    push_line="$(grep -n 'git push "\$lease_arg" origin "\$branch"' "$rebase_lib" 2>/dev/null | tail -1 | cut -d: -f1)"
     if [[ -n "$guard_line" && -n "$push_line" && "$guard_line" -lt "$push_line" ]]; then
         record_pass "wiring/rebase-lib-calls-guard-before-force-with-lease"
     else
