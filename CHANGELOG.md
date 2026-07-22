@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   facts feed local usage history and OpenTelemetry metrics. End-of-interval
   transcript sweeps keep live pool sessions' token and cost rates current even
   when agents self-drive after their initial claim.
+- **Privacy-scoped command-usage metrics in release artifacts.** Before the
+  first eligible interactive command is recorded, `gc` shows the complete
+  disclosure. Events contain only a canonical command ID, the `gc` release,
+  operating system, and an anonymous installation ID—never arguments, paths,
+  file contents, or environment values. `gc metrics status`, `example`, `on`,
+  and `off` expose the local controls; `DO_NOT_TRACK=1` and
+  `GC_DISABLE_USAGE_METRICS=1` provide environment-level opt-outs.
 - **Broader runtime composition.** Provider routing, ACP/automatic runtime
   selection, Herdr-backed sessions, and Kubernetes/subprocess/tmux execution
   share the same session lifecycle and worker boundary.
@@ -72,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live run cost fields populate for long-lived pool sessions.**
   End-of-interval model-usage sweeps account for each transcript window once,
   restoring `tokens/min` and `burn/hr` in run detail (PR #4436).
+- **Customer Zero dashboard and claim regressions are closed.** Cross-city
+  attention reads now cancel stale requests and recover after startup; Health
+  reports per-metric availability with cross-platform sampling instead of
+  false zero/NaN values; and hook claims no longer fuzzy-update a vanished
+  session record (#4354, #4356, #4361).
+- **Release-candidate gates are portable and reproducible.** Bash 3 scripts,
+  deep metrics fixtures, reusable pool slots, Tier C pack compatibility, and
+  container-tool vulnerability checks now exercise the same bounded behavior
+  expected from the shipped artifacts.
 
 ## [1.3.0] - 2026-06-18
 
