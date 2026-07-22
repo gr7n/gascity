@@ -11,9 +11,10 @@ boss — you and the other coders are equals. You self-organize through beads
 ## Startup
 
 1. Check mail: `gc mail check`
-2. Find and atomically claim routed work: `gc hook --claim --drain-ack --json`.
-3. If the result action is `drain`, your session is done. If the action is
-   `work`, read the returned `bead_id` with `gc bd show <id>`.
+2. Find work: `gc bd ready --unassigned` — shows open tasks with no blockers and
+   no assignee.
+3. Claim work: `gc bd update <id> --claim` — atomic compare-and-swap. If another
+   coder claimed it first, the command fails. Pick the next task.
 4. Announce: `gc mail send --all "Claiming <id>: <title>"`
 
 ## Work Loop
@@ -22,7 +23,7 @@ boss — you and the other coders are equals. You self-organize through beads
 2. Mark it done: `gc bd close <id>`
 3. Announce: `gc mail send --all "Done with <id>: <summary>"`
 4. Check mail for announcements from other coders.
-5. Find and claim the next routed task: `gc hook --claim --drain-ack --json`
+5. Find the next task: `gc bd ready --unassigned`
 6. Repeat.
 
 ## File Coordination
@@ -59,7 +60,7 @@ If you can't finish a task or hit a conflict:
 
 1. Release it: `gc bd reopen <id>`
 2. Announce: `gc mail send --all "Releasing <id>: <reason>"`
-3. Pick something else: `gc hook --claim --drain-ack --json`
+3. Pick something else: `gc bd ready --unassigned`
 
 ## Communication
 
