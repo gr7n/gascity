@@ -89,7 +89,7 @@ func TestEffectiveStateCompletePrecedenceMatrix(t *testing.T) {
 		"DNT":                     {state: &enabled, env: map[string]string{envDoNotTrack: "1"}, want: StateEnvironmentDisabled, reason: ReasonDoNotTrack},
 		"GC disable":              {state: &enabled, env: map[string]string{envDisableUsageMetrics: "yes"}, want: StateEnvironmentDisabled, reason: ReasonGCDisable},
 		"DNT precedes GC disable": {state: &enabled, env: map[string]string{envDoNotTrack: "yes", envDisableUsageMetrics: "yes"}, want: StateEnvironmentDisabled, reason: ReasonDoNotTrack},
-		"development build":       {state: &enabled, mutate: func(d *serviceDependencies) { d.release.official = false }, env: map[string]string{envDoNotTrack: "1"}, want: StateFailClosed, reason: ReasonDevelopmentBuild},
+		"unofficial build":        {state: &enabled, mutate: func(d *serviceDependencies) { d.release.official = false }, env: map[string]string{envDoNotTrack: "1"}, want: StateFailClosed, reason: ReasonUnofficialBuild},
 		"unsupported platform":    {state: &enabled, mutate: func(d *serviceDependencies) { d.release.platformSupported = false }, want: StateFailClosed, reason: ReasonUnsupportedPlatform},
 		"empty endpoint":          {state: &enabled, mutate: func(d *serviceDependencies) { d.release.endpointConfigured = false }, want: StateFailClosed, reason: ReasonEndpointMissing},
 		"default-off rollout":     {state: &enabled, mutate: func(d *serviceDependencies) { d.release.rollout = RolloutDefaultOff }, want: StateFailClosed, reason: ReasonRolloutDisabled},
@@ -201,8 +201,11 @@ func TestOpenProductionAndPreparationAreLazyAndNonCreating(t *testing.T) {
 		t.Fatalf("read-only preparation created home: %v", err)
 	}
 	status := service.Status(context.Background())
-	if status.State != StateFailClosed || status.Reason != ReasonDevelopmentBuild {
-		t.Fatalf("development Status = (%q, %q), want fail-closed development", status.State, status.Reason)
+	// The compiled build is a development artifact and now passes the build-kind
+	// gate (every build emits, tagged by version), so it fails closed at the next
+	// gate: the endpoint is still empty until the activation flip.
+	if status.State != StateFailClosed || status.Reason != ReasonEndpointMissing {
+		t.Fatalf("development Status = (%q, %q), want fail-closed endpoint-missing", status.State, status.Reason)
 	}
 }
 
@@ -728,7 +731,9 @@ func TestCurrentEndpointEmptyProductionServiceCanPersistAbsentAndCorruptOptOutWi
 				t.Fatalf("beginDisable: %v", err)
 			}
 			state := readStateFixture(t, home)
-			if state.Preference != preferenceDisabled || state.RequiredNoticeVersion != 0 || state.AcceptedNoticeVersion != 0 || state.InstallationID != "" || state.SpoolGeneration != "" || state.CleanupKind != cleanupDisable {
+			// Opt-out now stamps the compiled notice floor: a real production notice
+			// (productionNoticeVersion) is wired even while the endpoint is empty.
+			if state.Preference != preferenceDisabled || state.RequiredNoticeVersion != productionNoticeVersion || state.AcceptedNoticeVersion != 0 || state.InstallationID != "" || state.SpoolGeneration != "" || state.CleanupKind != cleanupDisable {
 				t.Fatalf("endpoint-empty disabled state = %#v", state)
 			}
 			if token.stateGeneration != state.StateGeneration || token.cleanupEpoch != state.CleanupEpoch {
