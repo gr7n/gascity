@@ -76,12 +76,14 @@ type ReleaseIdentity struct {
 
 // The compiled identity core decides whether and where telemetry is sent and
 // whether collection is enabled. These are const so no ordinary -ldflags -X
-// can promote a build.
+// can promote a build. This is the activation point: the endpoint is the live
+// gc command-usage ingest, collection is default-on behind the first-run
+// notice, and the metrics epoch is the first privacy generation.
 const (
-	compiledEndpoint     = ""
+	compiledEndpoint     = "https://gastownhall-eventsapi.com/v1/gascity/command-events"
 	compiledPrivacyURL   = ""
-	compiledMetricsEpoch = uint64(0)
-	compiledRollout      = RolloutDefaultOff
+	compiledMetricsEpoch = uint64(1)
+	compiledRollout      = RolloutDefaultOn
 )
 
 // compiledReleaseTag is the ONLY linker-injectable identity input, set solely

@@ -201,11 +201,12 @@ func TestOpenProductionAndPreparationAreLazyAndNonCreating(t *testing.T) {
 		t.Fatalf("read-only preparation created home: %v", err)
 	}
 	status := service.Status(context.Background())
-	// The compiled build is a development artifact and now passes the build-kind
-	// gate (every build emits, tagged by version), so it fails closed at the next
-	// gate: the endpoint is still empty until the activation flip.
-	if status.State != StateFailClosed || status.Reason != ReasonEndpointMissing {
-		t.Fatalf("development Status = (%q, %q), want fail-closed endpoint-missing", status.State, status.Reason)
+	// The compiled build is a development artifact that now passes the build-kind,
+	// endpoint, rollout, and notice gates (every build emits, tagged by version).
+	// With a read-only, never-created GC_HOME it fails closed at the home-stability
+	// gate without creating anything on disk.
+	if status.State != StateFailClosed || status.Reason != ReasonHomeUnstable {
+		t.Fatalf("development Status = (%q, %q), want fail-closed home-unstable", status.State, status.Reason)
 	}
 }
 
