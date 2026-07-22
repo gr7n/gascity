@@ -48,6 +48,7 @@ run_go() {
     GOMODCACHE="${gomodcache_val}" \
     GOTMPDIR="${gotmpdir_val}" \
     GOROOT="${GOROOT:-$goroot_val}" \
+    GOMAXPROCS="${GOMAXPROCS:-}" \
     GOENV="${GOENV-}" \
     GOFLAGS="${GOFLAGS-}" \
     GO111MODULE="${GO111MODULE-}" \
