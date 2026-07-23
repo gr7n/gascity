@@ -1511,7 +1511,6 @@ func removeScopeLocalDoltServerArtifacts(dir string) error {
 		"dolt-server.pid",
 		"dolt-server.lock",
 		"dolt-server.log",
-		"dolt-server.port",
 	} {
 		if err := os.Remove(filepath.Join(dir, ".beads", name)); err != nil && !os.IsNotExist(err) {
 			return err
