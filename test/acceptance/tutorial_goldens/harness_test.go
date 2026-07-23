@@ -35,6 +35,7 @@ type tutorialWorkspace struct {
 const (
 	defaultShellTimeout       = 90 * time.Second
 	gcInitTransientRetryLimit = 2
+	runningShellWaitDelay     = 2 * time.Second
 )
 
 func newTutorialWorkspace(t *testing.T) *tutorialWorkspace {
@@ -277,6 +278,7 @@ func (w *tutorialWorkspace) startShell(command, stdin string) (*runningShell, er
 	ctx, cancel := context.WithCancel(context.Background())
 	command = tutorialShellCommand(command, w.env.Home)
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.WaitDelay = runningShellWaitDelay
 	cmd.Dir = w.cwd
 	cmd.Env = w.env.Env.List()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -348,6 +350,43 @@ func (r *runningShell) stop() error {
 		}
 		<-r.done
 		return nil
+	}
+}
+
+func TestRunningShellWaitIsBoundedWhenDescendantKeepsOutputOpen(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	env := helpers.NewEnv("", home, filepath.Join(root, "runtime"))
+	ws := &tutorialWorkspace{
+		t:   t,
+		env: &tutorialEnv{Home: home, Env: env},
+		cwd: home,
+	}
+
+	rs, err := ws.startShell("sleep 30 & exit 0", "")
+	if err != nil {
+		t.Fatalf("start shell: %v", err)
+	}
+	killProcessGroup := func() {
+		if rs.cmd.Process != nil {
+			_ = syscall.Kill(-rs.cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}
+	defer killProcessGroup()
+
+	select {
+	case err := <-rs.done:
+		if !errors.Is(err, exec.ErrWaitDelay) {
+			t.Fatalf("wait error = %v, want %v", err, exec.ErrWaitDelay)
+		}
+	case <-time.After(10 * time.Second):
+		killProcessGroup()
+		select {
+		case <-rs.done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("shell wait remained blocked after killing its process group")
+		}
+		t.Fatal("shell wait blocked on a descendant holding stdout open")
 	}
 }
 
