@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -185,7 +186,16 @@ func TestStatusIsByteForByteReadOnlyAcrossAbsentCorruptAndUnsafeStates(t *testin
 }
 
 func TestOpenProductionAndPreparationAreLazyAndNonCreating(t *testing.T) {
+	trustedTempRoot := "/tmp"
+	if runtime.GOOS == "darwin" {
+		trustedTempRoot = "/private/tmp"
+	}
+	t.Setenv("GOTMPDIR", trustedTempRoot)
+	t.Setenv("TMPDIR", trustedTempRoot)
 	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatalf("Chmod private parent: %v", err)
+	}
 	homePath := filepath.Join(parent, "not-created")
 	t.Setenv("GC_HOME", homePath)
 	service, err := OpenProduction(ProductionOptions{Home: gchome.ResolveReadOnly(), Release: CurrentReleaseIdentity()})
@@ -201,12 +211,11 @@ func TestOpenProductionAndPreparationAreLazyAndNonCreating(t *testing.T) {
 		t.Fatalf("read-only preparation created home: %v", err)
 	}
 	status := service.Status(context.Background())
-	// The compiled build is a development artifact that now passes the build-kind,
-	// endpoint, rollout, and notice gates (every build emits, tagged by version).
-	// With a read-only, never-created GC_HOME it fails closed at the home-stability
-	// gate without creating anything on disk.
-	if status.State != StateFailClosed || status.Reason != ReasonHomeUnstable {
-		t.Fatalf("development Status = (%q, %q), want fail-closed home-unstable", status.State, status.Reason)
+	// The compiled build passes the build-kind, endpoint, rollout, notice, and
+	// home-stability gates. A read-only, never-created trusted GC_HOME remains
+	// pending notice without creating anything on disk.
+	if status.State != StatePendingNotice || status.Reason != ReasonPreferenceUnset {
+		t.Fatalf("development Status = (%q, %q), want pending-notice preference-unset", status.State, status.Reason)
 	}
 }
 
