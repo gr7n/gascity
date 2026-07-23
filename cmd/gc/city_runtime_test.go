@@ -3117,6 +3117,115 @@ func TestCityRuntimeBeadReconcileTick_IdleClaimNudgeRunsForReportActivityRuntime
 	}
 }
 
+// A warm pool slot can finish its startup turn before work is routed. When the
+// next demand snapshot binds a ready, routed, unassigned bead as that slot's
+// trigger, the idle-claim backstop must see the bead even though it is absent
+// from AssignedWorkBeads (which is intentionally assignee-only). Otherwise the
+// running worker stays idle forever after the sling, as acceptance-C observed.
+func TestCityRuntimeBeadReconcileTick_IdleClaimNudgeSeesReadyUnassignedRoutedTrigger(t *testing.T) {
+	cityPath := t.TempDir()
+	rigPath := filepath.Join(cityPath, "fixture")
+	if err := os.MkdirAll(rigPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	work, err := rigStore.Create(beads.Bead{
+		ID:     "fx-ready",
+		Title:  "ready work routed after the warm worker went idle",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			beadmeta.RoutedToMetadataKey: "fixture/worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create routed work: %v", err)
+	}
+
+	sessionName := "fixture__worker-1"
+	staleObservation := time.Now().Add(-idleClaimNudgeGrace - time.Minute).UTC().Format(time.RFC3339)
+	sessionBead, err := cityStore.Create(beads.Bead{
+		ID:     "session-warm-worker",
+		Title:  "fixture/worker",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel, "agent:fixture/worker"},
+		Metadata: map[string]string{
+			"session_name":                          sessionName,
+			"template":                              "fixture/worker",
+			"agent_name":                            "fixture/worker",
+			"pool_slot":                             "1",
+			poolManagedMetadataKey:                  boolMetadata(true),
+			"state":                                 "awake",
+			"generation":                            "1",
+			beadmeta.TriggerBeadIDMetadataKey:       work.ID,
+			beadmeta.TriggerBeadStoreRefMetadataKey: "rig:fixture",
+			idleClaimNudgeTriggerKey:                work.ID,
+			idleClaimNudgeCountKey:                  "0",
+			idleClaimNudgeAtKey:                     staleObservation,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create warm session: %v", err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "fixture", Path: rigPath}},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Dir:               "fixture",
+			StartCommand:      "true",
+			Nudge:             "Run gc hook --claim --json now.",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(1),
+		}},
+	}
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), sessionName, runtime.Config{}); err != nil {
+		t.Fatalf("Start warm session: %v", err)
+	}
+
+	snapshot := newSessionBeadSnapshot([]beads.Bead{sessionBead})
+	rigStores := map[string]beads.Store{"fixture": rigStore}
+	var buildLog strings.Builder
+	result := buildDesiredStateWithSessionBeads(
+		"test-city", cityPath, time.Now().UTC(), cfg, sp,
+		cityStore, rigStores, snapshot, nil, &buildLog,
+	)
+	if len(result.AssignedWorkBeads) != 0 {
+		t.Fatalf("AssignedWorkBeads = %#v, want empty for ready routed unassigned work", result.AssignedWorkBeads)
+	}
+	if got := result.ScaleCheckCounts["fixture/worker"]; got != 1 {
+		t.Fatalf("ScaleCheckCounts[fixture/worker] = %d, want 1; log:\n%s", got, buildLog.String())
+	}
+
+	var stdout bytes.Buffer
+	cr := &CityRuntime{
+		cityPath:            cityPath,
+		cityName:            "test-city",
+		cfg:                 cfg,
+		sp:                  sp,
+		standaloneCityStore: cityStore,
+		standaloneRigStores: rigStores,
+		sessionDrains:       newDrainTracker(),
+		rec:                 events.Discard,
+		stdout:              &stdout,
+		stderr:              io.Discard,
+	}
+	cr.beadReconcileTick(context.Background(), result, snapshot, nil, false)
+
+	got, err := cityStore.Get(sessionBead.ID)
+	if err != nil {
+		t.Fatalf("Get warm session after tick: %v", err)
+	}
+	if count := got.Metadata[idleClaimNudgeCountKey]; count != "1" {
+		t.Fatalf("idle-claim nudge count = %q, want 1 for ready routed unassigned trigger; output=%q", count, stdout.String())
+	}
+}
+
 func TestCityRuntimeBeadReconcileTick_ScaleCheckPartialKeepsOnlyAffectedPoolSession(t *testing.T) {
 	store := beads.NewMemStore()
 	worker, err := store.Create(beads.Bead{

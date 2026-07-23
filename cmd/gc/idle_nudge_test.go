@@ -55,7 +55,7 @@ func TestNudgeStalledPoolClaims_NudgesAfterGrace(t *testing.T) {
 	var out bytes.Buffer
 
 	// First tick: observe only — start the grace clock, no nudge.
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base, &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base, &out)
 	if out.Len() != 0 {
 		t.Fatalf("first tick should not nudge (grace): %q", out.String())
 	}
@@ -64,12 +64,39 @@ func TestNudgeStalledPoolClaims_NudgesAfterGrace(t *testing.T) {
 	}
 
 	// Past grace: nudge, and bump the attempt count.
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base.Add(idleClaimNudgeGrace+time.Second), &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base.Add(idleClaimNudgeGrace+time.Second), &out)
 	if !bytes.Contains(out.Bytes(), []byte("nudged worker-1 to claim w-1")) {
 		t.Fatalf("expected nudge past grace, got: %q", out.String())
 	}
 	if got := sessions[0].Metadata[idleClaimNudgeCountKey]; got != "1" {
 		t.Fatalf("expected attempt count 1, got %q", got)
+	}
+}
+
+func TestNudgeStalledPoolClaims_MatchesTriggerStoreRefForDuplicateIDs(t *testing.T) {
+	sp := runningFake(t)
+	cfg := idleClaimTestCfg()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	session := idleClaimPoolSession()
+	session.Metadata[beadmeta.TriggerBeadStoreRefMetadataKey] = "rig:fixture"
+	session.Metadata[idleClaimNudgeTriggerKey] = "w-1"
+	session.Metadata[idleClaimNudgeCountKey] = "0"
+	session.Metadata[idleClaimNudgeAtKey] = base.Format(time.RFC3339)
+	sessions := []beads.Bead{session}
+	work := []beads.Bead{
+		{ID: "w-1", Status: "open"},
+		{ID: "w-1", Status: "closed"},
+	}
+	storeRefs := []string{"rig:fixture", "city:test-city"}
+	store := beads.SessionStore{Store: beads.NewMemStoreFrom(0, sessions, nil)}
+	var out bytes.Buffer
+
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, storeRefs, base.Add(idleClaimNudgeGrace+time.Second), &out)
+	if !bytes.Contains(out.Bytes(), []byte("nudged worker-1 to claim w-1")) {
+		t.Fatalf("expected nudge for the open rig-scoped trigger, got %q", out.String())
+	}
+	if got := sessions[0].Metadata[idleClaimNudgeCountKey]; got != "1" {
+		t.Fatalf("attempt count = %q, want 1", got)
 	}
 }
 
@@ -84,8 +111,8 @@ func TestNudgeStalledPoolClaims_NeverTouchesWorkingSlot(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var out bytes.Buffer
 
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base, &out)
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base.Add(time.Hour), &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base, &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base.Add(time.Hour), &out)
 	if out.Len() != 0 {
 		t.Fatalf("must not nudge a working slot: %q", out.String())
 	}
@@ -109,7 +136,7 @@ func TestNudgeStalledPoolClaims_GivesUpAtCap(t *testing.T) {
 	store := beads.SessionStore{Store: beads.NewMemStoreFrom(0, sessions, nil)}
 	var out bytes.Buffer
 
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base.Add(time.Hour), &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base.Add(time.Hour), &out)
 	if out.Len() != 0 {
 		t.Fatalf("must not nudge past the attempt cap: %q", out.String())
 	}
@@ -127,8 +154,8 @@ func TestNudgeStalledPoolClaims_SkipsNonPool(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var out bytes.Buffer
 
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base, &out)
-	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, base.Add(time.Hour), &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base, &out)
+	nudgeStalledPoolClaims(sp, cfg, store, sessions, work, nil, base.Add(time.Hour), &out)
 	if out.Len() != 0 {
 		t.Fatalf("must not touch a non-pool session: %q", out.String())
 	}

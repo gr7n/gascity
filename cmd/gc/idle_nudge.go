@@ -42,13 +42,10 @@ const (
 // idle slot needs this demand-driven wake exactly as herdr does (activity
 // reporting makes the controller SEE the slot but never nudges it to claim).
 //
-// SCOPE (trigger-bead-key limitation): this keys on the slot's own
-// gc.trigger_bead_id, so it only rescues a slot the reconciler already bound to
-// a specific bead (resume / wake-known-identity tiers). A bead slung to the
-// pool AFTER the slot went idle and left UNASSIGNED (routed_to=pool, open, no
-// assignee) never stamps trigger_bead_id, so it is invisible here. Widening the
-// key to "any open+routed+unclaimed pool bead past the grace window" is the
-// documented follow-up (see engdocs/design/idle-claim-nudge-followups.md).
+// This keys on the slot's own gc.trigger_bead_id. The work snapshot includes
+// both actionable assigned work and ready, routed, unassigned work selected as
+// concrete default pool demand, so a warm slot rebound after its startup turn
+// is still visible here without widening the predicate to blocked open work.
 //
 // Churn-free by construction — it inverts every failure mode that got the #312
 // idle-session nudger reverted:
@@ -64,17 +61,15 @@ func nudgeStalledPoolClaims(
 	cfg *config.City,
 	sessStore beads.SessionStore,
 	sessionBeads []beads.Bead,
-	assignedWork []beads.Bead,
+	claimWork []beads.Bead,
+	claimWorkStoreRefs []string,
 	now time.Time,
 	stdout io.Writer,
 ) {
 	if sp == nil || cfg == nil || sessStore.Store == nil {
 		return // hot reconcile path: never panic on a half-built dependency
 	}
-	workByID := make(map[string]beads.Bead, len(assignedWork))
-	for _, w := range assignedWork {
-		workByID[w.ID] = w
-	}
+	work := newIdleClaimWorkSnapshot(claimWork, claimWorkStoreRefs)
 
 	for i := range sessionBeads {
 		s := &sessionBeads[i]
@@ -94,7 +89,7 @@ func nudgeStalledPoolClaims(
 		// is in_progress (or closed) — either way the slot is doing its job and
 		// must not be disturbed. If the bead is absent from the assigned-work
 		// snapshot it's been claimed/closed/moved; clear any stale marker.
-		w, ok := workByID[triggerID]
+		w, ok := work.lookup(triggerID, s.Metadata[beadmeta.TriggerBeadStoreRefMetadataKey])
 		if !ok || !isUnclaimedTrigger(w, sessName) {
 			clearIdleClaimMarker(sessStore, s, stdout)
 			continue
@@ -133,6 +128,64 @@ func nudgeStalledPoolClaims(
 		}
 		fmt.Fprintf(stdout, "idle-claim-nudge: nudged %s to claim %s (attempt %d/%d)\n", sessName, triggerID, attempts+1, idleClaimNudgeMaxAttempts) //nolint:errcheck // best-effort
 		writeIdleClaimMarker(sessStore, s, triggerID, attempts+1, now, stdout)
+	}
+}
+
+type idleClaimWorkSnapshot struct {
+	byScope map[storeScopedBeadKey]beads.Bead
+	byID    map[string][]storeScopedBeadKey
+}
+
+func newIdleClaimWorkSnapshot(work []beads.Bead, storeRefs []string) idleClaimWorkSnapshot {
+	snapshot := idleClaimWorkSnapshot{
+		byScope: make(map[storeScopedBeadKey]beads.Bead, len(work)),
+		byID:    make(map[string][]storeScopedBeadKey, len(work)),
+	}
+	for i, bead := range work {
+		storeRef := ""
+		if i < len(storeRefs) {
+			storeRef = normalizeIdleClaimStoreRef(storeRefs[i])
+		}
+		key := storeScopedBeadKey{StoreRef: storeRef, ID: bead.ID}
+		if _, exists := snapshot.byScope[key]; !exists {
+			snapshot.byID[bead.ID] = append(snapshot.byID[bead.ID], key)
+		}
+		snapshot.byScope[key] = bead
+	}
+	return snapshot
+}
+
+func (s idleClaimWorkSnapshot) lookup(id, storeRef string) (beads.Bead, bool) {
+	id = strings.TrimSpace(id)
+	storeRef = strings.TrimSpace(storeRef)
+	if id == "" {
+		return beads.Bead{}, false
+	}
+	if storeRef != "" {
+		bead, ok := s.byScope[storeScopedBeadKey{StoreRef: normalizeIdleClaimStoreRef(storeRef), ID: id}]
+		return bead, ok
+	}
+	keys := s.byID[id]
+	if len(keys) != 1 {
+		return beads.Bead{}, false
+	}
+	bead, ok := s.byScope[keys[0]]
+	return bead, ok
+}
+
+func normalizeIdleClaimStoreRef(storeRef string) string {
+	storeRef = strings.TrimSpace(storeRef)
+	switch {
+	case storeRef == "", storeRef == "city", strings.HasPrefix(storeRef, "city:"):
+		return "city"
+	case strings.HasPrefix(storeRef, "rig:"):
+		return "rig:" + strings.TrimSpace(strings.TrimPrefix(storeRef, "rig:"))
+	case !strings.Contains(storeRef, ":"):
+		// AssignedWorkStoreRefs uses a bare rig name; ready-routed refs are
+		// already canonical.
+		return "rig:" + storeRef
+	default:
+		return storeRef
 	}
 }
 
