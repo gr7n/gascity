@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Run `gc doctor --fix` after upgrading an existing city.** The current
   doctor converges pack imports, provider catalogs, project identity, retired
   hold labels, and managed beads/Dolt metadata before the orchestrator starts.
+- **Upgrading over an older install at a different path may need a manual
+  reseed.** If a machine already ran an older `gc` (for example a Homebrew
+  binary now replaced by a source build at a new path), `gc start` can keep the
+  stale supervisor running and can fail closed on a present-but-invalid
+  bundled-pack cache — only an *absent* cache self-heals. Run `gc import
+  install` to repopulate the cache, then let `gc start` auto-restart the
+  supervisor (or on Linux `systemctl --user restart gascity-supervisor`).
+- **An unrelated stale registered city can block `gc start`; fix or unregister
+  that city — not the one you are starting.** A pre-1.3 city still registered
+  with un-migrated provider config (for example `workspace.provider = "claude"`
+  with no `[providers.claude]` block) can fail the registry scan and abort
+  startup, with a misleading hint to `gc init` the healthy city you were
+  actually starting. Run `gc doctor --fix` inside the offending stale city, or
+  `gc unregister <stale-city>` to drop it.
+- **macOS: a supervisor left running from a prior version may need a manual
+  restart.** macOS cannot resolve a direct (non-launchd) supervisor's
+  executable for binary-drift detection, so the automatic post-upgrade restart
+  may not complete. Run `gc supervisor stop --wait`, then `gc start`.
 
 ### Added
 
