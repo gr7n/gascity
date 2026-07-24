@@ -25,6 +25,19 @@ cd "$repo_root"
 source "$repo_root/scripts/lib/test-slice.sh"
 gc_test_slice_reexec "$repo_root/scripts/test-local-parallel" "$@"
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  echo "no SHA-256 tool is available" >&2
+  return 1
+}
+
 # One fast suite can legitimately reserve about 32 GiB across its compiler and
 # linker shards. The per-process memory detector cannot see a second worktree
 # making the same admission decision, so serialize broad local suites on hosts
@@ -72,6 +85,8 @@ gotmpdir_val="$(go env GOTMPDIR)"
 goroot_val="$(go env GOROOT)"
 
 jobspecs=()
+cmd_gc_prepared=0
+cmd_gc_fast_unit=""
 
 add_job() {
   local label="$1"
@@ -97,11 +112,23 @@ add_cmd_gc_shards() {
   local gc_fast_unit="$2"
   local tags="$3"
   local i command
+  if [[ -n "$tags" ]]; then
+    echo "local cmd/gc prepared-binary shards do not support build tags" >&2
+    exit 1
+  fi
+  if [[ "$cmd_gc_prepared" -eq 1 && "$cmd_gc_fast_unit" != "$gc_fast_unit" ]]; then
+    echo "local cmd/gc shards requested incompatible GC_FAST_UNIT modes" >&2
+    exit 1
+  fi
+  cmd_gc_prepared=1
+  cmd_gc_fast_unit="$gc_fast_unit"
   for i in $(seq 1 "$cmd_gc_total"); do
     command="GC_FAST_UNIT=${gc_fast_unit} GO_TEST_COUNT=1 GO_TEST_TIMEOUT=20m"
-    if [[ -n "$tags" ]]; then
-      command+=" GO_TEST_TAGS=${tags}"
-    fi
+    command+=" GO_TEST_PREPARED_BINARY=\"\$TEST_LOCAL_CMD_GC_BINARY\""
+    command+=" GO_TEST_PREPARED_PACKAGE_DIR=\"\$TEST_LOCAL_CMD_GC_PACKAGE_DIR\""
+    command+=" GO_TEST_PREPARED_BINARY_SHA256=\"\$TEST_LOCAL_CMD_GC_BINARY_SHA256\""
+    command+=" GO_TEST_MANIFEST=\"\$TEST_LOCAL_CMD_GC_MANIFEST\""
+    command+=" GO_TEST_MANIFEST_SHA256=\"\$TEST_LOCAL_CMD_GC_MANIFEST_SHA256\""
     command+=" ./scripts/test-go-test-shard ./cmd/gc ${i} ${cmd_gc_total}"
     add_job "${label_prefix}-${i}-of-${cmd_gc_total}" "$command"
   done
@@ -193,6 +220,37 @@ export TEST_LOCAL_GOTMPDIR="$gotmpdir_val"
 export TEST_LOCAL_GOROOT="${GOROOT:-$goroot_val}"
 export TEST_LOCAL_GOMAXPROCS="$per_job_cpus"
 
+if [[ "$cmd_gc_prepared" -eq 1 ]]; then
+  cmd_gc_binary="$log_dir/cmd-gc.test"
+  cmd_gc_manifest="$log_dir/cmd-gc.tests"
+  cmd_gc_prepare_log="$log_dir/cmd-gc-prepare.log"
+  echo "[cmd-gc-prepare] start"
+  if GC_FAST_UNIT="$cmd_gc_fast_unit" \
+    GO_TEST_COUNT=1 \
+    GO_TEST_TIMEOUT=20m \
+    GO_TEST_PREPARE_BINARY="$cmd_gc_binary" \
+    GO_TEST_PREPARE_MANIFEST="$cmd_gc_manifest" \
+    "$repo_root/scripts/test-go-test-shard" ./cmd/gc 1 1 >"$cmd_gc_prepare_log" 2>&1; then
+    echo "[cmd-gc-prepare] ok"
+  else
+    status=$?
+    echo "[cmd-gc-prepare] failed with exit ${status}; log: ${cmd_gc_prepare_log}" >&2
+    sed -n '1,240p' "$cmd_gc_prepare_log" >&2
+    exit "$status"
+  fi
+  export TEST_LOCAL_CMD_GC_BINARY="$cmd_gc_binary"
+  export TEST_LOCAL_CMD_GC_PACKAGE_DIR="$repo_root/cmd/gc"
+  TEST_LOCAL_CMD_GC_BINARY_SHA256="$(sha256_file "$cmd_gc_binary")"
+  export TEST_LOCAL_CMD_GC_BINARY_SHA256
+  export TEST_LOCAL_CMD_GC_MANIFEST="$cmd_gc_manifest"
+  TEST_LOCAL_CMD_GC_MANIFEST_SHA256="$(sha256_file "$cmd_gc_manifest")"
+  export TEST_LOCAL_CMD_GC_MANIFEST_SHA256
+  cleanup_cmd_gc_prepared() {
+    rm -f "$cmd_gc_binary" "$cmd_gc_manifest"
+  }
+  trap cleanup_cmd_gc_prepared EXIT
+fi
+
 # Lower each shard's CPU and I/O priority (best-effort) so the parallel fan-out
 # yields to interactive work and does not livelock constrained hosts during the
 # heavy test-binary compiles (#3628). Both tools are optional: ionice is
@@ -230,6 +288,11 @@ printf '%s\0' "${jobspecs[@]}" | xargs -0 -n1 -P "$local_jobs" bash -c '
     OBSERVABLE_TEST_LOG="${OBSERVABLE_TEST_LOG-}" \
     OBSERVABLE_FAILURE_LINES="${OBSERVABLE_FAILURE_LINES-}" \
     GC_TEST_NO_SLICE="${GC_TEST_NO_SLICE-}" \
+    TEST_LOCAL_CMD_GC_BINARY="${TEST_LOCAL_CMD_GC_BINARY-}" \
+    TEST_LOCAL_CMD_GC_PACKAGE_DIR="${TEST_LOCAL_CMD_GC_PACKAGE_DIR-}" \
+    TEST_LOCAL_CMD_GC_BINARY_SHA256="${TEST_LOCAL_CMD_GC_BINARY_SHA256-}" \
+    TEST_LOCAL_CMD_GC_MANIFEST="${TEST_LOCAL_CMD_GC_MANIFEST-}" \
+    TEST_LOCAL_CMD_GC_MANIFEST_SHA256="${TEST_LOCAL_CMD_GC_MANIFEST_SHA256-}" \
     XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
     GOPATH="${TEST_LOCAL_GOPATH}" \
     GOCACHE="${TEST_LOCAL_GOCACHE}" \
