@@ -3074,15 +3074,12 @@ func resolveTemplateForSessionBeadInfo(
 	if err != nil {
 		return tp, err
 	}
-	if triggerID := strings.TrimSpace(info.TriggerBeadID); triggerID != "" {
+	if triggerEnv := sessionTriggerBeadEnv(info); len(triggerEnv) > 0 {
 		if tp.Env == nil {
 			tp.Env = make(map[string]string)
 		}
-		tp.Env["GC_TRIGGER_BEAD_ID"] = triggerID
-		tp.Env["GC_TRIGGER_WORK_BEAD_ID"] = triggerID
-		if storeRef := strings.TrimSpace(info.TriggerBeadStoreRef); storeRef != "" {
-			tp.Env["GC_TRIGGER_BEAD_STORE_REF"] = storeRef
-			tp.Env["GC_TRIGGER_WORK_STORE_REF"] = storeRef
+		for key, value := range triggerEnv {
+			tp.Env[key] = value
 		}
 		if pack := strings.TrimSpace(info.Pack); pack != "" {
 			tp.Env["GC_PACKER_PACK"] = pack

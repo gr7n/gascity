@@ -4005,11 +4005,17 @@ func TestRealizePoolDesiredSessionsBindsTriggerBeadToFreshSession(t *testing.T) 
 		if got := tp.Env["GC_TRIGGER_WORK_BEAD_ID"]; got != "gp-59q" {
 			t.Fatalf("GC_TRIGGER_WORK_BEAD_ID = %q, want gp-59q", got)
 		}
+		if got := tp.Env["GC_BEAD_ID"]; got != "gp-59q" {
+			t.Fatalf("GC_BEAD_ID = %q, want gp-59q", got)
+		}
 		if got := tp.Env["GC_TRIGGER_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
 			t.Fatalf("GC_TRIGGER_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
 		}
 		if got := tp.Env["GC_TRIGGER_WORK_STORE_REF"]; got != "rig:gascity-packs" {
 			t.Fatalf("GC_TRIGGER_WORK_STORE_REF = %q, want rig:gascity-packs", got)
+		}
+		if got := tp.Env["GC_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
+			t.Fatalf("GC_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
 		}
 		if got := tp.Env["GC_PACKER_PACK"]; got != "packer" {
 			t.Fatalf("GC_PACKER_PACK = %q, want packer", got)
