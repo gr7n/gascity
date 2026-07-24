@@ -127,3 +127,49 @@ func TestNudgeSessionReEntersUntilSubmittedForClaude(t *testing.T) {
 		t.Fatalf("never reached submitted/busy state after re-send:\n%s", out)
 	}
 }
+
+// TestNudgeSessionReEntersUntilSubmittedForCodex proves the same dropped-Enter
+// recovery for Codex through the large-prompt bracketed-paste path. Without
+// verified submit, a lost Enter leaves the complete Context-enriched prompt
+// drafted in the Codex composer while Gas City incorrectly reports delivery.
+func TestNudgeSessionReEntersUntilSubmittedForCodex(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+	tm := testTmux()
+	dir := t.TempDir()
+	fake := buildBusyOnEnterBinary(t, dir, "fakecodex")
+	sessionName := fmt.Sprintf("gt-test-nudge-codex-reenter-%d", time.Now().UnixNano()%100000)
+
+	_ = tm.KillSession(sessionName)
+	if err := tm.NewSessionWithCommandAndEnv(sessionName, dir, fake, map[string]string{
+		"GC_PROVIDER": "codex",
+		// The multiline prompt contributes ENTER#1 in this cooked-PTY fake.
+		// ENTER#2 is the deliberately dropped first submit; verified re-submit
+		// must produce ENTER#3 and transition the fake TUI to busy.
+		"GC_TEST_BUSY_AFTER": "3",
+	}); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+	time.Sleep(300 * time.Millisecond)
+
+	message := "context-enriched\n" + strings.Repeat("source-linked context ", maxSendKeysLiteralLen/len("source-linked context ")+2)
+	if len(message) <= maxSendKeysLiteralLen {
+		t.Fatalf("test prompt length = %d, want > %d to force paste-buffer", len(message), maxSendKeysLiteralLen)
+	}
+	if err := tm.NudgeSession(sessionName, message); err != nil {
+		t.Fatalf("NudgeSession: %v", err)
+	}
+
+	out, err := tm.CapturePaneAll(sessionName)
+	if err != nil {
+		t.Fatalf("CapturePaneAll: %v", err)
+	}
+	if !strings.Contains(out, "ENTER#3") {
+		t.Fatalf("did not re-send Enter after the first was dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "esc to interrupt") {
+		t.Fatalf("never reached submitted/busy state after re-send:\n%s", out)
+	}
+}

@@ -9,6 +9,26 @@ import (
 // noSleep is a sleep stub so the confirm loop runs instantly under test.
 func noSleep(time.Duration) {}
 
+func TestProviderSupportsVerifiedSubmit(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{provider: "claude", want: true},
+		{provider: "codex", want: true},
+		{provider: "custom-codex", want: true},
+		{provider: "gemini", want: false},
+		{provider: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			if got := providerSupportsVerifiedSubmit(tt.provider); got != tt.want {
+				t.Fatalf("providerSupportsVerifiedSubmit(%q) = %v, want %v", tt.provider, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestSubmitEnterAndConfirmReEntersWhileIdle proves the ga-bwm fix: when the
 // first Enter is lost (the pane stays idle with the message still drafted), the
 // loop re-sends Enter, and the send that lands drives the agent busy.
