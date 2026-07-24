@@ -242,32 +242,30 @@ if [[ -n "$prepare_binary" ]]; then
     printf '%s\n' "$list_output" >&2
     exit 1
   fi
+  prepared_test_count=0
   while IFS= read -r line; do
     [[ "$line" == Test* ]] || continue
     if ! [[ "$line" =~ ^Test$ || "$line" =~ ^Test[A-Z0-9_][A-Za-z0-9_]*$ ]]; then
       echo "prepared test binary returned an invalid test name: ${line}" >&2
       exit 1
     fi
-    if (( ${#tests[@]} > 0 )); then
-      for existing_index in "${!tests[@]}"; do
-        if [[ "${tests[$existing_index]}" == "$line" ]]; then
-          echo "prepared test binary returned a duplicate test: ${line}" >&2
-          exit 1
-        fi
-      done
-    fi
-    tests[${#tests[@]}]="$line"
-  done <<< "$list_output"
-  if [[ ${#tests[@]} -eq 0 ]]; then
+    printf '%s\n' "$line"
+    prepared_test_count=$((prepared_test_count + 1))
+  done <<< "$list_output" > "$temporary_manifest"
+  if (( prepared_test_count == 0 )); then
     echo "prepared test binary returned no tests for ${test_pkg}" >&2
     exit 1
   fi
-  printf '%s\n' "${tests[@]}" > "$temporary_manifest"
+  duplicate_prepared_tests="$(LC_ALL=C sort "$temporary_manifest" | uniq -d)"
+  if [[ -n "$duplicate_prepared_tests" ]]; then
+    echo "prepared test binary returned a duplicate test: ${duplicate_prepared_tests%%$'\n'*}" >&2
+    exit 1
+  fi
   chmod 0444 "$temporary_manifest"
   mv "$temporary_binary" "$prepare_binary"
   mv "$temporary_manifest" "$prepare_manifest"
   trap - EXIT
-  printf 'Prepared %s with %d tests\n' "$prepare_binary" "${#tests[@]}"
+  printf 'Prepared %s with %d tests\n' "$prepare_binary" "$prepared_test_count"
   exit 0
 elif [[ ${GO_TEST_MANIFEST+x} == x ]]; then
   if [[ ! -f "$GO_TEST_MANIFEST" || ! -r "$GO_TEST_MANIFEST" ]]; then
@@ -290,20 +288,17 @@ elif [[ ${GO_TEST_MANIFEST+x} == x ]]; then
       echo "invalid go test manifest entry in ${GO_TEST_MANIFEST} at line ${line_number}: ${line}" >&2
       exit 1
     fi
-    if (( manifest_test_count > 0 )); then
-      for existing in "${tests[@]}"; do
-        if [[ "$existing" == "$line" ]]; then
-          echo "duplicate go test manifest entry: ${line}" >&2
-          exit 1
-        fi
-      done
-    fi
     tests+=("$line")
     manifest_test_count=$((manifest_test_count + 1))
   done < "$GO_TEST_MANIFEST"
 
   if (( manifest_test_count == 0 )); then
     echo "go test manifest contains no tests: ${GO_TEST_MANIFEST}" >&2
+    exit 1
+  fi
+  duplicate_manifest_tests="$(printf '%s\n' "${tests[@]}" | LC_ALL=C sort | uniq -d)"
+  if [[ -n "$duplicate_manifest_tests" ]]; then
+    echo "duplicate go test manifest entry: ${duplicate_manifest_tests%%$'\n'*}" >&2
     exit 1
   fi
 else

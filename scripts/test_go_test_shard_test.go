@@ -897,22 +897,16 @@ func assertManifestDuplicateScanGuardsEmptyArray(t *testing.T, scriptPath string
 		t.Fatalf("read test-go-test-shard source: %v", err)
 	}
 	source := string(content)
-	if count := strings.Count(source, `for existing in "${tests[@]}"; do`); count != 1 {
-		t.Fatalf("manifest duplicate scans = %d, want exactly one", count)
+	if strings.Contains(source, `for existing in "${tests[@]}"; do`) {
+		t.Fatal("manifest duplicate validation must not grow quadratically with the test inventory")
 	}
-	countIndex := strings.Index(source, "manifest_test_count=0")
-	guardIndex := strings.Index(source, "if (( manifest_test_count > 0 )); then")
-	loopIndex := strings.Index(source, `for existing in "${tests[@]}"; do`)
-	appendIndex := strings.Index(source, `tests+=("$line")`)
-	incrementIndex := strings.Index(source, "manifest_test_count=$((manifest_test_count + 1))")
-	guardEnd := -1
-	if loopIndex >= 0 {
-		if relative := strings.Index(source[loopIndex:], "\n    fi\n"); relative >= 0 {
-			guardEnd = loopIndex + relative
+	for _, contract := range []string{
+		`duplicate_manifest_tests="$(printf '%s\n' "${tests[@]}" | LC_ALL=C sort | uniq -d)"`,
+		`duplicate go test manifest entry: ${duplicate_manifest_tests%%$'\n'*}`,
+	} {
+		if !strings.Contains(source, contract) {
+			t.Fatalf("manifest duplicate validation is missing %q", contract)
 		}
-	}
-	if countIndex < 0 || countIndex >= guardIndex || guardIndex >= loopIndex || loopIndex >= guardEnd || guardEnd >= appendIndex || appendIndex >= incrementIndex {
-		t.Fatalf("manifest duplicate scan is not structurally guarded before the first array append")
 	}
 }
 
