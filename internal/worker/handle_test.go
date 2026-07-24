@@ -980,6 +980,86 @@ func TestSessionHandleHistoryLoadsNormalizedTranscript(t *testing.T) {
 	}
 }
 
+func TestSessionHandleUsesObservedProviderKindForWrappedTranscript(t *testing.T) {
+	transcriptRoot := t.TempDir()
+	observeRoot := filepath.Join(t.TempDir(), "codex-observe")
+	if err := os.Symlink(transcriptRoot, observeRoot); err != nil {
+		t.Fatalf("symlink observe root: %v", err)
+	}
+	workDir := t.TempDir()
+	handle, store, _, _ := newTestSessionHandle(t, SessionSpec{
+		Template: "director",
+		Title:    "Director",
+		Command:  "gr7n-router",
+		WorkDir:  workDir,
+		Provider: "gr7n-router",
+	})
+	handle.adapter.SearchPaths = []string{observeRoot}
+
+	if err := handle.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := store.SetMetadata(handle.sessionID, "provider_kind", "codex"); err != nil {
+		t.Fatalf("SetMetadata(provider_kind): %v", err)
+	}
+
+	rollout := codexWorkerRolloutPath(t, transcriptRoot, time.Now())
+	writeWorkerTestJSONL(t, rollout, []map[string]any{
+		{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"type":      "session_meta",
+			"payload":   map[string]any{"cwd": workDir},
+		},
+		{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []map[string]any{{"text": "hello"}},
+			},
+		},
+		{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type":    "message",
+				"role":    "assistant",
+				"content": []map[string]any{{"text": "world"}},
+			},
+		},
+	})
+
+	path, err := handle.TranscriptPath(context.Background())
+	if err != nil {
+		t.Fatalf("TranscriptPath: %v", err)
+	}
+	gotInfo, gotErr := os.Stat(path)
+	wantInfo, wantErr := os.Stat(rollout)
+	if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("TranscriptPath = %q, want %q", path, rollout)
+	}
+
+	transcript, err := handle.Transcript(context.Background(), TranscriptRequest{})
+	if err != nil {
+		t.Fatalf("Transcript: %v", err)
+	}
+	if got := len(transcript.Session.Messages); got != 2 {
+		t.Fatalf("len(Transcript().Session.Messages) = %d, want 2", got)
+	}
+
+	history, err := handle.History(context.Background(), HistoryRequest{})
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if got := len(history.Entries); got != 2 {
+		t.Fatalf("len(History().Entries) = %d, want 2", got)
+	}
+	if history.Entries[0].Text != "hello" || history.Entries[1].Text != "world" {
+		t.Fatalf("History().Entries = %+v, want hello/world", history.Entries)
+	}
+}
+
 func TestSessionHandleHistoryDoesNotPersistCodexResumeKeyFromTranscript(t *testing.T) {
 	base := t.TempDir()
 	dayDir := filepath.Join(base, "2026", "04", "14")

@@ -25,8 +25,16 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ runtime.Provider     = (*Provider)(nil)
-	_ runtime.ExecProvider = (*Provider)(nil)
+	_ runtime.Provider         = (*Provider)(nil)
+	_ runtime.ExecProvider     = (*Provider)(nil)
+	_ runtime.LivenessObserver = (*Provider)(nil)
+)
+
+const (
+	maxObservedProcessNames     = 64
+	maxObservedProcessNameBytes = 256
+	maxProcessSnapshotBytes     = 64 << 10
+	livenessObservationTimeout  = 5 * time.Second
 )
 
 // Provider is a native Kubernetes session provider using client-go.
@@ -527,6 +535,80 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 		}
 	}
 	return false
+}
+
+// ObserveLiveness reports tmux and configured agent-process liveness for a
+// dedicated agent container. Identity evidence is limited to exact executable
+// basenames from a bounded process snapshot; configured hints never enter the
+// remote command line, so the probe cannot match itself.
+func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
+	if strings.TrimSpace(name) == "" {
+		return runtime.Liveness{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), livenessObservationTimeout)
+	defer cancel()
+	podName, err := p.findRunningPod(ctx, name)
+	if err != nil {
+		return runtime.Liveness{}
+	}
+
+	_, err = p.ops.execInPod(ctx, podName, "agent",
+		[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
+	if err != nil {
+		return runtime.Liveness{}
+	}
+	running := runtime.Liveness{Running: true, Alive: true}
+
+	if len(processNames) == 0 || len(processNames) > maxObservedProcessNames {
+		return running
+	}
+
+	output, err := p.ops.execInPod(ctx, podName, "agent", processSnapshotCommand(), nil)
+	if err != nil || output == "" || len(output) > maxProcessSnapshotBytes {
+		return running
+	}
+	observed := make(map[string]struct{})
+	for _, command := range strings.Fields(output) {
+		observed[command] = struct{}{}
+	}
+	matched := make([]string, 0, len(processNames))
+	seen := make(map[string]struct{}, len(processNames))
+	for _, hint := range processNames {
+		hint = strings.TrimSpace(hint)
+		if len(hint) > maxObservedProcessNameBytes || strings.ContainsAny(hint, "\x00\r\n") {
+			return running
+		}
+		if hint == "" {
+			continue
+		}
+		if _, duplicate := seen[hint]; duplicate {
+			continue
+		}
+		seen[hint] = struct{}{}
+		if _, exists := observed[hint]; exists {
+			matched = append(matched, hint)
+		}
+	}
+	if len(seen) == 0 {
+		return running
+	}
+	if len(matched) == 0 {
+		return runtime.Liveness{Running: true}
+	}
+	return runtime.Liveness{
+		Running:             true,
+		Alive:               true,
+		MatchedProcessNames: matched,
+	}
+}
+
+func processSnapshotCommand() []string {
+	return []string{
+		"sh", "-c",
+		`ps -eo comm= | head -c "$1"`,
+		"gc-liveness",
+		strconv.Itoa(maxProcessSnapshotBytes + 1),
+	}
 }
 
 // Nudge types a message into the tmux session followed by Enter.
