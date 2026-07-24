@@ -647,6 +647,33 @@ func TestGoTestShardPreparedBinaryCompilesAndListsOnceThenRunsCompleteDisjointSh
 	}
 }
 
+func TestGoTestShardPreparedSingleProcessUsesBoundedCompleteSelector(t *testing.T) {
+	t.Parallel()
+
+	fixture := newPreparedGoTestShardFixture(t)
+	binary := filepath.Join(fixture.tmpDir, "cmd-gc.test")
+	manifest := filepath.Join(fixture.tmpDir, "cmd-gc.tests")
+	status, output := runShardCommand(t, fixture.prepareCommand(binary, manifest))
+	if status != 0 {
+		t.Fatalf("prepare exit = %d, want 0\n%s", status, output)
+	}
+	status, output = runShardCommand(t, fixture.runCommand(
+		binary,
+		manifest,
+		testFileSHA256(t, binary),
+		testFileSHA256(t, manifest),
+		"1",
+		"1",
+	))
+	if status != 0 {
+		t.Fatalf("prepared single process exit = %d, want 0\n%s", status, output)
+	}
+	want := "-test.paniconexit0\n-test.timeout\n1m\n-test.count=1\n-test.run\n^Test\n"
+	if got := readFixtureFile(t, filepath.Join(fixture.binaryRunDir, "args-1")); got != want {
+		t.Fatalf("prepared single-process argv:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestGoTestShardPreparedBinaryFailsClosedBeforeExecution(t *testing.T) {
 	t.Parallel()
 

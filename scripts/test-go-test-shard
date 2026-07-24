@@ -204,6 +204,7 @@ if [[ -n "${GO_TEST_COVERPROFILE:-}" ]]; then
 fi
 
 tests=()
+complete_inventory=0
 if [[ -n "$prepare_binary" ]]; then
   if [[ "$test_pkg" != "./cmd/gc" || -n "${GO_TEST_TAGS:-}" ||
     -n "${GO_TEST_COVERPROFILE:-}" || -n "${GO_TEST_TIMING_FILE:-}" ]]; then
@@ -268,6 +269,9 @@ if [[ -n "$prepare_binary" ]]; then
   printf 'Prepared %s with %d tests\n' "$prepare_binary" "$prepared_test_count"
   exit 0
 elif [[ ${GO_TEST_MANIFEST+x} == x ]]; then
+  if [[ -n "$prepared_binary" ]]; then
+    complete_inventory=1
+  fi
   if [[ ! -f "$GO_TEST_MANIFEST" || ! -r "$GO_TEST_MANIFEST" ]]; then
     echo "go test manifest is not readable: ${GO_TEST_MANIFEST}" >&2
     exit 1
@@ -302,6 +306,7 @@ elif [[ ${GO_TEST_MANIFEST+x} == x ]]; then
     exit 1
   fi
 else
+  complete_inventory=1
   # Capture the enumeration separately so a build/compile failure here surfaces
   # its output. `go test -list` builds the test binary; if that fails, the bare
   # assignment's non-zero status is swallowed by `set -e` (the script dies before
@@ -341,7 +346,14 @@ join_regex() {
   printf '%s' "$*"
 }
 
-regex="^($(join_regex "${selected[@]}"))$"
+if (( shard_total == 1 && complete_inventory == 1 )); then
+  # The complete one-process inventory is every top-level Go test. Expanding
+  # thousands of exact names into argv exceeds Linux ARG_MAX and adds no
+  # selection value when there is only one shard.
+  regex='^Test'
+else
+  regex="^($(join_regex "${selected[@]}"))$"
+fi
 echo "Running ${test_pkg} shard ${shard_index} of ${shard_total} (${#selected[@]} tests)"
 if [[ -n "$prepared_binary" ]]; then
   prepared_args=(-test.paniconexit0 -test.timeout "$timeout")
