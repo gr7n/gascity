@@ -1134,6 +1134,7 @@ func TestGoTestShardRunsWithoutPreservedProviderEnv(t *testing.T) {
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
+		"TMPDIR=" + t.TempDir(),
 		"GO_TEST_TIMEOUT=1m",
 	}
 
