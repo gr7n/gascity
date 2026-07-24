@@ -18,11 +18,9 @@ data_dir="$DOLT_DATA_DIR"
 # Check if the server is reachable.
 is_running() {
   if [ -n "$GC_DOLT_HOST" ]; then
-    # Remote server — TCP probe.
-    (echo > /dev/tcp/"$GC_DOLT_HOST"/"$GC_DOLT_PORT") 2>/dev/null && return 0
-    # Fallback: nc/ncat.
-    command -v nc >/dev/null 2>&1 && nc -z "$GC_DOLT_HOST" "$GC_DOLT_PORT" 2>/dev/null && return 0
-    return 1
+    # An explicit remote is authoritative. Let dolt report a connection
+    # failure instead of silently falling back to an unrelated embedded DB.
+    return 0
   fi
   managed_runtime_tcp_reachable "$GC_DOLT_PORT"
 }

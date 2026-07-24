@@ -7,46 +7,12 @@
 package dolt_test
 
 import (
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 )
-
-// startAcceptingListener binds 127.0.0.1:0 and accepts connections in
-// a background goroutine until cleanup is invoked. The connections are
-// not used — the listener exists only so the wrapper script's
-// `is_running()` TCP probe (nc -z / /dev/tcp) succeeds, steering it
-// into the connected branch where the password-forwarding bug lives.
-func startAcceptingListener(t *testing.T) (port int, cleanup func()) {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			_ = c.Close()
-		}
-	}()
-	port = l.Addr().(*net.TCPAddr).Port
-	cleanup = func() {
-		_ = l.Close()
-		wg.Wait()
-	}
-	return port, cleanup
-}
 
 const sqlScript = "commands/sql/run.sh"
 
@@ -198,15 +164,10 @@ func TestSQLScriptConnectedBranchExportsPassword(t *testing.T) {
 	argvFile := writeFakeDolt(t, binDir)
 	pwMarker := filepath.Join(binDir, "passwd_exported")
 
-	port, stop := startAcceptingListener(t)
-	t.Cleanup(stop)
-
 	cityPath := t.TempDir()
 
-	// GC_DOLT_HOST forces the wrapper into the remote-probe branch
-	// where it sets --host/--port and (per the contract under test)
-	// must export DOLT_CLI_PASSWORD before exec. The TCP listener
-	// satisfies the nc -z probe so is_running() returns 0.
+	// An explicit GC_DOLT_HOST is authoritative: the wrapper must select
+	// the connected branch without relying on ambient /dev/tcp or nc.
 	cmd := exec.Command("sh", script, "-q", "SELECT 1")
 	cmd.Env = append(filteredEnv("PATH",
 		"GC_DOLT_HOST", "GC_DOLT_PORT", "GC_DOLT_USER",
@@ -218,7 +179,7 @@ func TestSQLScriptConnectedBranchExportsPassword(t *testing.T) {
 		"GC_CITY_PATH="+cityPath,
 		"GC_PACK_DIR="+root,
 		"GC_DOLT_HOST=127.0.0.1",
-		"GC_DOLT_PORT="+strconv.Itoa(port),
+		"GC_DOLT_PORT=3306",
 		"GC_DOLT_USER=root",
 		"GC_DOLT_PASSWORD=",
 	)
