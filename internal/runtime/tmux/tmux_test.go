@@ -2104,7 +2104,7 @@ func TestSendKeysLiteralWithRetry_ImmediateSuccess(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 
 	// Should succeed immediately — no retry needed
-	err := tm.sendKeysLiteralWithRetry(sessionName, "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode(sessionName, "hello", 5*time.Second, false)
 	if err != nil {
 		t.Errorf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2119,7 +2119,7 @@ func TestSendKeysLiteralWithRetry_NonTransientFails(t *testing.T) {
 
 	// Target a session that doesn't exist — should fail immediately, not retry
 	start := time.Now()
-	err := tm.sendKeysLiteralWithRetry("gt-nonexistent-session-xyz", "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("gt-nonexistent-session-xyz", "hello", 5*time.Second, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -2140,7 +2140,7 @@ func TestSendKeysLiteralWithRetry_NonTransientFailsFast(t *testing.T) {
 	// Use a nonexistent session — tmux returns "session not found" which is
 	// non-transient, so the function should fail fast (well under the timeout).
 	start := time.Now()
-	err := tm.sendKeysLiteralWithRetry("gt-nonexistent-session-fast-fail", "hello", 5*time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("gt-nonexistent-session-fast-fail", "hello", 5*time.Second, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -2159,7 +2159,7 @@ func TestSendKeysLiteralWithRetryFallsBackToPasteBufferOnCommandTooLong(t *testi
 	tm := NewTmuxWithConfig(DefaultConfig())
 	tm.exec = fe
 
-	err := tm.sendKeysLiteralWithRetry("%1", "large startup prompt", time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("%1", "large startup prompt", time.Second, false)
 	if err != nil {
 		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2186,7 +2186,7 @@ func TestSendKeysLiteralWithRetryUsesPasteBufferForLargeText(t *testing.T) {
 	tm := NewTmuxWithConfig(DefaultConfig())
 	tm.exec = fe
 
-	err := tm.sendKeysLiteralWithRetry("%1", strings.Repeat("x", maxSendKeysLiteralLen+1), time.Second)
+	err := tm.sendKeysLiteralWithRetryMode("%1", strings.Repeat("x", maxSendKeysLiteralLen+1), time.Second, false)
 	if err != nil {
 		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
 	}
@@ -2196,6 +2196,48 @@ func TestSendKeysLiteralWithRetryUsesPasteBufferForLargeText(t *testing.T) {
 	}
 	assertTmuxCommand(t, fe.calls[0], "load-buffer")
 	assertTmuxCommand(t, fe.calls[1], "paste-buffer")
+}
+
+func TestSendKeysLiteralWithRetryUsesPasteBufferForMultilineContextBelowLimit(t *testing.T) {
+	fe := &fakeExecutor{}
+	tm := NewTmuxWithConfig(DefaultConfig())
+	tm.exec = fe
+
+	message := "request\n\n" + strings.Repeat("source-linked advisory context ", 90)
+	if len(message) >= maxSendKeysLiteralLen {
+		t.Fatalf("test message length = %d, want < %d", len(message), maxSendKeysLiteralLen)
+	}
+	if err := tm.sendKeysLiteralWithRetryMode("%1", message, time.Second, false); err != nil {
+		t.Fatalf("sendKeysLiteralWithRetry() = %v, want nil", err)
+	}
+
+	if len(fe.calls) != 2 {
+		t.Fatalf("tmux calls = %d, want load/paste: %#v", len(fe.calls), fe.calls)
+	}
+	assertTmuxCommand(t, fe.calls[0], "load-buffer")
+	assertTmuxCommand(t, fe.calls[1], "paste-buffer")
+}
+
+func TestPaneBusyReadsOnlyVisibleStatusTail(t *testing.T) {
+	fe := &fakeExecutor{out: "idle composer\n"}
+	tm := NewTmuxWithConfig(DefaultConfig())
+	tm.exec = fe
+
+	busy, err := tm.paneBusy("%1")
+	if err != nil {
+		t.Fatalf("paneBusy() error = %v", err)
+	}
+	if busy {
+		t.Fatal("paneBusy() = true, want false")
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("tmux calls = %d, want 1", len(fe.calls))
+	}
+	for _, arg := range fe.calls[0] {
+		if arg == "-S" {
+			t.Fatalf("paneBusy included scrollback in capture: %v", fe.calls[0])
+		}
+	}
 }
 
 func assertTmuxCommand(t *testing.T, args []string, want string) {
@@ -2248,7 +2290,7 @@ func TestNudgeSessionSkipsEscapeForCodex(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -2309,7 +2351,7 @@ func main() {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -2340,7 +2382,7 @@ func TestNudgeSessionSkipsEscapeForClaude(t *testing.T) {
 	defer func() { _ = tm.KillSession(sessionName) }()
 	time.Sleep(300 * time.Millisecond)
 
-	if err := tm.NudgeSession(sessionName, "hello"); err != nil {
+	if err := tm.NudgeSession(sessionName, "hello"); err != nil && !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
 		t.Fatalf("NudgeSession: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)

@@ -3,12 +3,16 @@
 package tmux
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	runtimepkg "github.com/gastownhall/gascity/internal/runtime"
 )
 
 // buildBusyOnEnterBinary compiles a fake agent TUI that echoes stdin and, after
@@ -128,35 +132,39 @@ func TestNudgeSessionReEntersUntilSubmittedForClaude(t *testing.T) {
 	}
 }
 
-// TestNudgeSessionReEntersUntilSubmittedForCodex proves the same dropped-Enter
-// recovery for Codex through the large-prompt bracketed-paste path. Without
-// verified submit, a lost Enter leaves the complete Context-enriched prompt
-// drafted in the Codex composer while Gas City incorrectly reports delivery.
-func TestNudgeSessionReEntersUntilSubmittedForCodex(t *testing.T) {
+// TestNudgeSessionUsesAtomicContextPasteForCodex proves that the real
+// Context-sized (<4 KiB) multiline path is delivered as one bracketed paste.
+// Codex submission is one-shot: an ambiguous Enter is never retried.
+func TestNudgeSessionUsesAtomicContextPasteForCodex(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")
 	}
 	tm := testTmux()
 	dir := t.TempDir()
-	fake := buildBusyOnEnterBinary(t, dir, "fakecodex")
+	fake := buildBusyOnEnterBinary(t, dir, "codex")
 	sessionName := fmt.Sprintf("gt-test-nudge-codex-reenter-%d", time.Now().UnixNano()%100000)
 
 	_ = tm.KillSession(sessionName)
 	if err := tm.NewSessionWithCommandAndEnv(sessionName, dir, fake, map[string]string{
-		"GC_PROVIDER": "codex",
-		// The multiline prompt contributes ENTER#1 in this cooked-PTY fake.
-		// ENTER#2 is the deliberately dropped first submit; verified re-submit
-		// must produce ENTER#3 and transition the fake TUI to busy.
-		"GC_TEST_BUSY_AFTER": "3",
+		"GC_PROVIDER": "gr7n-router",
+		// The multiline prompt contributes ENTER#1 in this cooked-PTY fake and
+		// the single submit contributes ENTER#2.
+		"GC_TEST_BUSY_AFTER": "2",
 	}); err != nil {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
 	defer func() { _ = tm.KillSession(sessionName) }()
-	time.Sleep(300 * time.Millisecond)
+	if err := tm.WaitForCommand(context.Background(), sessionName, supportedShells, 3*time.Second); err != nil {
+		t.Fatalf("WaitForCommand: %v", err)
+	}
 
-	message := "context-enriched\n" + strings.Repeat("source-linked context ", maxSendKeysLiteralLen/len("source-linked context ")+2)
-	if len(message) <= maxSendKeysLiteralLen {
-		t.Fatalf("test prompt length = %d, want > %d to force paste-buffer", len(message), maxSendKeysLiteralLen)
+	if !tm.submitVerifyEligible(sessionName) {
+		t.Fatal("provider alias masked the live Codex process")
+	}
+
+	message := "context-enriched\n" + strings.Repeat("source-linked context ", 120)
+	if len(message) >= maxSendKeysLiteralLen {
+		t.Fatalf("test prompt length = %d, want < %d to cover the former raw-key path", len(message), maxSendKeysLiteralLen)
 	}
 	if err := tm.NudgeSession(sessionName, message); err != nil {
 		t.Fatalf("NudgeSession: %v", err)
@@ -166,10 +174,47 @@ func TestNudgeSessionReEntersUntilSubmittedForCodex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CapturePaneAll: %v", err)
 	}
-	if !strings.Contains(out, "ENTER#3") {
-		t.Fatalf("did not re-send Enter after the first was dropped:\n%s", out)
+	if !strings.Contains(out, "ENTER#2") {
+		t.Fatalf("did not submit the atomic multiline paste:\n%s", out)
 	}
 	if !strings.Contains(out, "esc to interrupt") {
-		t.Fatalf("never reached submitted/busy state after re-send:\n%s", out)
+		t.Fatalf("never reached submitted/busy state:\n%s", out)
+	}
+	if strings.Contains(out, "ENTER#3") {
+		t.Fatalf("Codex received a blind second submit Enter:\n%s", out)
+	}
+}
+
+func TestNudgeSessionReturnsUnconfirmedAfterOneCodexEnter(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+	tm := testTmux()
+	dir := t.TempDir()
+	fake := buildBusyOnEnterBinary(t, dir, "codex")
+	sessionName := fmt.Sprintf("gt-test-nudge-codex-unconfirmed-%d", time.Now().UnixNano()%100000)
+
+	_ = tm.KillSession(sessionName)
+	if err := tm.NewSessionWithCommandAndEnv(sessionName, dir, fake, map[string]string{
+		"GC_PROVIDER":        "gr7n-router",
+		"GC_TEST_BUSY_AFTER": "99",
+	}); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+	if err := tm.WaitForCommand(context.Background(), sessionName, supportedShells, 3*time.Second); err != nil {
+		t.Fatalf("WaitForCommand: %v", err)
+	}
+
+	err := tm.NudgeSession(sessionName, "context-enriched\nsource-linked evidence")
+	if !errors.Is(err, runtimepkg.ErrDeliveryUnconfirmed) {
+		t.Fatalf("NudgeSession error = %v, want ErrDeliveryUnconfirmed", err)
+	}
+	out, captureErr := tm.CapturePaneAll(sessionName)
+	if captureErr != nil {
+		t.Fatalf("CapturePaneAll: %v", captureErr)
+	}
+	if strings.Contains(out, "ENTER#3") {
+		t.Fatalf("Codex received more than the prompt newline plus one submit Enter:\n%s", out)
 	}
 }

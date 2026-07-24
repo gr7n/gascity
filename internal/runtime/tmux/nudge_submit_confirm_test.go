@@ -161,3 +161,20 @@ func TestSubmitEnterAndConfirmReturnsSendError(t *testing.T) {
 		t.Fatalf("enters = %d, want %d", enters, submitEnterMaxSends)
 	}
 }
+
+func TestSubmitEnterAndConfirmLimitSendsCodexEnterOnce(t *testing.T) {
+	var enters int
+	sendEnter := func() error { enters++; return nil }
+	busy := func() (bool, error) { return false, nil }
+
+	confirmed, err := submitEnterAndConfirmLimit(sendEnter, func() {}, busy, noSleep, 1)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if confirmed {
+		t.Fatal("confirmed = true, want false")
+	}
+	if enters != 1 {
+		t.Fatalf("enters = %d, want exactly 1", enters)
+	}
+}

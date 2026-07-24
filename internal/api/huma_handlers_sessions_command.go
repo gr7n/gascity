@@ -722,7 +722,7 @@ func (s *Server) humaHandleSessionSubmit(ctx context.Context, input *SessionSubm
 		}
 		outcome, submitErr := s.submitMessageToSession(context.Background(), store.Store, id, message, intent)
 		if submitErr != nil {
-			s.emitSessionSubmitFailed(reqID, "submit_failed", submitErr.Error())
+			s.emitSessionSubmitFailed(reqID, sessionSubmitErrorCode(submitErr), submitErr.Error())
 		} else {
 			s.emitSessionSubmitSucceeded(reqID, id, outcome.Queued, string(intent))
 		}
@@ -733,6 +733,13 @@ func (s *Server) humaHandleSessionSubmit(ctx context.Context, input *SessionSubm
 	out.Body.RequestID = reqID
 	out.Body.EventCursor = eventCursor
 	return out, nil
+}
+
+func sessionSubmitErrorCode(err error) string {
+	if errors.Is(err, runtime.ErrDeliveryUnconfirmed) {
+		return "delivery_unconfirmed"
+	}
+	return "submit_failed"
 }
 
 // --- Session Messages ---
