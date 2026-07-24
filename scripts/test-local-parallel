@@ -102,10 +102,11 @@ add_fsys_compile_job() {
 add_unit_core_job() {
   # The broad package sweep has one CPU-sensitive outlier (productmetrics).
   # Four runtime CPUs reaches its measured scaling knee. The cmd/gc lane now
-  # runs one prepared binary, so four package workers stay inside the shared
-  # sixteen-CPU test-slice ceiling without competing compile/link graphs.
+  # runs one prepared binary, so three package workers plus that binary stay
+  # inside the shared sixteen-CPU test-slice ceiling without competing
+  # compile/link graphs.
   add_job "unit-core" \
-    'GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=4 $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"')'
+    'GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=3 $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"')'
 }
 
 add_cmd_gc_shards() {
