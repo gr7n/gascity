@@ -1,6 +1,6 @@
 //go:build !windows
 
-package exec
+package execgrace
 
 import (
 	"errors"
@@ -9,11 +9,11 @@ import (
 	"syscall"
 )
 
-// setProcessGroup puts the adapter command in its own process group so a
-// cooperative cancellation can be delivered to the whole group — reaching any
-// foreground child (for example a readiness sleep in the adapter) that would
-// otherwise keep the shell from running its rollback trap before the forced
-// kill.
+// setProcessGroup puts the command in its own process group so a cooperative
+// cancellation can be delivered to the whole group — reaching any foreground
+// child (for example a long-running git checkout under a setup shell) that
+// would otherwise keep the shell from running its rollback trap before the
+// forced kill.
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -21,7 +21,7 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// interruptProcessGroup sends os.Interrupt to the adapter's process group so a
+// interruptProcessGroup sends os.Interrupt to the command's process group so a
 // foreground child receives it alongside the shell leader. It preserves the
 // os.ErrProcessDone signal the caller special-cases: an already-exited target
 // reports ErrProcessDone rather than a spurious failure. If the group id cannot
