@@ -32,4 +32,14 @@ func TestLocalParallelPreparesOneCmdGCBinaryBeforeShardFanout(t *testing.T) {
 	} else if fanout := strings.Index(script, `printf '%s\0' "${jobspecs[@]}"`); fanout < 0 || prepare >= fanout {
 		t.Fatal("cmd/gc preparation must finish before any parallel test job starts")
 	}
+	if !strings.Contains(script, `cmd_gc_total="${CMD_GC_PROCESS_TOTAL:-1}"`) {
+		t.Fatal("local cmd/gc execution must default to one process")
+	}
+	shardSource, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "test-go-test-shard"))
+	if err != nil {
+		t.Fatalf("read test-go-test-shard: %v", err)
+	}
+	if strings.Contains(string(shardSource), `printf '  %s\n' "${selected[@]}"`) {
+		t.Fatal("cmd/gc execution must not print the complete multi-thousand-test manifest")
+	}
 }
