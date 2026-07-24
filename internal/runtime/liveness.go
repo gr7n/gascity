@@ -8,10 +8,10 @@ type Liveness struct {
 	Running bool
 	Alive   bool
 	// MatchedProcessNames lists the distinct processNames hints that were
-	// observed in the session's process tree, for providers that can report
-	// them (currently tmux). Callers use this to learn which configured agent
-	// process is actually running — e.g. a wrapper provider that launches one
-	// of several CLIs decided per session. Empty when the provider only
+	// observed in the session's process tree for providers that can report
+	// exact process-tree evidence. Callers use this to learn which configured
+	// agent process is actually running — e.g. a wrapper provider that launches
+	// one of several CLIs decided per session. Empty when the provider only
 	// reports boolean liveness or when no hint matched.
 	MatchedProcessNames []string
 }

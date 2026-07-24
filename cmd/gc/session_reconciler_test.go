@@ -97,6 +97,17 @@ func (p *transientPeekErrorProvider) Peek(name string, lines int) (string, error
 	return p.Fake.Peek(name, lines)
 }
 
+type observedProcessLivenessProvider struct {
+	*runtime.Fake
+	observation runtime.Liveness
+	calls       int
+}
+
+func (p *observedProcessLivenessProvider) ObserveLiveness(_ string, _ []string) runtime.Liveness {
+	p.calls++
+	return p.observation
+}
+
 type blockingStopProvider struct {
 	*runtime.Fake
 	stopStarted chan string
@@ -834,6 +845,62 @@ func TestReconcileSessionBeads_DesiredFastPathSkipsAttachmentActivityObservation
 	}
 	if got := env.sp.CountCalls("GetLastActivity", "worker"); got != 0 {
 		t.Fatalf("GetLastActivity calls = %d, want 0 on desired fast path", got)
+	}
+}
+
+func TestReconcileSessionBeads_DesiredRemoteSessionLearnsObservedProviderFamily(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{Name: "worker", SleepAfterIdle: config.SessionSleepOff}},
+	}
+	env.desiredState["worker"] = TemplateParams{
+		Command:      "test-cmd",
+		SessionName:  "worker",
+		TemplateName: "worker",
+		Hints:        agent.StartupHints{ProcessNames: []string{"claude", "codex", "node"}},
+	}
+	if err := env.sp.Start(context.Background(), "worker", runtime.Config{Command: "test-cmd"}); err != nil {
+		t.Fatalf("Start(worker): %v", err)
+	}
+	session := env.createSessionBead("worker", "worker")
+	env.markSessionActive(&session)
+	agentCfg := sessionCoreConfigForHashInfo(env.desiredState["worker"], env.sessionInfo(session.ID))
+	env.setSessionMetadata(&session, map[string]string{
+		"provider":            "9router",
+		"started_config_hash": runtime.CoreFingerprint(agentCfg),
+		"started_live_hash":   runtime.LiveFingerprint(agentCfg),
+	})
+	if err := env.sp.SetMeta("worker", "GC_SESSION_ID", session.ID); err != nil {
+		t.Fatalf("SetMeta(GC_SESSION_ID): %v", err)
+	}
+	sp := &observedProcessLivenessProvider{
+		Fake: env.sp,
+		observation: runtime.Liveness{
+			Running:             true,
+			Alive:               true,
+			MatchedProcessNames: []string{"codex"},
+		},
+	}
+
+	cfgNames := configuredSessionNames(env.cfg, "", env.store)
+	woken := reconcileSessionBeads(
+		context.Background(), []beads.Bead{session}, env.desiredState, cfgNames, env.cfg, sp,
+		env.store, nil, nil, nil, env.dt, map[string]int{"worker": 1}, false, nil, "",
+		nil, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+		env.startOptions...,
+	)
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0; stderr=%s", woken, env.stderr.String())
+	}
+	if sp.calls != 1 {
+		t.Fatalf("ObserveLiveness calls = %d, want 1", sp.calls)
+	}
+	stored, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(session): %v", err)
+	}
+	if got := stored.Metadata["provider_kind"]; got != "codex" {
+		t.Fatalf("provider_kind = %q, want codex from exact observed process evidence", got)
 	}
 }
 
