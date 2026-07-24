@@ -135,8 +135,10 @@ var sessionNudgeLocks sync.Map // map[string]chan struct{}
 var pasteBufferSeq uint64
 
 // validSessionNameRe validates session names to prevent shell injection
-var validSessionNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-var validEnvironmentNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var (
+	validSessionNameRe     = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	validEnvironmentNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // Common errors
 var (
@@ -1819,19 +1821,30 @@ func (t *Tmux) paneBusy(target string) (bool, error) {
 	return paneContainsBusyIndicator(lines), nil
 }
 
-// submitVerifyEligible reports whether the target runs a provider whose busy
-// indicator is reliable enough to confirm a submit. Scoped to the Claude family
-// (the confirmed ga-bwm failure); other providers keep best-effort single
-// delivery so this change cannot regress them.
-func (t *Tmux) submitVerifyEligible(target string) bool {
-	if provider := t.providerEnv(target); provider != "" {
-		return sessionlog.ProviderFamily(provider) == "claude"
+// providerSupportsVerifiedSubmit reports whether the provider exposes a busy
+// indicator that paneContainsBusyIndicator can reliably observe after submit.
+func providerSupportsVerifiedSubmit(provider string) bool {
+	switch sessionlog.ProviderFamily(provider) {
+	case "claude", "codex":
+		return true
+	default:
+		return false
 	}
-	return t.targetLooksLikeProvider(target, "claude")
 }
 
-// NudgeSession sends a message to a Claude Code session reliably.
-// This is the canonical way to send messages to Claude sessions.
+// submitVerifyEligible reports whether the target runs a provider whose busy
+// indicator is reliable enough to confirm a submit. Claude and Codex both
+// expose the "esc to interrupt" processing state recognized by
+// paneContainsBusyIndicator. Other providers keep best-effort single delivery.
+func (t *Tmux) submitVerifyEligible(target string) bool {
+	if provider := t.providerEnv(target); provider != "" {
+		return providerSupportsVerifiedSubmit(provider)
+	}
+	return t.targetLooksLikeAnyProvider(target, "claude", "codex")
+}
+
+// NudgeSession sends a message to an interactive agent session reliably.
+// This is the canonical way to send messages to tmux-backed agent sessions.
 // Uses: literal mode + 500ms debounce + separate Enter.
 // After sending, triggers SIGWINCH to wake Claude in detached sessions.
 // Verification is the Witness's job (AI), not this function.
