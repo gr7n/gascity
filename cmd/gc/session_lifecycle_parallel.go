@@ -1177,10 +1177,15 @@ func sessionTriggerBeadEnv(info sessionpkg.Info) map[string]string {
 		return nil
 	}
 	env := map[string]string{
+		// GC_BEAD_ID is the provider-neutral task identity consumed by launch
+		// adapters. Keep the trigger-prefixed aliases for callers that need to
+		// distinguish a pool trigger from other bead-shaped runtime inputs.
+		"GC_BEAD_ID":              triggerBeadID,
 		"GC_TRIGGER_BEAD_ID":      triggerBeadID,
 		"GC_TRIGGER_WORK_BEAD_ID": triggerBeadID,
 	}
 	if storeRef := strings.TrimSpace(info.TriggerBeadStoreRef); storeRef != "" {
+		env["GC_BEAD_STORE_REF"] = storeRef
 		env["GC_TRIGGER_BEAD_STORE_REF"] = storeRef
 		env["GC_TRIGGER_WORK_STORE_REF"] = storeRef
 	}
