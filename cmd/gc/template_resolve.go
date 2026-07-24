@@ -371,7 +371,8 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		Env:                     cfgAgent.Env,
 	}, p.sessionTemplate, p.stderr, packDirs, fragments, p.beadStore)
 	hasHooks := config.AgentHasHooks(cfgAgent, p.workspace, resolved.Name, p.providers)
-	beacon := runtime.FormatBeaconAt(p.cityName, qualifiedName, !hasHooks, p.beaconTime)
+	startupContextPreloaded := resolved.Env["GC_STARTUP_CONTEXT_PRELOADED"] == "1"
+	beacon := runtime.FormatBeaconAt(p.cityName, qualifiedName, !hasHooks && !startupContextPreloaded, p.beaconTime)
 	suppressStartupPrompt := suppressStartupPromptForAgent(cfgAgent)
 	switch {
 	case suppressStartupPrompt:
