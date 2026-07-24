@@ -269,7 +269,13 @@ type runningShell struct {
 
 	mu     sync.Mutex
 	buffer bytes.Buffer
-	done   chan error
+
+	// done is closed once cmd.Wait returns; waitErr holds its result. A closed
+	// channel broadcasts to every observer, so waitFor and stop can both learn
+	// the process has exited without one draining a value the other still needs
+	// (a single-delivery channel deadlocked stop when waitFor consumed it first).
+	done    chan struct{}
+	waitErr error
 }
 
 func (w *tutorialWorkspace) startShell(command, stdin string) (*runningShell, error) {
@@ -289,7 +295,7 @@ func (w *tutorialWorkspace) startShell(command, stdin string) (*runningShell, er
 	rs := &runningShell{
 		cmd:    cmd,
 		cancel: cancel,
-		done:   make(chan error, 1),
+		done:   make(chan struct{}),
 	}
 	cmd.Stdout = rs
 	cmd.Stderr = rs
@@ -298,7 +304,8 @@ func (w *tutorialWorkspace) startShell(command, stdin string) (*runningShell, er
 		return nil, err
 	}
 	go func() {
-		rs.done <- cmd.Wait()
+		rs.waitErr = cmd.Wait()
+		close(rs.done)
 	}()
 	return rs, nil
 }
@@ -322,9 +329,9 @@ func (r *runningShell) waitFor(substr string, timeout time.Duration) error {
 			return nil
 		}
 		select {
-		case err := <-r.done:
-			if err != nil && !strings.Contains(r.output(), substr) {
-				return fmt.Errorf("process exited before %q: %w\n%s", substr, err, r.output())
+		case <-r.done:
+			if r.waitErr != nil && !strings.Contains(r.output(), substr) {
+				return fmt.Errorf("process exited before %q: %w\n%s", substr, r.waitErr, r.output())
 			}
 			return nil
 		case <-time.After(100 * time.Millisecond):
@@ -339,11 +346,11 @@ func (r *runningShell) stop() error {
 		_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGTERM)
 	}
 	select {
-	case err := <-r.done:
-		if err == nil || errors.Is(err, context.Canceled) {
+	case <-r.done:
+		if r.waitErr == nil || errors.Is(r.waitErr, context.Canceled) {
 			return nil
 		}
-		return err
+		return r.waitErr
 	case <-time.After(5 * time.Second):
 		if r.cmd.Process != nil {
 			_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL)
@@ -375,9 +382,9 @@ func TestRunningShellWaitIsBoundedWhenDescendantKeepsOutputOpen(t *testing.T) {
 	defer killProcessGroup()
 
 	select {
-	case err := <-rs.done:
-		if !errors.Is(err, exec.ErrWaitDelay) {
-			t.Fatalf("wait error = %v, want %v", err, exec.ErrWaitDelay)
+	case <-rs.done:
+		if !errors.Is(rs.waitErr, exec.ErrWaitDelay) {
+			t.Fatalf("wait error = %v, want %v", rs.waitErr, exec.ErrWaitDelay)
 		}
 	case <-time.After(10 * time.Second):
 		killProcessGroup()
