@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,172 @@ import (
 	"strings"
 	"testing"
 )
+
+type preparedGoTestShardFixture struct {
+	repoRoot        string
+	binDir          string
+	homeDir         string
+	tmpDir          string
+	compileArgs     string
+	packageListArgs string
+	binaryListArgs  string
+	binaryRunDir    string
+}
+
+func newPreparedGoTestShardFixture(t *testing.T) preparedGoTestShardFixture {
+	t.Helper()
+
+	repoRoot := repoRoot(t)
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	binaryRunDir := filepath.Join(tmpDir, "binary-runs")
+	for _, dir := range []string{binDir, binaryRunDir} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatalf("create fixture directory %s: %v", dir, err)
+		}
+	}
+	compileArgs := filepath.Join(tmpDir, "compile-args")
+	packageListArgs := filepath.Join(tmpDir, "package-list-args")
+	binaryListArgs := filepath.Join(tmpDir, "binary-list-args")
+
+	fakeGo := fmt.Sprintf(`#!/bin/sh
+set -eu
+case "${1:-}" in
+  env)
+    case "${2:-}" in
+      GOPATH) printf '%%s\n' %q ;;
+      GOCACHE) printf '%%s\n' %q ;;
+      GOMODCACHE) printf '%%s\n' %q ;;
+      GOTMPDIR) printf '%%s\n' %q ;;
+      GOROOT) printf '%%s\n' %q ;;
+      *) exit 99 ;;
+    esac
+    ;;
+  list)
+    shift
+    printf '%%s\n' "$@" >> %q
+    [ "${1:-}" = "-f" ] || exit 99
+    [ "${2:-}" = "{{.Dir}}" ] || exit 99
+    [ "${3:-}" = "./cmd/gc" ] || exit 99
+    printf '%%s\n' %q
+    ;;
+  test)
+    shift
+    printf '%%s\n' "$@" >> %q
+    [ "${1:-}" = "-c" ] || exit 99
+    [ "${2:-}" = "-o" ] || exit 99
+    out="${3:-}"
+    [ -n "$out" ] || exit 99
+    [ "${4:-}" = "./cmd/gc" ] || exit 99
+    [ "$#" -eq 4 ] || exit 99
+    cat > "$out" <<'PREPARED_TEST_BINARY'
+#!/bin/sh
+set -eu
+is_list=0
+for arg in "$@"; do
+  [ "$arg" != "-test.list" ] || is_list=1
+done
+if [ "$is_list" = 1 ]; then
+  printf '%%s\n' "$@" >> %q
+  printf '%%s\n' TestAlpha TestBeta TestGamma TestDelta TestEpsilon TestZeta PASS
+  exit 0
+fi
+shard="${GC_TEST_SHARD_INDEX:-missing}"
+printf '%%s\n' "$@" > %q/"args-$shard"
+pwd -P > %q/"cwd-$shard"
+env | LC_ALL=C sort > %q/"env-$shard"
+printf 'PASS\n'
+PREPARED_TEST_BINARY
+    chmod 0755 "$out"
+    ;;
+  *) exit 99 ;;
+esac
+`,
+		filepath.Join(tmpDir, "gopath"),
+		filepath.Join(tmpDir, "gocache"),
+		filepath.Join(tmpDir, "gomodcache"),
+		filepath.Join(tmpDir, "gotmp"),
+		filepath.Join(tmpDir, "goroot"),
+		packageListArgs,
+		filepath.Join(repoRoot, "cmd", "gc"),
+		compileArgs,
+		binaryListArgs,
+		binaryRunDir,
+		binaryRunDir,
+		binaryRunDir,
+	)
+	if err := os.WriteFile(filepath.Join(binDir, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "uname"), []byte("#!/bin/sh\nprintf 'Linux\\n'\n"), 0o755); err != nil {
+		t.Fatalf("write fake uname: %v", err)
+	}
+
+	return preparedGoTestShardFixture{
+		repoRoot:        repoRoot,
+		binDir:          binDir,
+		homeDir:         filepath.Join(tmpDir, "home"),
+		tmpDir:          tmpDir,
+		compileArgs:     compileArgs,
+		packageListArgs: packageListArgs,
+		binaryListArgs:  binaryListArgs,
+		binaryRunDir:    binaryRunDir,
+	}
+}
+
+func (f preparedGoTestShardFixture) baseEnv(extra ...string) []string {
+	env := []string{
+		"PATH=" + f.binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + f.homeDir,
+		"SHELL=/bin/sh",
+		"LANG=C.UTF-8",
+		"TMPDIR=" + f.tmpDir,
+		"GC_TEST_NO_SLICE=1",
+		"SYS_USR_CGO_FALLBACK=0",
+	}
+	return append(env, extra...)
+}
+
+func (f preparedGoTestShardFixture) prepareCommand(binary, manifest string, extra ...string) *exec.Cmd {
+	cmd := goTestShardCommand(f.repoRoot, "./cmd/gc", "1", "1")
+	cmd.Dir = f.repoRoot
+	cmd.Env = f.baseEnv(append([]string{
+		"GC_FAST_UNIT=1",
+		"GO_TEST_COUNT=1",
+		"GO_TEST_TIMEOUT=1m",
+		"GO_TEST_PREPARE_BINARY=" + binary,
+		"GO_TEST_PREPARE_MANIFEST=" + manifest,
+	}, extra...)...)
+	return cmd
+}
+
+func (f preparedGoTestShardFixture) runCommand(
+	binary, manifest, binaryDigest, manifestDigest, shardIndex, shardTotal string,
+	extra ...string,
+) *exec.Cmd {
+	cmd := goTestShardCommand(f.repoRoot, "./cmd/gc", shardIndex, shardTotal)
+	cmd.Dir = f.repoRoot
+	cmd.Env = f.baseEnv(append([]string{
+		"GC_FAST_UNIT=1",
+		"GO_TEST_COUNT=1",
+		"GO_TEST_TIMEOUT=1m",
+		"GO_TEST_PREPARED_BINARY=" + binary,
+		"GO_TEST_PREPARED_PACKAGE_DIR=" + filepath.Join(f.repoRoot, "cmd", "gc"),
+		"GO_TEST_PREPARED_BINARY_SHA256=" + binaryDigest,
+		"GO_TEST_MANIFEST=" + manifest,
+		"GO_TEST_MANIFEST_SHA256=" + manifestDigest,
+	}, extra...)...)
+	return cmd
+}
+
+func testFileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s for digest: %v", path, err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
 
 type goTestShardFixture struct {
 	repoRoot        string
@@ -390,6 +557,198 @@ func TestGoTestShardManifestSkipsDiscoveryAndPreservesModuloSelection(t *testing
 	}
 	if allArgs := readFixtureFile(t, fixture.allTestArgsFile); allArgs != wantArgs {
 		t.Fatalf("manifest mode ran discovery or extra go test invocations:\n%s\nwant exactly one final invocation:\n%s", allArgs, wantArgs)
+	}
+}
+
+func TestGoTestShardPreparedBinaryCompilesAndListsOnceThenRunsCompleteDisjointShards(t *testing.T) {
+	t.Parallel()
+
+	fixture := newPreparedGoTestShardFixture(t)
+	binary := filepath.Join(fixture.tmpDir, "cmd-gc.test")
+	manifest := filepath.Join(fixture.tmpDir, "cmd-gc.tests")
+
+	status, output := runShardCommand(t, fixture.prepareCommand(binary, manifest))
+	if status != 0 {
+		t.Fatalf("prepare exit = %d, want 0\n%s", status, output)
+	}
+	if got := strings.Count("\n"+readFixtureFile(t, fixture.compileArgs), "\n-c\n"); got != 1 {
+		t.Fatalf("prepared compile count = %d, want exactly one:\n%s", got, readFixtureFile(t, fixture.compileArgs))
+	}
+	if got := strings.Count("\n"+readFixtureFile(t, fixture.packageListArgs), "\n-f\n"); got != 1 {
+		t.Fatalf("package directory lookup count = %d, want exactly one:\n%s", got, readFixtureFile(t, fixture.packageListArgs))
+	}
+	listArgs := readFixtureFile(t, fixture.binaryListArgs)
+	if got := strings.Count("\n"+listArgs, "\n-test.list\n"); got != 1 {
+		t.Fatalf("prepared binary list count = %d, want exactly one:\n%s", got, listArgs)
+	}
+	if !strings.Contains("\n"+listArgs, "\n-test.paniconexit0\n") {
+		t.Fatalf("prepared binary listing omitted go test's panic-on-exit-zero guard:\n%s", listArgs)
+	}
+	wantManifest := "TestAlpha\nTestBeta\nTestGamma\nTestDelta\nTestEpsilon\nTestZeta\n"
+	if got := readFixtureFile(t, manifest); got != wantManifest {
+		t.Fatalf("prepared manifest:\n%s\nwant:\n%s", got, wantManifest)
+	}
+
+	binaryDigest := testFileSHA256(t, binary)
+	manifestDigest := testFileSHA256(t, manifest)
+	for _, shard := range []string{"1", "2"} {
+		status, output = runShardCommand(t, fixture.runCommand(
+			binary,
+			manifest,
+			binaryDigest,
+			manifestDigest,
+			shard,
+			"2",
+		))
+		if status != 0 {
+			t.Fatalf("prepared shard %s exit = %d, want 0\n%s", shard, status, output)
+		}
+	}
+
+	wantArgs := map[string]string{
+		"1": "-test.paniconexit0\n-test.timeout\n1m\n-test.count=1\n-test.run\n^(TestAlpha|TestGamma|TestEpsilon)$\n",
+		"2": "-test.paniconexit0\n-test.timeout\n1m\n-test.count=1\n-test.run\n^(TestBeta|TestDelta|TestZeta)$\n",
+	}
+	for shard, want := range wantArgs {
+		args := readFixtureFile(t, filepath.Join(fixture.binaryRunDir, "args-"+shard))
+		if args != want {
+			t.Fatalf("prepared shard %s argv:\n%s\nwant:\n%s", shard, args, want)
+		}
+		cwd := strings.TrimSpace(readFixtureFile(t, filepath.Join(fixture.binaryRunDir, "cwd-"+shard)))
+		if wantCWD := filepath.Join(fixture.repoRoot, "cmd", "gc"); cwd != wantCWD {
+			t.Fatalf("prepared shard %s cwd = %q, want package cwd %q", shard, cwd, wantCWD)
+		}
+		env := fixtureEnvironment(t, readFixtureFile(t, filepath.Join(fixture.binaryRunDir, "env-"+shard)))
+		for name, wantValue := range map[string]string{
+			"GC_FAST_UNIT":        "1",
+			"GC_TEST_SHARD_INDEX": shard,
+			"GC_TEST_SHARD_TOTAL": "2",
+		} {
+			if got := env[name]; got != wantValue {
+				t.Errorf("prepared shard %s %s = %q, want %q", shard, name, got, wantValue)
+			}
+		}
+	}
+
+	// The two exact regular expressions above are a partition of the single
+	// six-test manifest: every name appears once and no shard can silently
+	// rediscover a different source-dependent inventory.
+	for _, testName := range strings.Fields(wantManifest) {
+		occurrences := strings.Count(wantArgs["1"]+wantArgs["2"], testName)
+		if occurrences != 1 {
+			t.Fatalf("prepared shard partition contains %s %d times, want exactly once", testName, occurrences)
+		}
+	}
+	if got := strings.Count("\n"+readFixtureFile(t, fixture.compileArgs), "\n-c\n"); got != 1 {
+		t.Fatalf("prepared shard execution triggered another compile; compile count = %d", got)
+	}
+	if got := strings.Count("\n"+readFixtureFile(t, fixture.binaryListArgs), "\n-test.list\n"); got != 1 {
+		t.Fatalf("prepared shard execution triggered another list; list count = %d", got)
+	}
+}
+
+func TestGoTestShardPreparedBinaryFailsClosedBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	fixture := newPreparedGoTestShardFixture(t)
+	binary := filepath.Join(fixture.tmpDir, "cmd-gc.test")
+	manifest := filepath.Join(fixture.tmpDir, "cmd-gc.tests")
+	status, output := runShardCommand(t, fixture.prepareCommand(binary, manifest))
+	if status != 0 {
+		t.Fatalf("prepare exit = %d, want 0\n%s", status, output)
+	}
+	binaryDigest := testFileSHA256(t, binary)
+	manifestDigest := testFileSHA256(t, manifest)
+
+	tests := []struct {
+		name         string
+		binaryDigest string
+		extraEnv     []string
+		wantError    string
+	}{
+		{
+			name:         "binary digest mismatch",
+			binaryDigest: strings.Repeat("0", 64),
+			wantError:    "prepared test binary digest mismatch",
+		},
+		{
+			name:         "build tags unsupported",
+			binaryDigest: binaryDigest,
+			extraEnv:     []string{"GO_TEST_TAGS=integration"},
+			wantError:    "supports only untagged, non-coverage, non-observable",
+		},
+		{
+			name:         "coverage unsupported",
+			binaryDigest: binaryDigest,
+			extraEnv:     []string{"GO_TEST_COVERPROFILE=" + filepath.Join(fixture.tmpDir, "cover.out")},
+			wantError:    "supports only untagged, non-coverage, non-observable",
+		},
+		{
+			name:         "observable timing unsupported",
+			binaryDigest: binaryDigest,
+			extraEnv:     []string{"GO_TEST_TIMING_FILE=" + filepath.Join(fixture.tmpDir, "timing.json")},
+			wantError:    "supports only untagged, non-coverage, non-observable",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shard := fmt.Sprintf("%d", i+1)
+			status, output := runShardCommand(t, fixture.runCommand(
+				binary,
+				manifest,
+				tt.binaryDigest,
+				manifestDigest,
+				shard,
+				fmt.Sprintf("%d", len(tests)),
+				tt.extraEnv...,
+			))
+			if status == 0 {
+				t.Fatalf("invalid prepared shard unexpectedly succeeded:\n%s", output)
+			}
+			if !strings.Contains(string(output), tt.wantError) {
+				t.Fatalf("prepared shard error:\n%s\nwant substring %q", output, tt.wantError)
+			}
+			if _, err := os.Stat(filepath.Join(fixture.binaryRunDir, "args-"+shard)); !os.IsNotExist(err) {
+				if err != nil {
+					t.Fatalf("stat rejected shard execution: %v", err)
+				}
+				t.Fatalf("invalid prepared shard reached the test binary:\n%s", readFixtureFile(t, filepath.Join(fixture.binaryRunDir, "args-"+shard)))
+			}
+		})
+	}
+}
+
+func TestGoTestShardPreparedBinaryCreationRejectsTagsAndCoverageBeforeCompile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		extraEnv string
+	}{
+		{name: "tags", extraEnv: "GO_TEST_TAGS=integration"},
+		{name: "coverage", extraEnv: "GO_TEST_COVERPROFILE=cover.out"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newPreparedGoTestShardFixture(t)
+			binary := filepath.Join(fixture.tmpDir, "cmd-gc.test")
+			manifest := filepath.Join(fixture.tmpDir, "cmd-gc.tests")
+			status, output := runShardCommand(t, fixture.prepareCommand(binary, manifest, tt.extraEnv))
+			if status == 0 {
+				t.Fatalf("unsupported prepared creation unexpectedly succeeded:\n%s", output)
+			}
+			if !strings.Contains(string(output), "prepared test creation supports only untagged, non-coverage, non-observable") {
+				t.Fatalf("prepared creation error:\n%s", output)
+			}
+			if _, err := os.Stat(fixture.compileArgs); !os.IsNotExist(err) {
+				if err != nil {
+					t.Fatalf("stat rejected prepared compile: %v", err)
+				}
+				t.Fatalf("unsupported prepared creation reached go test -c:\n%s", readFixtureFile(t, fixture.compileArgs))
+			}
+		})
 	}
 }
 

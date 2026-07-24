@@ -121,6 +121,77 @@ run_observable_go_test() {
     "$repo_root/scripts/go-test-observable" "$timing_name" -- "$@"
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  echo "no SHA-256 tool is available" >&2
+  return 1
+}
+
+prepared_binary="${GO_TEST_PREPARED_BINARY:-}"
+prepared_package_dir="${GO_TEST_PREPARED_PACKAGE_DIR:-}"
+prepared_binary_sha256="${GO_TEST_PREPARED_BINARY_SHA256:-}"
+prepared_manifest_sha256="${GO_TEST_MANIFEST_SHA256:-}"
+prepare_binary="${GO_TEST_PREPARE_BINARY:-}"
+prepare_manifest="${GO_TEST_PREPARE_MANIFEST:-}"
+
+if [[ -n "$prepare_binary" || -n "$prepare_manifest" ]]; then
+  if [[ -z "$prepare_binary" || -z "$prepare_manifest" ]]; then
+    echo "GO_TEST_PREPARE_BINARY and GO_TEST_PREPARE_MANIFEST must be supplied together" >&2
+    exit 1
+  fi
+  if [[ -n "$prepared_binary" || ${GO_TEST_MANIFEST+x} == x ]]; then
+    echo "prepared test outputs cannot be combined with prepared test inputs" >&2
+    exit 1
+  fi
+fi
+
+if [[ -n "$prepared_binary" ]]; then
+  if [[ ${GO_TEST_MANIFEST+x} != x || -z "$prepared_package_dir" ||
+    -z "$prepared_binary_sha256" || -z "$prepared_manifest_sha256" ]]; then
+    echo "prepared test mode requires binary, manifest, package directory, and both SHA-256 digests" >&2
+    exit 1
+  fi
+  if [[ "$test_pkg" != "./cmd/gc" || -n "${GO_TEST_TAGS:-}" ||
+    -n "${GO_TEST_COVERPROFILE:-}" || -n "${GO_TEST_TIMING_FILE:-}" ]]; then
+    echo "prepared test mode supports only untagged, non-coverage, non-observable ./cmd/gc shards" >&2
+    exit 1
+  fi
+  if [[ "$prepared_binary" != /* || "$prepared_binary" != *.test ||
+    ! -f "$prepared_binary" || ! -x "$prepared_binary" || -L "$prepared_binary" ]]; then
+    echo "prepared test binary must be an absolute, executable, non-symlinked .test file" >&2
+    exit 1
+  fi
+  if [[ ! -f "$GO_TEST_MANIFEST" || ! -r "$GO_TEST_MANIFEST" || -L "$GO_TEST_MANIFEST" ]]; then
+    echo "prepared test manifest must be a readable, non-symlinked file" >&2
+    exit 1
+  fi
+  if [[ "$prepared_package_dir" != /* || ! -d "$prepared_package_dir" ||
+    "$(cd "$prepared_package_dir" && pwd -P)" != "$repo_root/cmd/gc" ]]; then
+    echo "prepared test package directory must resolve to the repository cmd/gc directory" >&2
+    exit 1
+  fi
+  if ! [[ "$prepared_binary_sha256" =~ ^[a-f0-9]{64}$ &&
+    "$prepared_manifest_sha256" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "prepared test digests must be lowercase SHA-256 values" >&2
+    exit 1
+  fi
+  if [[ "$(sha256_file "$prepared_binary")" != "$prepared_binary_sha256" ]]; then
+    echo "prepared test binary digest mismatch" >&2
+    exit 1
+  fi
+  if [[ "$(sha256_file "$GO_TEST_MANIFEST")" != "$prepared_manifest_sha256" ]]; then
+    echo "prepared test manifest digest mismatch" >&2
+    exit 1
+  fi
+fi
+
 go_test_args=(-timeout "$timeout")
 if [[ -n "${GO_TEST_TAGS:-}" ]]; then
   go_test_args=(-tags "$GO_TEST_TAGS" "${go_test_args[@]}")
@@ -133,7 +204,72 @@ if [[ -n "${GO_TEST_COVERPROFILE:-}" ]]; then
 fi
 
 tests=()
-if [[ ${GO_TEST_MANIFEST+x} == x ]]; then
+if [[ -n "$prepare_binary" ]]; then
+  if [[ "$test_pkg" != "./cmd/gc" || -n "${GO_TEST_TAGS:-}" ||
+    -n "${GO_TEST_COVERPROFILE:-}" || -n "${GO_TEST_TIMING_FILE:-}" ]]; then
+    echo "prepared test creation supports only untagged, non-coverage, non-observable ./cmd/gc" >&2
+    exit 1
+  fi
+  if [[ "$prepare_binary" != /* || "$prepare_binary" != *.test ||
+    "$prepare_manifest" != /* || -e "$prepare_binary" || -L "$prepare_binary" ||
+    -e "$prepare_manifest" || -L "$prepare_manifest" ||
+    ! -d "$(dirname "$prepare_binary")" || ! -d "$(dirname "$prepare_manifest")" ]]; then
+    echo "prepared test outputs must be new absolute paths in existing directories and the binary must end in .test" >&2
+    exit 1
+  fi
+
+  package_dir="$(run_in_test_env go list -f '{{.Dir}}' "$test_pkg")"
+  if [[ "$package_dir" != /* || ! -d "$package_dir" ||
+    "$(cd "$package_dir" && pwd -P)" != "$repo_root/cmd/gc" ]]; then
+    echo "go list returned an unexpected cmd/gc package directory" >&2
+    exit 1
+  fi
+
+  temporary_binary="$(mktemp "${prepare_binary}.tmp.XXXXXX")"
+  temporary_manifest="$(mktemp "${prepare_manifest}.tmp.XXXXXX")"
+  cleanup_prepared_outputs() {
+    rm -f "$temporary_binary" "$temporary_manifest"
+  }
+  trap cleanup_prepared_outputs EXIT
+  if ! run_go_test -c -o "$temporary_binary" "$test_pkg"; then
+    echo "prepared test binary compilation failed for ${test_pkg}" >&2
+    exit 1
+  fi
+  chmod 0555 "$temporary_binary"
+  if ! list_output="$(run_in_test_env bash -c \
+    'set -e; cd "$1"; shift; exec "$@"' _ "$package_dir" "$temporary_binary" -test.paniconexit0 -test.list '^Test' 2>&1)"; then
+    echo "prepared test binary listing failed for ${test_pkg}; output:" >&2
+    printf '%s\n' "$list_output" >&2
+    exit 1
+  fi
+  while IFS= read -r line; do
+    [[ "$line" == Test* ]] || continue
+    if ! [[ "$line" =~ ^Test$ || "$line" =~ ^Test[A-Z0-9_][A-Za-z0-9_]*$ ]]; then
+      echo "prepared test binary returned an invalid test name: ${line}" >&2
+      exit 1
+    fi
+    if (( ${#tests[@]} > 0 )); then
+      for existing_index in "${!tests[@]}"; do
+        if [[ "${tests[$existing_index]}" == "$line" ]]; then
+          echo "prepared test binary returned a duplicate test: ${line}" >&2
+          exit 1
+        fi
+      done
+    fi
+    tests[${#tests[@]}]="$line"
+  done <<< "$list_output"
+  if [[ ${#tests[@]} -eq 0 ]]; then
+    echo "prepared test binary returned no tests for ${test_pkg}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${tests[@]}" > "$temporary_manifest"
+  chmod 0444 "$temporary_manifest"
+  mv "$temporary_binary" "$prepare_binary"
+  mv "$temporary_manifest" "$prepare_manifest"
+  trap - EXIT
+  printf 'Prepared %s with %d tests\n' "$prepare_binary" "${#tests[@]}"
+  exit 0
+elif [[ ${GO_TEST_MANIFEST+x} == x ]]; then
   if [[ ! -f "$GO_TEST_MANIFEST" || ! -r "$GO_TEST_MANIFEST" ]]; then
     echo "go test manifest is not readable: ${GO_TEST_MANIFEST}" >&2
     exit 1
@@ -213,7 +349,15 @@ join_regex() {
 regex="^($(join_regex "${selected[@]}"))$"
 echo "Running ${test_pkg} shard ${shard_index} of ${shard_total} (${#selected[@]} tests)"
 printf '  %s\n' "${selected[@]}"
-if [[ -n "${GO_TEST_TIMING_FILE:-}" ]]; then
+if [[ -n "$prepared_binary" ]]; then
+  prepared_args=(-test.paniconexit0 -test.timeout "$timeout")
+  if [[ -n "${GO_TEST_COUNT:-}" ]]; then
+    prepared_args+=("-test.count=${GO_TEST_COUNT}")
+  fi
+  prepared_args+=(-test.run "$regex")
+  run_in_test_env bash -c \
+    'set -e; cd "$1"; shift; exec "$@"' _ "$prepared_package_dir" "$prepared_binary" "${prepared_args[@]}"
+elif [[ -n "${GO_TEST_TIMING_FILE:-}" ]]; then
   run_observable_go_test "${go_test_args[@]}" "$test_pkg" -run "$regex"
 else
   run_go_test "${go_test_args[@]}" "$test_pkg" -run "$regex"
