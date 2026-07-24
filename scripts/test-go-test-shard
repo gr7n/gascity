@@ -343,7 +343,6 @@ join_regex() {
 
 regex="^($(join_regex "${selected[@]}"))$"
 echo "Running ${test_pkg} shard ${shard_index} of ${shard_total} (${#selected[@]} tests)"
-printf '  %s\n' "${selected[@]}"
 if [[ -n "$prepared_binary" ]]; then
   prepared_args=(-test.paniconexit0 -test.timeout "$timeout")
   if [[ -n "${GO_TEST_COUNT:-}" ]]; then

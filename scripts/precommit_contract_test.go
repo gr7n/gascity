@@ -284,7 +284,7 @@ func TestLocalParallelAllowlistIncludesObservableEnv(t *testing.T) {
 	if !strings.Contains(content, `bash -c "$command"`) {
 		t.Fatal("test-local-parallel must execute each job in the sanitized non-login shell")
 	}
-	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=2") {
+	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=4") {
 		t.Fatal("unit-core must retain the repository's bounded package parallelism")
 	}
 	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES", "GOMAXPROCS"} {

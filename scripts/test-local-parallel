@@ -9,7 +9,7 @@ usage: scripts/test-local-parallel <fast|cmd-gc-process|integration|full>
 Environment:
   LOCAL_TEST_JOBS        max concurrent jobs (default: CPU-and-memory-aware)
   LOCAL_TEST_CPUS        total CPU budget shared by active jobs (default: detected)
-  CMD_GC_PROCESS_TOTAL  cmd/gc shard count (default: 6)
+  CMD_GC_PROCESS_TOTAL  cmd/gc process count (default: 1)
 USAGE
 }
 
@@ -63,7 +63,7 @@ unset GC_DOLT_PORT BEADS_DOLT_SERVER_PORT
 
 local_jobs="${LOCAL_TEST_JOBS:-$("$repo_root/scripts/test-local-job-count")}"
 local_cpus="${LOCAL_TEST_CPUS:-$("$repo_root/scripts/test-local-job-count" --cpus)}"
-cmd_gc_total="${CMD_GC_PROCESS_TOTAL:-6}"
+cmd_gc_total="${CMD_GC_PROCESS_TOTAL:-1}"
 
 if ! [[ "$local_jobs" =~ ^[0-9]+$ && "$local_jobs" -gt 0 ]]; then
   echo "LOCAL_TEST_JOBS must be a positive integer" >&2
@@ -101,10 +101,11 @@ add_fsys_compile_job() {
 
 add_unit_core_job() {
   # The broad package sweep has one CPU-sensitive outlier (productmetrics).
-  # Four runtime CPUs reaches its measured scaling knee; -p=2 keeps this
-  # lane's aggregate ceiling at eight CPUs while the cmd/gc shards run.
+  # Four runtime CPUs reaches its measured scaling knee. The cmd/gc lane now
+  # runs one prepared binary, so four package workers stay inside the shared
+  # sixteen-CPU test-slice ceiling without competing compile/link graphs.
   add_job "unit-core" \
-    'GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=2 $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"')'
+    'GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=4 $(go list ./... | grep -v '"'"'^github.com/gastownhall/gascity/cmd/gc$'"'"')'
 }
 
 add_cmd_gc_shards() {
