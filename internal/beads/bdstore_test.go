@@ -78,6 +78,24 @@ func TestBdStoreDirHandlesNilReceiver(t *testing.T) {
 	}
 }
 
+func TestBdStoreHumanResponseIsOneShotOnAmbiguousTransportFailure(t *testing.T) {
+	calls := 0
+	runner := func(_ string, name string, args ...string) ([]byte, error) {
+		calls++
+		if name != "bd" || strings.Join(args, " ") != "human respond gr-decision --response Approve --actor email:bryce@gr7n.com" {
+			t.Fatalf("unexpected command: %s %s", name, strings.Join(args, " "))
+		}
+		return nil, errors.New("invalid connection: response may have committed")
+	}
+	store := beads.NewBdStore("/city", runner)
+	if err := store.RespondToHuman("gr-decision", "Approve", "email:bryce@gr7n.com"); err == nil {
+		t.Fatal("ambiguous response unexpectedly succeeded")
+	}
+	if calls != 1 {
+		t.Fatalf("human response calls = %d, want exactly 1", calls)
+	}
+}
+
 // --- Create ---
 
 func TestBdStoreCreate(t *testing.T) {

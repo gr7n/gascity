@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -717,7 +719,8 @@ func TestComputePoolDesiredStates_ResumePriorityOrder(t *testing.T) {
 	cfg := &config.City{
 		Agents: []config.Agent{poolAgent("claude", "", intPtr(2), 0)},
 	}
-	// 3 assigned beads with different priorities, max=2. Highest priority wins.
+	// 3 assigned beads with different priorities, max=2. Beads P0-first
+	// priority semantics select the two lowest numeric values.
 	work := []beads.Bead{
 		workBead("w-low", "claude", "s1", "in_progress", 1),
 		workBead("w-high", "claude", "s2", "in_progress", 10),
@@ -734,12 +737,64 @@ func TestComputePoolDesiredStates_ResumePriorityOrder(t *testing.T) {
 	if len(result) != 1 || len(result[0].Requests) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(result[0].Requests))
 	}
-	// Highest priority resume requests should be accepted.
-	if result[0].Requests[0].BeadPriority != 10 {
-		t.Errorf("first priority = %d, want 10", result[0].Requests[0].BeadPriority)
+	if result[0].Requests[0].BeadPriority != 1 {
+		t.Errorf("first priority = %d, want 1", result[0].Requests[0].BeadPriority)
 	}
 	if result[0].Requests[1].BeadPriority != 5 {
 		t.Errorf("second priority = %d, want 5", result[0].Requests[1].BeadPriority)
+	}
+}
+
+func TestComputePoolDesiredStates_GlobalReadyOrderIgnoresAgentOrder(t *testing.T) {
+	max := 6
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	demand := map[string]scaleCheckDemand{
+		"agent-a": readyDemand(now, []string{"a-p5", "a-p1", "a-p0", "a-p2"}, []int{5, 1, 0, 2}),
+		"agent-b": readyDemand(now, []string{"b-p3", "b-p1b", "b-p0", "b-p1a"}, []int{3, 1, 0, 1}),
+	}
+	counts := map[string]int{"agent-a": 4, "agent-b": 4}
+	want := []string{"a-p0", "a-p1", "a-p2", "b-p0", "b-p1a", "b-p1b"}
+	for _, agents := range [][]config.Agent{
+		{poolAgent("agent-a", "", intPtr(10), 0), poolAgent("agent-b", "", intPtr(10), 0)},
+		{poolAgent("agent-b", "", intPtr(10), 0), poolAgent("agent-a", "", intPtr(10), 0)},
+	} {
+		cfg := &config.City{Workspace: config.Workspace{MaxActiveSessions: &max}, Agents: agents}
+		states := ComputePoolDesiredStatesWithDemandTraced(cfg, nil, nil, counts, demand, nil)
+		var got []string
+		for _, state := range states {
+			for _, request := range state.Requests {
+				got = append(got, request.WorkBeadID)
+			}
+		}
+		sort.Strings(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("agent order %v admitted %v, want global Ready prefix %v", []string{agents[0].Name, agents[1].Name}, got, want)
+		}
+	}
+}
+
+func readyDemand(now time.Time, ids []string, priorities []int) scaleCheckDemand {
+	demand := scaleCheckDemand{Count: len(ids), WorkBeadIDs: ids, Priorities: map[string]int{}, CreatedAt: map[string]time.Time{}}
+	for i, id := range ids {
+		demand.Priorities[id] = priorities[i]
+		demand.CreatedAt[id] = now.Add(time.Duration(i) * time.Second)
+	}
+	return demand
+}
+
+func TestApplyNestedCapsPreservesResumeBeforeNewAdmission(t *testing.T) {
+	cfg := &config.City{Agents: []config.Agent{poolAgent("claude", "", intPtr(1), 0)}}
+	requests := []SessionRequest{
+		{Template: "claude", Tier: "new", WorkBeadID: "new-p0", BeadPriority: 0},
+		{Template: "claude", Tier: "resume", SessionBeadID: "live", WorkBeadID: "resume-p4", BeadPriority: 4},
+	}
+
+	result := applyNestedCaps(cfg, requests, nil, nil)
+	if len(result) != 1 || len(result[0].Requests) != 1 {
+		t.Fatalf("result = %#v, want one admitted request", result)
+	}
+	if got := result[0].Requests[0]; got.Tier != "resume" || got.SessionBeadID != "live" {
+		t.Fatalf("admitted = %#v, want existing resume protected from new admission", got)
 	}
 }
 

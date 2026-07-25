@@ -36,6 +36,12 @@ var ErrInteractionUnsupported = errors.New("session interaction is unsupported")
 // process, but it exited before startup completed successfully.
 var ErrSessionDiedDuringStartup = errors.New("session died during startup")
 
+// ErrDeliveryUnconfirmed reports that a provider-facing transport handed off a
+// message but could not prove that the provider accepted it as a new turn.
+// Callers must treat this as ambiguous: the message may have landed, so it is
+// unsafe to retry automatically.
+var ErrDeliveryUnconfirmed = errors.New("session message delivery is unconfirmed")
+
 // ErrSessionNotFound reports that an operation targeted a session the
 // runtime does not know about. Benign for Stop() — the session was
 // already gone — but fatal for Attach/Send. Providers wrap their own
