@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreCommitFormatterPreservesFileMode(t *testing.T) {
@@ -191,6 +192,44 @@ func TestPrePushUsesCanonicalMachineAwareConcurrency(t *testing.T) {
 	}
 }
 
+func TestLocalParallelIsSingleFlightPerHost(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is unavailable on this host")
+	}
+	repoRoot := repoRoot(t)
+	lock := filepath.Join(t.TempDir(), "parallel.lock")
+	ready := lock + ".ready"
+	holder := exec.Command("flock", lock, "sh", "-c", "touch \"$1\"; sleep 10", "_", ready)
+	if err := holder.Start(); err != nil {
+		t.Fatalf("start lock holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("lock holder did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cmd := exec.Command(filepath.Join(repoRoot, "scripts", "test-local-parallel"), "fast")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "GC_TEST_LOCAL_LOCK_FILE="+lock)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("second parallel suite unexpectedly started:\n%s", out)
+	}
+	if !strings.Contains(string(out), "already owns this host") {
+		t.Fatalf("single-flight rejection is not actionable:\n%s", out)
+	}
+}
+
 func TestNativeDoltliteBeadsTargetRunsTaggedSuite(t *testing.T) {
 	repoRoot := repoRoot(t)
 	makefile, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
@@ -245,7 +284,7 @@ func TestLocalParallelAllowlistIncludesObservableEnv(t *testing.T) {
 	if !strings.Contains(content, `bash -c "$command"`) {
 		t.Fatal("test-local-parallel must execute each job in the sanitized non-login shell")
 	}
-	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=2") {
+	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=3") {
 		t.Fatal("unit-core must retain the repository's bounded package parallelism")
 	}
 	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES", "GOMAXPROCS"} {
