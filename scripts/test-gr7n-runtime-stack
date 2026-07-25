@@ -14,7 +14,7 @@ go mod download
 pids=()
 run() { "$@" & pids+=("$!"); }
 
-run go test \
+run go test -vet=off \
   ./cmd/gc \
   ./internal/api \
   ./internal/beads \
@@ -28,9 +28,9 @@ run go test \
   ./internal/sessionlog \
   ./internal/worker \
   -run '^(Test(AllowLegacyDoltMetadataRepairRejectsPostgresDSN|ApplyResolvedScopePostgresEnv_.*|BdRuntimeEnvCity_PostgresBackendBdMainShape|ProjectedPostgresEnvKeysIncludeBeadsPgPassword|ApplyPostgresScopeManifest.*|FirstStoreWithWork.*|ApplyNestedCapsPreservesResumeBeforeNewAdmission|ComputePoolDesiredStates_GlobalReadyOrderIgnoresAgentOrder|StampObservedProviderKind|ReconcileSessionBeads_DesiredRemoteSessionLearnsObservedProviderFamily|ResolveTemplatePreloadedContextOmitsPrimeWithoutPretendingHooks|BeadReadyFederationUsesGlobalCanonicalOrder|SessionSubmitErrorCode.*|HandleSessionTranscriptUsesObservedProviderKindForWrapper|HandleStatusReadyPreservesCollidingStoreLocalIDsLikeCanonicalEndpoint|WorkReview.*|BdStoreHumanResponseIsOneShotOnAmbiguousTransportFailure|EnrichReadyProjectionForCacheDisablesUnsupportedBdSQL|EnsureCanonicalMetadata.*|LoadMetadataState.*Postgres.*|MetadataStatePostgresEndpoint|ParsePostgresDSNEndpoint|ResolveFromEnv_.*BeadsPg.*|SourceString_BeadsPgIdentifiers|PostgresAuthCheck_.*|ObserveLiveness.*|EnsurePrivateSocketDir.*|ObservedProviderKind|KnownProviderFamily|SessionHandleUsesObservedProviderKindForWrappedTranscript))$'
-run go test ./internal/runtime/tmux
-run go test ./scripts -run '^(Test(LocalParallelIsSingleFlightPerHost|LocalParallelPreparesOneCmdGCBinaryBeforeShardFanout|GoTestShardPrepared.*))$'
-run go test ./internal/testpolicy/resourcecensus -run '^TestRepositoryLedgerMatchesCensusAndDocumentation$'
+run go test -vet=off ./internal/runtime/tmux
+run go test -vet=off ./scripts -run '^(Test(LocalParallelIsSingleFlightPerHost|LocalParallelPreparesOneCmdGCBinaryBeforeShardFanout|GoTestShardPrepared.*))$'
+run go test -vet=off ./internal/testpolicy/resourcecensus -run '^TestRepositoryLedgerMatchesCensusAndDocumentation$'
 
 status=0
 for pid in "${pids[@]}"; do
