@@ -44,7 +44,7 @@ sha256_file() {
 # that provide flock. Kubernetes Jobs also have concurrencyPolicy/resource
 # limits; this guard covers shared developer and agent hosts.
 if command -v flock >/dev/null 2>&1; then
-  lock_file="${GC_TEST_LOCAL_LOCK_FILE:-${TMPDIR:-/var/tmp}/gascity-test-local-parallel.lock}"
+  lock_file="${GC_TEST_LOCAL_LOCK_FILE:-/var/tmp/gascity-test-local-parallel.lock}"
   exec 9>"$lock_file"
   if ! flock -n 9; then
     echo "another Gas City parallel test suite already owns this host; reuse its result or retry after it finishes" >&2
