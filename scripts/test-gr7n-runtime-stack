@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+export CI=1 GOENV=off GOWORK=off GOFLAGS= GC_FAST_UNIT=1
+
+pids=()
+run() { "$@" & pids+=("$!"); }
+
+run go test ./cmd/gc -run '^(Test(AllowLegacyDoltMetadataRepairRejectsPostgresDSN|ApplyResolvedScopePostgresEnv_.*|BdRuntimeEnvCity_PostgresBackendBdMainShape|ProjectedPostgresEnvKeysIncludeBeadsPgPassword|ApplyPostgresScopeManifest.*|FirstStoreWithWork.*|ApplyNestedCapsPreservesResumeBeforeNewAdmission|ComputePoolDesiredStates_GlobalReadyOrderIgnoresAgentOrder|StampObservedProviderKind|ReconcileSessionBeads_DesiredRemoteSessionLearnsObservedProviderFamily|ResolveTemplatePreloadedContextOmitsPrimeWithoutPretendingHooks))$'
+run go test ./internal/api -run '^(Test(BeadReadyFederationUsesGlobalCanonicalOrder|SessionSubmitErrorCode.*|HandleSessionTranscriptUsesObservedProviderKindForWrapper|HandleStatusReadyPreservesCollidingStoreLocalIDsLikeCanonicalEndpoint|WorkReview.*))$'
+run go test ./internal/beads ./internal/beads/contract -run '^(Test(BdStoreHumanResponseIsOneShotOnAmbiguousTransportFailure|EnrichReadyProjectionForCacheDisablesUnsupportedBdSQL|EnsureCanonicalMetadata.*|LoadMetadataState.*Postgres.*|MetadataStatePostgresEndpoint|ParsePostgresDSNEndpoint))$'
+run go test ./internal/pgauth ./internal/doctor/checks -run '^(Test(ResolveFromEnv_.*BeadsPg.*|SourceString_BeadsPgIdentifiers|PostgresAuthCheck_.*))$'
+run go test ./internal/runtime/tmux
+run go test ./internal/runtime/hybrid ./internal/runtime/k8s ./internal/runtime/subprocess ./internal/session ./internal/sessionlog ./internal/worker -run '^(Test(ObserveLiveness.*|EnsurePrivateSocketDir.*|ObservedProviderKind|KnownProviderFamily|SessionHandleUsesObservedProviderKindForWrappedTranscript))$'
+run go test ./scripts -run '^(Test(LocalParallelIsSingleFlightPerHost|LocalParallelPreparesOneCmdGCBinaryBeforeShardFanout|GoTestShardPrepared.*))$'
+run go test ./internal/testpolicy/resourcecensus -run '^TestRepositoryLedgerMatchesCensusAndDocumentation$'
+
+status=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || status=1
+done
+exit "$status"
