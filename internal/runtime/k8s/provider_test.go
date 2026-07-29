@@ -1649,6 +1649,30 @@ func TestBuildPodPrebaked(t *testing.T) {
 	if containsStr(entrypoint, ".gc-workspace-ready") {
 		t.Error("prebaked entrypoint should not wait for .gc-workspace-ready")
 	}
+	if !strings.Contains(entrypoint, agentExitReceiptB64()) ||
+		!strings.Contains(entrypoint, agentExitStatusPath) {
+		t.Error("prebaked entrypoint should install the numeric agent exit receipt")
+	}
+	if strings.Contains(entrypoint, "agent-output.log") {
+		t.Error("prebaked entrypoint must not retain pane output for diagnostics")
+	}
+}
+
+func TestAgentExitReceiptContainsOnlyBoundedLifecycleData(t *testing.T) {
+	decoded, err := base64.StdEncoding.DecodeString(agentExitReceiptB64())
+	if err != nil {
+		t.Fatalf("decode agent exit receipt: %v", err)
+	}
+	receipt := string(decoded)
+	if !strings.Contains(receipt, agentExitStatusPath) ||
+		!strings.Contains(receipt, `printf '%s\n' "$gr7n_agent_exit_status"`) {
+		t.Fatalf("agent exit receipt = %q, want numeric status write", receipt)
+	}
+	for _, forbidden := range []string{"tee ", "pipe-pane", "capture-pane", "agent-output"} {
+		if strings.Contains(receipt, forbidden) {
+			t.Fatalf("agent exit receipt = %q, must not retain content via %q", receipt, forbidden)
+		}
+	}
 }
 
 func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
@@ -1979,6 +2003,9 @@ func TestStartDetectsImmediateSessionDeath(t *testing.T) {
 			}
 			return "", fmt.Errorf("no server running on /tmp/tmux-1000/default")
 		}
+		if len(cmd) == 2 && cmd[0] == "cat" && cmd[1] == agentExitStatusPath {
+			return "17\n", nil
+		}
 		return "", nil
 	}
 
@@ -1993,6 +2020,9 @@ func TestStartDetectsImmediateSessionDeath(t *testing.T) {
 	}
 	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
 		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if !strings.Contains(err.Error(), "(agent exit status 17)") {
+		t.Fatalf("Start error = %v, want bounded numeric agent exit status", err)
 	}
 
 	// Pod should have been cleaned up.
@@ -2421,6 +2451,10 @@ func TestProvider_RelaunchRespawnsAgentInWarmPod(t *testing.T) {
 	}
 	if strings.Contains(body, "agent --resume") {
 		t.Errorf("respawn body = %q leaked the raw command; it must be base64-shipped", body)
+	}
+	if !strings.Contains(body, agentExitReceiptB64()) ||
+		!strings.Contains(body, agentExitStatusPath) {
+		t.Errorf("respawn body = %q, want bounded numeric exit receipt", body)
 	}
 	// Warm reuse: no pod was created or deleted.
 	for _, c := range fake.calls {
