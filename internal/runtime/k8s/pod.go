@@ -231,7 +231,8 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 
 	// Pod entrypoint: wait for workspace ready → pre_start → tmux → keepalive.
 	// Each pre_start command is base64-encoded and decoded at runtime to prevent
-	// shell metacharacter injection from user-supplied commands.
+	// shell metacharacter injection from user-supplied commands. The && chain is
+	// deliberate: a provisioning failure must stop before the agent launches.
 	var preStartCmds string
 	for _, cmd := range cfg.PreStart {
 		c := cmd
@@ -239,7 +240,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			c = strings.ReplaceAll(c, ctrlCity, "/workspace")
 		}
 		b64 := base64.StdEncoding.EncodeToString([]byte(c))
-		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh; ", b64)
+		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh && ", b64)
 	}
 
 	// Dynamic user creation: when LINUX_USERNAME is set, the container starts
