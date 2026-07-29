@@ -343,9 +343,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_, tmuxErr := p.ops.execInPod(ctx, podName, "agent",
 			[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
 		if tmuxErr != nil {
+			exitDetail := p.agentExitDetail(ctx, podName)
 			cleanup("session died immediately after startup")
-			return fmt.Errorf("%w: session %q died immediately after startup: %w",
-				runtime.ErrSessionDiedDuringStartup, name, tmuxErr)
+			return fmt.Errorf("%w: session %q died immediately after startup%s: %w",
+				runtime.ErrSessionDiedDuringStartup, name, exitDetail, tmuxErr)
 		}
 	}
 
@@ -359,9 +360,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}
 	if requiresPostStartLiveness && cfg.ReadyDelayMs > 0 &&
 		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
+		exitDetail := p.agentExitDetail(ctx, podName)
 		cleanup("agent process not ready after ready delay")
-		return fmt.Errorf("%w: session %q has no live agent process after ready delay",
-			runtime.ErrSessionDiedDuringStartup, name)
+		return fmt.Errorf("%w: session %q has no live agent process after ready delay%s",
+			runtime.ErrSessionDiedDuringStartup, name, exitDetail)
 	}
 
 	// Send initial nudge if configured (matches tmux adapter step 6).
@@ -372,15 +374,13 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	return nil
 }
 
-// runPodPostLaunchSetup enables pane logging and runs session_setup and
-// session_setup_script inside the pod, best-effort. Shared by Start (after the
-// entrypoint launches the agent) and Relaunch (after the respawn). k8s does not
-// run SessionLive (RunLive is a no-op), matching the pre-un-weld behavior.
+// runPodPostLaunchSetup runs session_setup and session_setup_script inside the
+// pod, best-effort. Shared by Start (after the entrypoint launches the agent)
+// and Relaunch (after the respawn). k8s does not retain pane content merely for
+// diagnostics; the launch wrapper records a bounded numeric exit status.
+// k8s does not run SessionLive (RunLive is a no-op), matching the pre-un-weld
+// behavior.
 func (p *Provider) runPodPostLaunchSetup(ctx context.Context, podName string, cfg runtime.Config) {
-	// Enable pane logging for diagnostics.
-	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "pipe-pane", "-t", tmuxSession, "-o", "cat >> /tmp/agent-output.log"}, nil)
-
 	// Run session_setup commands inside the pod.
 	for _, cmd := range cfg.SessionSetup {
 		if cmd == "" {
@@ -459,8 +459,8 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		}
 		if _, err := p.ops.execInPod(ctx, podName, "agent",
 			[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err != nil {
-			return fmt.Errorf("%w: session %q died immediately after relaunch: %w",
-				runtime.ErrSessionDiedDuringStartup, name, err)
+			return fmt.Errorf("%w: session %q died immediately after relaunch%s: %w",
+				runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName), err)
 		}
 	}
 
@@ -469,14 +469,29 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 	}
 	if k8sRequiresPostStartLiveness(cfg) && cfg.ReadyDelayMs > 0 &&
 		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
-		return fmt.Errorf("%w: session %q has no live agent process after relaunch ready delay",
-			runtime.ErrSessionDiedDuringStartup, name)
+		return fmt.Errorf("%w: session %q has no live agent process after relaunch ready delay%s",
+			runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName))
 	}
 
 	if cfg.Nudge != "" {
 		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
 	}
 	return nil
+}
+
+// agentExitDetail reads only the bounded numeric receipt written by the launch
+// wrapper. Missing, incomplete, or malformed receipts remain silent.
+func (p *Provider) agentExitDetail(ctx context.Context, podName string) string {
+	output, err := p.ops.execInPod(ctx, podName, "agent",
+		[]string{"cat", agentExitStatusPath}, nil)
+	if err != nil {
+		return ""
+	}
+	status, err := strconv.ParseUint(strings.TrimSpace(output), 10, 8)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(" (agent exit status %d)", status)
 }
 
 func waitForK8sReadyDelay(ctx context.Context, readyDelayMs int) error {
