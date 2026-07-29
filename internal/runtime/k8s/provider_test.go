@@ -376,6 +376,36 @@ func TestNudge(t *testing.T) {
 	}
 }
 
+func TestNudgeMultilineUsesAtomicPaste(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	message := "role context\n\nRun the assigned task."
+
+	if err := p.Nudge("gc-test-agent", runtime.TextContent(message)); err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	var foundBuffer, foundPaste, foundEnter bool
+	for _, c := range fake.calls {
+		if c.method != "execInPod" {
+			continue
+		}
+		if len(c.cmd) == 6 && c.cmd[0] == "tmux" && c.cmd[1] == "set-buffer" &&
+			c.cmd[4] == "--" && c.cmd[5] == message {
+			foundBuffer = true
+		}
+		if len(c.cmd) >= 2 && c.cmd[0] == "tmux" && c.cmd[1] == "paste-buffer" {
+			foundPaste = true
+		}
+		if len(c.cmd) == 5 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "Enter" {
+			foundEnter = true
+		}
+	}
+	if !foundBuffer || !foundPaste || !foundEnter {
+		t.Fatalf("multiline nudge calls did not include atomic paste and submit: %+v", fake.calls)
+	}
+}
+
 func TestSendKeys(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -2217,6 +2247,33 @@ func TestStartHonorsReadyDelayBeforeNudge(t *testing.T) {
 	}
 	if !foundText {
 		t.Fatal("Start did not send the nudge after the ready delay")
+	}
+}
+
+func TestStartFailsClosedWhenInitialNudgeCannotBeDelivered(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 2 && cmd[0] == "tmux" && cmd[1] == "send-keys" {
+			return "", errors.New("tmux session disappeared")
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command: "claude --settings .gc/settings.json",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+		Nudge: "Run the assigned task.",
+	}
+	err := p.Start(context.Background(), "gc-test-agent", cfg)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Fatal("pod was retained after initial nudge delivery failed")
 	}
 }
 

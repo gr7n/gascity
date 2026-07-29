@@ -368,7 +368,12 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 
 	// Send initial nudge if configured (matches tmux adapter step 6).
 	if cfg.Nudge != "" {
-		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
+		if err := p.carrier().Nudge(ctx, name, runtime.TextContent(cfg.Nudge)); err != nil {
+			exitDetail := p.agentExitDetail(ctx, podName)
+			cleanup("initial nudge delivery failed")
+			return fmt.Errorf("%w: session %q could not receive its initial nudge%s: %v",
+				runtime.ErrSessionDiedDuringStartup, name, exitDetail, err)
+		}
 	}
 
 	return nil
@@ -474,7 +479,10 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 	}
 
 	if cfg.Nudge != "" {
-		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
+		if err := p.carrier().Nudge(ctx, name, runtime.TextContent(cfg.Nudge)); err != nil {
+			return fmt.Errorf("%w: session %q could not receive its relaunch nudge%s: %v",
+				runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName), err)
+		}
 	}
 	return nil
 }
