@@ -1360,10 +1360,21 @@ func bdSQLStringLiteral(value string) string {
 // Claim atomically claims an open bead through bd update --claim.
 //
 // It returns ok=false when bd reports that another actor won the claim race.
-// The caller controls the claim actor through the store's CommandRunner
-// environment, typically BEADS_ACTOR.
 func (s *BdStore) Claim(id string) (Bead, bool, error) {
-	out, err := s.runBDTransientWriteOutput("update", id, "--claim", "--json")
+	return s.ClaimAs(id, "")
+}
+
+// ClaimAs atomically claims an open bead with an explicit actor. Passing the
+// actor as a bd flag keeps the assignee stable across bd versions and execution
+// adapters that do not honor BEADS_ACTOR for --claim. An empty actor preserves
+// Claim's environment-derived behavior.
+func (s *BdStore) ClaimAs(id, actor string) (Bead, bool, error) {
+	args := []string{"update", id, "--claim"}
+	if actor = strings.TrimSpace(actor); actor != "" {
+		args = append(args, "--actor", actor)
+	}
+	args = append(args, "--json")
+	out, err := s.runBDTransientWriteOutput(args...)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if isBdClaimConflictMessage(msg) || isBdClaimConflictMessage(err.Error()) {

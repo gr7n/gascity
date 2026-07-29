@@ -466,7 +466,7 @@ func preassignHookContinuationGroup(bead beads.Bead, opts hookClaimOptions, ops 
 
 func hookClaimWithBdStore(ctx context.Context, dir string, env []string, beadID, assignee string) (beads.Bead, bool, error) {
 	store := hookClaimBdStoreContext(ctx, dir, env, assignee)
-	claimed, ok, err := store.Claim(beadID)
+	claimed, ok, err := store.ClaimAs(beadID, assignee)
 	if err != nil {
 		return beads.Bead{}, false, err
 	}
