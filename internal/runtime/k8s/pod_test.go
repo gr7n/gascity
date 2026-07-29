@@ -1,12 +1,33 @@
 package k8s
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/gastownhall/gascity/internal/runtime"
 )
+
+func TestBuildPreStartCommandChainStopsBeforeLaunchOnFailure(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.prebaked = true
+	pod, err := buildPod("test-session", runtime.Config{
+		Command:  "/bin/bash",
+		PreStart: []string{"first", "second"},
+		Env:      map[string]string{"GC_CITY": "/controller"},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	script := pod.Spec.Containers[0].Args[0]
+	if got := strings.Count(script, " | base64 -d | sh && "); got != 2 {
+		t.Fatalf("pre_start chain has %d fail-closed boundaries, want 2: %q", got, script)
+	}
+	if strings.Contains(script, " | base64 -d | sh;") {
+		t.Fatalf("pre_start chain contains a failure-ignoring separator: %q", script)
+	}
+}
 
 func TestBuildPod_NodeSelector(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
