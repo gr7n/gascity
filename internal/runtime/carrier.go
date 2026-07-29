@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // Carrier drives the high-level session interactions — input delivery, output
@@ -64,6 +65,12 @@ type tmuxCarrier struct {
 var tmuxCarrierBufferSeq uint64
 
 const tmuxCarrierLiteralLimit = 4096
+
+// Match the mature local tmux delivery path: provider TUIs need a short
+// boundary between accepting a paste/key burst and receiving the submit Enter.
+// Without it, tmux can report success while a detached Codex pane leaves the
+// text drafted and drops the Enter.
+const tmuxCarrierSubmitDebounce = 500 * time.Millisecond
 
 // NewTmuxCarrier returns a [Carrier] that drives the in-box tmux session
 // target over conn.
@@ -125,6 +132,7 @@ func (c *tmuxCarrier) Nudge(ctx context.Context, name string, content []ContentB
 		return err
 	}
 	loaded = false
+	time.Sleep(tmuxCarrierSubmitDebounce)
 	_, err := c.tmux(ctx, name, "send-keys", "-t", c.target, "Enter")
 	return err
 }
