@@ -166,7 +166,7 @@ func TestHandleStatusWorkCountsUseCounterStores(t *testing.T) {
 		counts:        map[string]int{"open": 2, "in_progress": 1, "ready": 99},
 		listForbidden: true,
 	}
-	state.stores["myrig"] = counter
+	state.stores = map[string]beads.Store{state.cityName: counter}
 	state.cityBeadStore = store
 
 	resp := getStatus(t, state)
@@ -191,11 +191,11 @@ func TestHandleStatusCounterUnsupportedFallsBackToList(t *testing.T) {
 	if _, err := mem.Create(beads.Bead{Type: "task", Title: "open work"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	state.stores["myrig"] = &counterBeadStore{
+	state.stores = map[string]beads.Store{state.cityName: &counterBeadStore{
 		Store:    mem,
 		t:        t,
 		countErr: beads.ErrCountUnsupported,
-	}
+	}}
 	state.cityBeadStore = mem
 
 	resp := getStatus(t, state)
@@ -208,7 +208,7 @@ func TestHandleStatusCounterUnsupportedFallsBackToList(t *testing.T) {
 	}
 }
 
-func TestHandleStatusReadyDeduplicatesAcrossStoresLikeCanonicalEndpoint(t *testing.T) {
+func TestHandleStatusReadyPreservesCollidingStoreLocalIDsLikeCanonicalEndpoint(t *testing.T) {
 	state := newFakeState(t)
 	first := beads.NewMemStore()
 	second := beads.NewMemStore()
@@ -227,8 +227,8 @@ func TestHandleStatusReadyDeduplicatesAcrossStoresLikeCanonicalEndpoint(t *testi
 	if status.Work.Open != 2 {
 		t.Fatalf("Work.Open = %d, want existing per-store sum 2", status.Work.Open)
 	}
-	if status.Work.Ready != 1 {
-		t.Fatalf("Work.Ready = %d, want shared ready ID deduplicated", status.Work.Ready)
+	if status.Work.Ready != 2 {
+		t.Fatalf("Work.Ready = %d, want both store-local ready IDs preserved", status.Work.Ready)
 	}
 
 	h := newTestCityHandler(t, state)
