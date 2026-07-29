@@ -55,6 +55,59 @@ func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	}
 }
 
+func TestParsePodProjectionEnv(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `[
+		{"name":"agent-tools","configMap":{"name":"agent-tools","defaultMode":365}}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_VOLUME_MOUNTS_JSON", `[
+		{"name":"agent-tools","mountPath":"/opt/agent-tools","readOnly":true}
+	]`)
+	t.Setenv("GC_K8S_EXTRA_ENV_JSON", `[
+		{"name":"PROVIDER_API_KEY","valueFrom":{"secretKeyRef":{"name":"provider-api-key","key":"PROVIDER_API_KEY"}}}
+	]`)
+
+	projection, err := parsePodProjectionEnv()
+	if err != nil {
+		t.Fatalf("parsePodProjectionEnv() error = %v", err)
+	}
+	if got := projection.volumes[0].Name; got != "agent-tools" {
+		t.Fatalf("volume name = %q, want agent-tools", got)
+	}
+	if got := projection.volumes[0].ConfigMap.Name; got != "agent-tools" {
+		t.Fatalf("configmap name = %q, want agent-tools", got)
+	}
+	if got := *projection.volumes[0].ConfigMap.DefaultMode; got != 365 {
+		t.Fatalf("defaultMode = %d, want 365", got)
+	}
+	if got := projection.volumeMounts[0].MountPath; got != "/opt/agent-tools" {
+		t.Fatalf("mount path = %q, want /opt/agent-tools", got)
+	}
+	if got := projection.env[0].ValueFrom.SecretKeyRef.Name; got != "provider-api-key" {
+		t.Fatalf("secret name = %q, want provider-api-key", got)
+	}
+}
+
+func TestParsePodProjectionEnvRejectsInvalidJSON(t *testing.T) {
+	clearPodProjectionEnv(t)
+	t.Setenv("GC_K8S_EXTRA_VOLUMES_JSON", `not-json`)
+
+	if _, err := parsePodProjectionEnv(); err == nil || !strings.Contains(err.Error(), "GC_K8S_EXTRA_VOLUMES_JSON") {
+		t.Fatalf("parsePodProjectionEnv() error = %v, want GC_K8S_EXTRA_VOLUMES_JSON context", err)
+	}
+}
+
+func clearPodProjectionEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_EXTRA_VOLUMES_JSON",
+		"GC_K8S_EXTRA_VOLUME_MOUNTS_JSON",
+		"GC_K8S_EXTRA_ENV_JSON",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestManagedServiceAliasRejectsPartialCompatOverride(t *testing.T) {
 	t.Setenv("GC_K8S_DOLT_HOST", "legacy-dolt.example.com")
 
