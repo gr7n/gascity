@@ -252,11 +252,11 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	if agentName == "" {
 		agentName = os.Getenv("GC_AGENT")
 	}
+	template := strings.TrimSpace(os.Getenv("GC_TEMPLATE"))
+	hasSessionContext := strings.TrimSpace(os.Getenv("GC_SESSION_NAME")) != "" ||
+		strings.TrimSpace(os.Getenv("GC_SESSION_ID")) != ""
 	sessionTemplateContext := false
 	if len(args) == 0 {
-		template := strings.TrimSpace(os.Getenv("GC_TEMPLATE"))
-		hasSessionContext := strings.TrimSpace(os.Getenv("GC_SESSION_NAME")) != "" ||
-			strings.TrimSpace(os.Getenv("GC_SESSION_ID")) != ""
 		if template != "" && hasSessionContext {
 			agentName = template
 			sessionTemplateContext = true
@@ -264,6 +264,11 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	}
 	if len(args) > 0 {
 		agentName = args[0]
+		// Managed prompts commonly invoke `gc hook "$GC_TEMPLATE"` explicitly.
+		// The target still selects this session's backing template; it must not
+		// turn the claim into a non-session invocation whose computed tmux
+		// carrier name (for example "main" in Kubernetes) becomes the assignee.
+		sessionTemplateContext = hasSessionContext && agentName == template
 	}
 	if agentName == "" {
 		fmt.Fprintln(stderr, "gc hook: agent not specified (set $GC_AGENT or pass as argument)") //nolint:errcheck // best-effort stderr

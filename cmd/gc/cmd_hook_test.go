@@ -1308,7 +1308,7 @@ work_query = "printf '[{\"id\":\"hw-1\",\"title\":\"Fix the bug\"}]'"
 	}
 }
 
-func TestHookCommandClaimUsesSessionActorAndPreassignsContinuation(t *testing.T) {
+func TestHookCommandClaimExplicitTemplateUsesSessionActorAndPreassignsContinuation(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
 	cityDir := t.TempDir()
@@ -1364,9 +1364,10 @@ esac
 	t.Setenv("GC_SESSION_ID", "session-id-1")
 	t.Setenv("GC_SESSION_NAME", "worker-1")
 	t.Setenv("GC_SESSION_ORIGIN", "ephemeral")
+	t.Setenv("GC_TMUX_SESSION", "main")
 
 	var stdout, stderr bytes.Buffer
-	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
+	code := cmdHookWithOptions([]string{"worker"}, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("cmdHookWithOptions(--claim) = %d, want 0; stdout=%q stderr=%s", code, stdout.String(), stderr.String())
 	}
