@@ -229,7 +229,11 @@ func withinPostCreateProtectionWindowInfo(info sessionpkg.Info, now time.Time) b
 		return false
 	}
 	creationCompleteAt, ok := parseRFC3339Metadata(info.CreationCompleteAt)
-	return ok && now.Sub(creationCompleteAt) < postCreateProtectionTimeout
+	if !ok {
+		return false
+	}
+	age := now.Sub(creationCompleteAt)
+	return age >= 0 && age < postCreateProtectionTimeout
 }
 
 // newCityRuntime creates a CityRuntime, building internal components
