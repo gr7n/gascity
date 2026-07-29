@@ -2231,6 +2231,129 @@ func TestStartSendsNudge(t *testing.T) {
 	}
 }
 
+func TestStartHonorsReadyDelayBeforeNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 25,
+		Nudge:        "Run the assigned task.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	started := time.Now()
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("Start returned after %v, want ready delay before nudge", elapsed)
+	}
+
+	foundText := false
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 6 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" &&
+			c.cmd[4] == "-l" &&
+			c.cmd[5] == cfg.Nudge {
+			foundText = true
+			break
+		}
+	}
+	if !foundText {
+		t.Fatal("Start did not send the nudge after the ready delay")
+	}
+}
+
+func TestStartReadyDelayCancellationCleansUpWithoutNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hasSessionCalls := 0
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 3 && cmd[0] == "tmux" && cmd[1] == "has-session" {
+			hasSessionCalls++
+			if hasSessionCalls == 2 {
+				cancel()
+			}
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 250,
+		Nudge:        "This must not be delivered.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	err := p.Start(ctx, "gc-test-agent", cfg)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error = %v, want context canceled", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Error("pod should have been deleted after ready-delay cancellation")
+	}
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 2 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" {
+			t.Fatal("Start delivered a nudge after ready-delay cancellation")
+		}
+	}
+}
+
+func TestStartReadyDelayRequiresConfiguredAgentProcess(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 2 && cmd[0] == "sh" && cmd[1] == "-c" &&
+			strings.Contains(cmd[2], "ps -eo comm=") {
+			return "bash\npython3\n", nil
+		}
+		return "", nil
+	}
+	cfg := runtime.Config{
+		Command:      "claude --settings .gc/settings.json",
+		ReadyDelayMs: 1,
+		ProcessNames: []string{"claude", "codex"},
+		Nudge:        "This must not be delivered.",
+		Env: map[string]string{
+			"GC_AGENT": "deacon",
+			"GC_CITY":  "/workspace",
+		},
+	}
+	err := p.Start(context.Background(), "gc-test-agent", cfg)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("Start error = %v, want ErrSessionDiedDuringStartup", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; exists {
+		t.Error("pod should have been deleted when no configured agent process became ready")
+	}
+	for _, c := range fake.calls {
+		if c.method == "execInPod" &&
+			len(c.cmd) >= 2 &&
+			c.cmd[0] == "tmux" &&
+			c.cmd[1] == "send-keys" {
+			t.Fatal("Start delivered a nudge before a configured agent process was ready")
+		}
+	}
+}
+
 func TestStartSkipsNudgeWhenEmpty(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
