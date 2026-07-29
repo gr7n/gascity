@@ -2036,7 +2036,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					// the same post-create window as the startup sweep so the
 					// steady-state reconciler cannot retire a healthy worker
 					// during that gap.
-					if isEphemeralSessionInfo(infoPostHeal) &&
+					if (infoPostHeal.PoolManaged || strings.TrimSpace(infoPostHeal.PoolSlot) != "") &&
 						withinPostCreateProtectionWindowInfo(infoPostHeal, clk.Now()) {
 						if trace != nil {
 							template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
