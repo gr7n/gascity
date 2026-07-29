@@ -36,6 +36,60 @@ var ErrInteractionUnsupported = errors.New("session interaction is unsupported")
 // process, but it exited before startup completed successfully.
 var ErrSessionDiedDuringStartup = errors.New("session died during startup")
 
+// ErrDeliveryUnconfirmed reports that a provider-facing transport handed off a
+// message but could not prove that the provider accepted it as a new turn.
+// Callers must treat this as ambiguous: the message may have landed, so it is
+// unsafe to retry automatically.
+var ErrDeliveryUnconfirmed = errors.New("session message delivery is unconfirmed")
+
+// ErrProviderUnavailable reports that a provider accepted a turn but could not
+// execute it because the provider itself was temporarily unavailable (for
+// example, an HTTP 429 usage limit). Unlike ErrDeliveryUnconfirmed, this is not
+// ambiguous: the user message landed, so callers must not resend it.
+var ErrProviderUnavailable = errors.New("provider unavailable")
+
+// ProviderUnavailableError carries bounded, non-prompt provider evidence for a
+// failed accepted turn. All fields are optional because providers differ in
+// how much rate-limit metadata they expose.
+type ProviderUnavailableError struct {
+	StatusCode int
+	RetryAfter string
+	LimitID    string
+	LimitName  string
+	ResetsAt   int64
+	Reason     string
+}
+
+func (e *ProviderUnavailableError) Error() string {
+	if e == nil {
+		return ErrProviderUnavailable.Error()
+	}
+	parts := []string{ErrProviderUnavailable.Error()}
+	if e.StatusCode > 0 {
+		parts = append(parts, fmt.Sprintf("status=%d", e.StatusCode))
+	}
+	if e.RetryAfter != "" {
+		parts = append(parts, "retry_after="+e.RetryAfter)
+	}
+	if e.LimitID != "" {
+		parts = append(parts, "limit_id="+e.LimitID)
+	}
+	if e.LimitName != "" {
+		parts = append(parts, "limit_name="+e.LimitName)
+	}
+	if e.ResetsAt > 0 {
+		parts = append(parts, fmt.Sprintf("resets_at=%d", e.ResetsAt))
+	}
+	if e.Reason != "" {
+		parts = append(parts, "reason="+e.Reason)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (*ProviderUnavailableError) Unwrap() error {
+	return ErrProviderUnavailable
+}
+
 // ErrSessionNotFound reports that an operation targeted a session the
 // runtime does not know about. Benign for Stop() — the session was
 // already gone — but fatal for Attach/Send. Providers wrap their own

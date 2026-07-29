@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api/apierr"
@@ -366,7 +367,7 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	var all []beads.Bead
 	var pa partialAggregator
 	seen := make(map[string]bool)
-	federate := func(label string, store beads.Store) {
+	federate := func(label, storeRef string, store beads.Store) {
 		if store == nil {
 			return
 		}
@@ -384,10 +385,12 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 			pa.success()
 		}
 		for _, b := range ready {
-			if seen[b.ID] {
+			key := storeRef + "\x00" + b.ID
+			if seen[key] {
 				continue // legacy file mode can alias the city and rig stores
 			}
-			seen[b.ID] = true
+			seen[key] = true
+			b.StoreRef = storeRef
 			all = append(all, b)
 		}
 	}
@@ -396,14 +399,14 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	// `bd ready` would never surface it. In production BeadStores() also returns
 	// the city store keyed by CityName() (cmd/gc/api_state.go), so skip that
 	// duplicate key in the rig loop below to avoid querying it twice.
-	federate("city", s.state.CityBeadStore())
+	federate("city", "city:"+s.state.CityName(), s.state.CityBeadStore())
 	cityName := s.state.CityName()
 	for _, rigName := range rigNames {
 		if rigName == cityName {
 			continue // city store already federated explicitly above; production
 			// BeadStores() also returns it under cityName (cmd/gc/api_state.go)
 		}
-		federate("rig "+rigName, stores[rigName])
+		federate("rig "+rigName, "rig:"+rigName, stores[rigName])
 	}
 	if pa.totalOutage() {
 		return nil, pa.outageError()
@@ -412,6 +415,10 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	if all == nil {
 		all = []beads.Bead{}
 	}
+	// Each store guarantees the same Ready ordering, but concatenating stores
+	// does not. Re-sort after federation so admission observes one company-wide
+	// priority -> created_at -> ID order independent of rig enumeration.
+	beads.SortReady(all)
 
 	index := s.latestIndex()
 	return &ListOutput[beads.Bead]{
@@ -551,11 +558,19 @@ func (s *Server) humaHandleBeadCreate(ctx context.Context, input *BeadCreateInpu
 			if store == nil {
 				return beads.Bead{}, apierr.InvalidRequest.Msg("rig is required when multiple rigs are configured")
 			}
+			if id := strings.TrimSpace(input.Body.ID); id != "" {
+				owner, ok := store.(interface{ IDPrefix() string })
+				if !ok || len(id) > 128 || !beadIDHasConfiguredPrefix(id, owner.IDPrefix()) {
+					return beads.Bead{}, apierr.InvalidRequest.Msg("stable bead id differs from the selected scope")
+				}
+				input.Body.ID = id
+			}
 			assignee, err := s.normalizeRawBeadAssignee(ctx, input.Body.Assignee)
 			if err != nil {
 				return beads.Bead{}, apierr.InvalidRequest.Msg(err.Error())
 			}
 			created, err := store.Create(beads.Bead{
+				ID:          input.Body.ID,
 				Title:       input.Body.Title,
 				Type:        input.Body.Type,
 				Priority:    input.Body.Priority,

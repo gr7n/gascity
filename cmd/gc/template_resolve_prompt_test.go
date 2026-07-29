@@ -766,6 +766,34 @@ func TestResolveTemplateHookEnabledOpencodeOmitsPrimeInstruction(t *testing.T) {
 	}
 }
 
+func TestResolveTemplatePreloadedContextOmitsPrimeWithoutPretendingHooks(t *testing.T) {
+	cityPath := t.TempDir()
+	fs := fsys.NewFake()
+	fs.Files[cityPath+"/prompts/director.md"] = []byte("director prompt body")
+	providers := config.BuiltinProviders()
+	provider := providers["opencode"]
+	provider.Env = map[string]string{"GC_STARTUP_CONTEXT_PRELOADED": "1"}
+	providers["opencode"] = provider
+	params := &agentBuildParams{
+		fs: fs, cityName: "bright-lights", cityPath: cityPath,
+		workspace: &config.Workspace{Name: "bright-lights", Provider: "opencode"},
+		providers: providers, lookPath: func(string) (string, error) { return "/usr/bin/opencode", nil },
+		beaconTime: testBeaconTime, beadNames: make(map[string]string), stderr: io.Discard,
+	}
+	agent := &config.Agent{Name: "director", PromptTemplate: "prompts/director.md", Provider: "opencode"}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if tp.HookEnabled {
+		t.Fatal("HookEnabled = true; preloaded Context must not impersonate provider hooks")
+	}
+	if !strings.Contains(tp.Prompt, "director prompt body") || strings.Contains(tp.Prompt, "Run `gc prime`") {
+		t.Fatalf("preloaded Context prompt differs: %q", tp.Prompt)
+	}
+}
+
 func TestResolveTemplateKeepsConcreteProviderForOverlays(t *testing.T) {
 	cityPath := t.TempDir()
 	fs := fsys.NewFake()

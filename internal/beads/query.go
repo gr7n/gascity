@@ -328,19 +328,21 @@ func SortBeads(items []Bead, order SortOrder) {
 // a ready-shaped result from a source other than CachedReady/Ready (e.g. a
 // single batched bd ready fallback) use this to match that canonical order.
 func SortBeadsReadyOrder(items []Bead) {
-	sortBeadsReadyOrder(items)
+	SortReady(items)
 }
 
-// sortBeadsReadyOrder sorts ready results into the canonical
+// SortReady sorts ready results into the canonical
 // (priority, created_at, id) ascending order used by the SQL-backed ready
 // readers (a nil priority sorts as 2, matching their COALESCE(i.priority, 2)),
 // so a bounded ready read cuts the same deterministic prefix regardless of
 // which store path served it (#3208).
-func sortBeadsReadyOrder(items []Bead) {
+func SortReady(items []Bead) {
 	sort.Slice(items, func(i, j int) bool {
 		return beadReadyLess(items[i], items[j])
 	})
 }
+
+func sortBeadsReadyOrder(items []Bead) { SortReady(items) }
 
 // sortBeadsReadyOrderContext is the cancellation-aware form used by
 // deadline-sensitive cache projections. A local merge sort keeps cancellation

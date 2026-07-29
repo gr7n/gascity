@@ -81,6 +81,7 @@ var providerCredentialEnvKeys = map[string]bool{
 	"AWS_USE_DUALSTACK_ENDPOINT":             true,
 	"AWS_USE_FIPS_ENDPOINT":                  true,
 	"AWS_WEB_IDENTITY_TOKEN_FILE":            true,
+	"CLAUDE_CODE_OAUTH_TOKEN":                true,
 }
 
 // IsProviderCredentialEnv reports whether key belongs to the curated provider
