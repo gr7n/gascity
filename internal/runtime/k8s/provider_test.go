@@ -559,7 +559,7 @@ func TestMetaOps(t *testing.T) {
 
 	// GetMeta — configure fake to return the value.
 	fake.setExecResult("gc-test-agent",
-		[]string{"tmux", "show-environment", "-t", "main", "GC_DRAIN"},
+		[]string{"tmux", "show-environment", "-g", "GC_DRAIN"},
 		"GC_DRAIN=true\n", nil)
 
 	val, err := p.GetMeta("gc-test-agent", "GC_DRAIN")
@@ -572,7 +572,7 @@ func TestMetaOps(t *testing.T) {
 
 	// GetMeta with unset key.
 	fake.setExecResult("gc-test-agent",
-		[]string{"tmux", "show-environment", "-t", "main", "MISSING"},
+		[]string{"tmux", "show-environment", "-g", "MISSING"},
 		"-MISSING\n", nil)
 
 	val, err = p.GetMeta("gc-test-agent", "MISSING")
