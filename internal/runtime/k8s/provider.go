@@ -27,6 +27,7 @@ import (
 var (
 	_ runtime.Provider         = (*Provider)(nil)
 	_ runtime.ExecProvider     = (*Provider)(nil)
+	_ runtime.DialogProvider   = (*Provider)(nil)
 	_ runtime.LivenessObserver = (*Provider)(nil)
 )
 
@@ -41,27 +42,28 @@ const (
 // Eliminates subprocess overhead by making direct API calls over reused
 // HTTP/2 connections. Pod manifests are compatible with gc-session-k8s.
 type Provider struct {
-	ops                k8sOps
-	namespace          string
-	image              string
-	k8sContext         string
-	managedServiceHost string
-	managedServicePort string
-	cpuRequest         string
-	memRequest         string
-	cpuLimit           string
-	memLimit           string
-	serviceAccount     string               // pod service account name (GC_K8S_SERVICE_ACCOUNT)
-	prebaked           bool                 // skip staging + init container for prebaked images
-	nodeSelector       map[string]string    // GC_K8S_NODE_SELECTOR (JSON)
-	tolerations        []corev1.Toleration  // GC_K8S_TOLERATIONS (JSON)
-	affinity           *corev1.Affinity     // GC_K8S_AFFINITY (JSON)
-	priorityClassName  string               // GC_K8S_PRIORITY_CLASS_NAME
-	extraVolumes       []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
-	extraVolumeMounts  []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
-	extraEnv           []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
-	postStartSettle    time.Duration        // settle time before post-start liveness check
-	stderr             io.Writer            // warning output (default os.Stderr)
+	ops                  k8sOps
+	namespace            string
+	image                string
+	k8sContext           string
+	managedServiceHost   string
+	managedServicePort   string
+	cpuRequest           string
+	memRequest           string
+	cpuLimit             string
+	memLimit             string
+	serviceAccount       string               // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	prebaked             bool                 // skip staging + init container for prebaked images
+	nodeSelector         map[string]string    // GC_K8S_NODE_SELECTOR (JSON)
+	tolerations          []corev1.Toleration  // GC_K8S_TOLERATIONS (JSON)
+	affinity             *corev1.Affinity     // GC_K8S_AFFINITY (JSON)
+	priorityClassName    string               // GC_K8S_PRIORITY_CLASS_NAME
+	extraVolumes         []corev1.Volume      // GC_K8S_EXTRA_VOLUMES_JSON
+	extraVolumeMounts    []corev1.VolumeMount // GC_K8S_EXTRA_VOLUME_MOUNTS_JSON
+	extraEnv             []corev1.EnvVar      // GC_K8S_EXTRA_ENV_JSON
+	postStartSettle      time.Duration        // settle time before post-start liveness check
+	startupDialogTimeout time.Duration        // bounded transient startup-screen handling
+	stderr               io.Writer            // warning output (default os.Stderr)
 }
 
 type schedulingFields struct {
@@ -132,26 +134,27 @@ func NewProvider() (*Provider, error) {
 			restConfig: restConfig,
 			namespace:  namespace,
 		},
-		namespace:          namespace,
-		image:              image,
-		k8sContext:         k8sContext,
-		managedServiceHost: managedServiceHost,
-		managedServicePort: managedServicePort,
-		cpuRequest:         envOrDefault("GC_K8S_CPU_REQUEST", "500m"),
-		memRequest:         envOrDefault("GC_K8S_MEM_REQUEST", "1Gi"),
-		cpuLimit:           envOrDefault("GC_K8S_CPU_LIMIT", "2"),
-		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
-		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
-		prebaked:           os.Getenv("GC_K8S_PREBAKED") == "true",
-		postStartSettle:    3 * time.Second,
-		stderr:             os.Stderr,
-		nodeSelector:       scheduling.nodeSelector,
-		tolerations:        scheduling.tolerations,
-		affinity:           scheduling.affinity,
-		priorityClassName:  scheduling.priorityClassName,
-		extraVolumes:       projection.volumes,
-		extraVolumeMounts:  projection.volumeMounts,
-		extraEnv:           projection.env,
+		namespace:            namespace,
+		image:                image,
+		k8sContext:           k8sContext,
+		managedServiceHost:   managedServiceHost,
+		managedServicePort:   managedServicePort,
+		cpuRequest:           envOrDefault("GC_K8S_CPU_REQUEST", "500m"),
+		memRequest:           envOrDefault("GC_K8S_MEM_REQUEST", "1Gi"),
+		cpuLimit:             envOrDefault("GC_K8S_CPU_LIMIT", "2"),
+		memLimit:             envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
+		serviceAccount:       os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
+		prebaked:             os.Getenv("GC_K8S_PREBAKED") == "true",
+		postStartSettle:      3 * time.Second,
+		stderr:               os.Stderr,
+		nodeSelector:         scheduling.nodeSelector,
+		tolerations:          scheduling.tolerations,
+		affinity:             scheduling.affinity,
+		priorityClassName:    scheduling.priorityClassName,
+		extraVolumes:         projection.volumes,
+		extraVolumeMounts:    projection.volumeMounts,
+		extraEnv:             projection.env,
+		startupDialogTimeout: runtime.StartupDialogTimeout(),
 	}, nil
 }
 
@@ -204,16 +207,17 @@ func parseJSONEnv(name string, target any) error {
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).
 func newProviderWithOps(ops k8sOps) *Provider {
 	return &Provider{
-		ops:                ops,
-		namespace:          "test-ns",
-		image:              "test-image:latest",
-		managedServiceHost: podManagedDoltHost,
-		managedServicePort: podManagedDoltPort,
-		cpuRequest:         "500m",
-		memRequest:         "1Gi",
-		cpuLimit:           "2",
-		memLimit:           "4Gi",
-		stderr:             io.Discard,
+		ops:                  ops,
+		namespace:            "test-ns",
+		image:                "test-image:latest",
+		managedServiceHost:   podManagedDoltHost,
+		managedServicePort:   podManagedDoltPort,
+		cpuRequest:           "500m",
+		memRequest:           "1Gi",
+		cpuLimit:             "2",
+		memLimit:             "4Gi",
+		startupDialogTimeout: 0,
+		stderr:               io.Discard,
 	}
 }
 
@@ -350,6 +354,16 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		}
 	}
 
+	// Match local tmux startup: clear known provider dialogs before and after
+	// readiness. A process can be alive while Codex is still asking whether to
+	// trust the workspace; sending the role prompt at that point discards it
+	// into the dialog instead of starting a turn.
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		cleanup("startup dialog handling canceled")
+		return fmt.Errorf("handling startup dialogs for session %q: %w", name, err)
+	}
+
 	// ReadyDelayMs is the provider-neutral fallback readiness contract when no
 	// prompt probe is available. The tmux and exec adapters already honor it;
 	// k8s must not report creation complete or deliver the initial nudge before
@@ -364,6 +378,11 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		cleanup("agent process not ready after ready delay")
 		return fmt.Errorf("%w: session %q has no live agent process after ready delay%s",
 			runtime.ErrSessionDiedDuringStartup, name, exitDetail)
+	}
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		cleanup("late startup dialog handling canceled")
+		return fmt.Errorf("handling late startup dialogs for session %q: %w", name, err)
 	}
 
 	// Send initial nudge if configured (matches tmux adapter step 6).
@@ -469,6 +488,10 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		}
 	}
 
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("handling startup dialogs after relaunch for session %q: %w", name, err)
+	}
 	if err := waitForK8sReadyDelay(ctx, cfg.ReadyDelayMs); err != nil {
 		return fmt.Errorf("waiting for runtime readiness after relaunch for session %q: %w", name, err)
 	}
@@ -476,6 +499,10 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
 		return fmt.Errorf("%w: session %q has no live agent process after relaunch ready delay%s",
 			runtime.ErrSessionDiedDuringStartup, name, p.agentExitDetail(ctx, podName))
+	}
+	p.dismissStartupDialogs(ctx, name, cfg)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("handling late startup dialogs after relaunch for session %q: %w", name, err)
 	}
 
 	if cfg.Nudge != "" {
@@ -485,6 +512,34 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		}
 	}
 	return nil
+}
+
+// dismissStartupDialogs reuses the shared dialog matcher while retaining no
+// pane content. The controller-side worktree establishes the first-party import
+// trust root; projected pod paths contain the same repository bytes.
+func (p *Provider) dismissStartupDialogs(ctx context.Context, name string, cfg runtime.Config) {
+	if !runtime.ShouldAcceptStartupDialogs(cfg) || p.startupDialogTimeout <= 0 {
+		return
+	}
+	trustRoot := runtime.WorkspaceImportTrustRoot(ctx, cfg.WorkDir)
+	_ = p.dismissKnownDialogs(ctx, name, p.startupDialogTimeout, trustRoot)
+}
+
+// DismissKnownDialogs implements runtime.DialogProvider for later submissions.
+// Without a resolved session worktree, external imports remain untrusted.
+func (p *Provider) DismissKnownDialogs(ctx context.Context, name string, timeout time.Duration) error {
+	return p.dismissKnownDialogs(ctx, name, timeout, "")
+}
+
+func (p *Provider) dismissKnownDialogs(ctx context.Context, name string, timeout time.Duration, trustRoot string) error {
+	carrier := p.carrier()
+	return runtime.AcceptStartupDialogsWithTimeout(
+		ctx,
+		timeout,
+		func(lines int) (string, error) { return carrier.Peek(ctx, name, lines) },
+		func(keys ...string) error { return carrier.SendKeys(ctx, name, keys...) },
+		runtime.WithTrustedImportRoot(trustRoot),
+	)
 }
 
 // agentExitDetail reads only the bounded numeric receipt written by the launch

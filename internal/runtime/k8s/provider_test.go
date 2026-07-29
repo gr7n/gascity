@@ -18,6 +18,7 @@ import (
 func TestProviderImplementsInterface(_ *testing.T) {
 	// Compile-time check is in provider.go, but verify at test time too.
 	var _ runtime.Provider = (*Provider)(nil)
+	var _ runtime.DialogProvider = (*Provider)(nil)
 	var _ runtime.LivenessObserver = (*Provider)(nil)
 }
 
@@ -2205,6 +2206,59 @@ func TestStartSendsNudge(t *testing.T) {
 	}
 	if !foundEnter {
 		t.Error("Start did not send Enter after nudge text")
+	}
+}
+
+func TestStartDismissesWorkspaceTrustBeforeNudge(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+	p.startupDialogTimeout = 50 * time.Millisecond
+
+	trusted := false
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		switch {
+		case len(cmd) >= 2 && cmd[0] == "tmux" && cmd[1] == "capture-pane":
+			if trusted {
+				return "› ready", nil
+			}
+			return "Do you trust the contents of this directory?", nil
+		case len(cmd) == 5 && cmd[0] == "tmux" && cmd[1] == "send-keys" && cmd[4] == "Enter":
+			if !trusted {
+				trusted = true
+			}
+		}
+		return "", nil
+	}
+
+	cfg := runtime.Config{
+		Command:      "codex",
+		ProcessNames: []string{"codex"},
+		WorkDir:      "/workspace",
+		Env: map[string]string{
+			"GC_AGENT": "worker",
+			"GC_CITY":  "/workspace",
+		},
+		Nudge: "Run the assigned task.",
+	}
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var trustEnter, nudgeText int
+	for i, c := range fake.calls {
+		if c.method != "execInPod" {
+			continue
+		}
+		if len(c.cmd) == 5 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "Enter" && trustEnter == 0 {
+			trustEnter = i + 1
+		}
+		if len(c.cmd) >= 6 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" && c.cmd[4] == "-l" && c.cmd[5] == cfg.Nudge {
+			nudgeText = i + 1
+		}
+	}
+	if trustEnter == 0 || nudgeText == 0 || trustEnter >= nudgeText {
+		t.Fatalf("workspace trust was not accepted before nudge: trust=%d nudge=%d calls=%+v", trustEnter, nudgeText, fake.calls)
 	}
 }
 
