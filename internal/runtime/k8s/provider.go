@@ -791,7 +791,14 @@ func (p *Provider) RunLive(_ string, _ runtime.Config) error {
 	return nil
 }
 
-// SetMeta stores a key-value pair in the tmux environment.
+// SetMeta stores a key-value pair in the pod's tmux server environment.
+//
+// K8s runs exactly one tmux server/session per pod. The server inherits the
+// managed session identity (GC_SESSION_ID, GC_INSTANCE_TOKEN, and friends) from
+// the pod environment, but tmux exposes those inherited values only through its
+// global environment. Using the per-session environment here made GetMeta miss
+// the startup identity and caused the reconciler to roll back healthy async
+// starts as runtimes belonging to another session.
 func (p *Provider) SetMeta(name, key, value string) error {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -799,11 +806,11 @@ func (p *Provider) SetMeta(name, key, value string) error {
 		return nil // best-effort
 	}
 	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, key, value}, nil)
+		[]string{"tmux", "set-environment", "-g", key, value}, nil)
 	return nil
 }
 
-// GetMeta retrieves a metadata value from the tmux environment.
+// GetMeta retrieves a metadata value from the pod's tmux server environment.
 func (p *Provider) GetMeta(name, key string) (string, error) {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -811,7 +818,7 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 		return "", nil
 	}
 	output, err := p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "show-environment", "-t", tmuxSession, key}, nil)
+		[]string{"tmux", "show-environment", "-g", key}, nil)
 	if err != nil {
 		return "", nil
 	}
@@ -826,7 +833,7 @@ func (p *Provider) GetMeta(name, key string) (string, error) {
 	return "", nil
 }
 
-// RemoveMeta removes a metadata key from the tmux environment.
+// RemoveMeta removes a metadata key from the pod's tmux server environment.
 func (p *Provider) RemoveMeta(name, key string) error {
 	ctx := context.Background()
 	podName, err := p.findPod(ctx, name)
@@ -834,7 +841,7 @@ func (p *Provider) RemoveMeta(name, key string) error {
 		return nil // best-effort
 	}
 	_, _ = p.ops.execInPod(ctx, podName, "agent",
-		[]string{"tmux", "set-environment", "-t", tmuxSession, "-u", key}, nil)
+		[]string{"tmux", "set-environment", "-g", "-u", key}, nil)
 	return nil
 }
 
