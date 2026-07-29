@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -139,8 +140,31 @@ func TestTmuxCarrier_NudgeMessageIsASingleArg(t *testing.T) {
 	}
 }
 
+func TestTmuxCarrier_NudgeMultilineUsesAtomicPaste(t *testing.T) {
+	rec := &recordingExec{}
+	c := NewTmuxCarrier(rec, "main")
+	message := "role context\n\nRun the assigned task."
+	if err := c.Nudge(context.Background(), "s", TextContent(message)); err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	if len(rec.calls) != 3 {
+		t.Fatalf("got %d exec calls, want set/paste/submit", len(rec.calls))
+	}
+	if got := rec.calls[0]; len(got) != 6 || got[0] != "tmux" || got[1] != "set-buffer" ||
+		got[2] != "-b" || got[4] != "--" || got[5] != message {
+		t.Fatalf("set-buffer argv = %v", got)
+	}
+	buffer := rec.calls[0][3]
+	if got, want := rec.calls[1], []string{"tmux", "paste-buffer", "-p", "-d", "-b", buffer, "-t", "main"}; !slices.Equal(got, want) {
+		t.Errorf("paste argv = %v, want %v", got, want)
+	}
+	if got, want := rec.calls[2], []string{"tmux", "send-keys", "-t", "main", "Enter"}; !slices.Equal(got, want) {
+		t.Errorf("submit argv = %v, want %v", got, want)
+	}
+}
+
 func TestTmuxCarrier_NudgeFirstStepErrorSkipsEnter(t *testing.T) {
-	// A type failure surfaces the error and skips the Enter submit.
+	// A buffer-load failure surfaces the error and skips paste and Enter.
 	rec := &recordingExec{err: errBoom}
 	c := NewTmuxCarrier(rec, "main")
 	err := c.Nudge(context.Background(), "s", TextContent("hi"))
@@ -149,6 +173,18 @@ func TestTmuxCarrier_NudgeFirstStepErrorSkipsEnter(t *testing.T) {
 	}
 	if len(rec.calls) != 1 {
 		t.Errorf("issued %d exec calls, want 1 (Enter must be skipped after the type fails)", len(rec.calls))
+	}
+}
+
+func TestTmuxCarrier_NudgeTreatsCommandExitAsFailure(t *testing.T) {
+	rec := &recordingExec{code: 1}
+	c := NewTmuxCarrier(rec, "main")
+	err := c.Nudge(context.Background(), "s", TextContent("hi"))
+	if err == nil || !strings.Contains(err.Error(), "status 1") {
+		t.Fatalf("Nudge err = %v, want non-zero tmux status", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Errorf("issued %d exec calls, want 1", len(rec.calls))
 	}
 }
 
