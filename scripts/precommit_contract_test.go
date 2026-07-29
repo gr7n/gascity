@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreCommitFormatterPreservesFileMode(t *testing.T) {
@@ -133,9 +134,9 @@ func TestTestFastParallelUsesSanitizedEnvironmentAndMachineAwareConcurrency(t *t
 			if !strings.Contains(command, "./scripts/test-local-parallel fast") {
 				t.Fatalf("test-fast-parallel recipe should still dispatch the sharded fast runner:\n%s", command)
 			}
-			wantJobAssignment := " LOCAL_TEST_JOBS=" + tt.wantJobs + " CMD_GC_PROCESS_TOTAL="
+			wantJobAssignment := " LOCAL_TEST_JOBS=" + tt.wantJobs + " LOCAL_TEST_CPUS=" + tt.cpus + " CMD_GC_PROCESS_TOTAL="
 			if !strings.Contains(command, wantJobAssignment) {
-				t.Fatalf("test-fast-parallel job count should be %s:\n%s", tt.wantJobs, command)
+				t.Fatalf("test-fast-parallel resource budget should be jobs=%s cpus=%s:\n%s", tt.wantJobs, tt.cpus, command)
 			}
 			for _, key := range []string{
 				"GC_PUSH_GATE_NO_CAP",
@@ -219,6 +220,43 @@ func TestPrePushUsesCanonicalMachineAwareConcurrency(t *testing.T) {
 		if !strings.Contains(string(content), "scripts/test-local-job-count") {
 			t.Fatalf("%s must use the canonical machine-aware job detector", path)
 		}
+	}
+}
+
+func TestLocalParallelIsSingleFlightPerHost(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is unavailable on this host")
+	}
+	repoRoot := repoRoot(t)
+	lock := filepath.Join(t.TempDir(), "parallel.lock")
+	ready := lock + ".ready"
+	holder := exec.Command("flock", lock, "sh", "-c", "touch \"$1\"; sleep 10", "_", ready)
+	if err := holder.Start(); err != nil {
+		t.Fatalf("start lock holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("lock holder did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cmd := exec.Command(filepath.Join(repoRoot, "scripts", "test-local-parallel"), "fast")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "GC_TEST_LOCAL_LOCK_FILE="+lock)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("second parallel suite unexpectedly started:\n%s", out)
+	}
+	if !strings.Contains(string(out), "already owns this host") {
+		t.Fatalf("single-flight rejection is not actionable:\n%s", out)
 	}
 }
 
@@ -608,9 +646,27 @@ func TestLocalParallelAllowlistIncludesObservableEnv(t *testing.T) {
 		t.Fatalf("read test-local-parallel: %v", err)
 	}
 	content := string(script)
-	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES"} {
+	if strings.Contains(content, `bash -lc "$command"`) {
+		t.Fatal("test-local-parallel must not reintroduce host login-shell state after env sanitization")
+	}
+	if !strings.Contains(content, `bash -c "$command"`) {
+		t.Fatal("test-local-parallel must execute each job in the sanitized non-login shell")
+	}
+	if !strings.Contains(content, "GOMAXPROCS=4 GC_FAST_UNIT=1 go test -p=3") {
+		t.Fatal("unit-core must retain the repository's bounded package parallelism")
+	}
+	for _, key := range []string{"OBSERVABLE_TEST_LOG", "OBSERVABLE_FAILURE_LINES", "GOMAXPROCS"} {
 		if !strings.Contains(content, key+"=") {
 			t.Fatalf("test-local-parallel job env should pass through %s", key)
+		}
+	}
+	for _, path := range []string{"test-go-test-shard", "test-integration-shard"} {
+		content, err := os.ReadFile(filepath.Join(repoRoot, "scripts", path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(content), "GOMAXPROCS=") {
+			t.Fatalf("%s must preserve the partitioned Go CPU budget", path)
 		}
 	}
 	for _, key := range []string{"GC_CITY", "GC_HOME", "GC_SESSION_ID"} {

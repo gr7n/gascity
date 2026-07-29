@@ -55,6 +55,7 @@ type BeadCreateInput struct {
 	CityScope
 	IdempotencyKey string `header:"Idempotency-Key" required:"false" doc:"Idempotency key for safe retries."`
 	Body           struct {
+		ID          string            `json:"id,omitempty" doc:"Stable full Bead ID for durable request reconciliation."`
 		Rig         string            `json:"rig,omitempty" doc:"Rig name."`
 		Title       string            `json:"title" doc:"Bead title." minLength:"1"`
 		Type        string            `json:"type,omitempty" doc:"Bead type."`

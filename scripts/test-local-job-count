@@ -151,6 +151,17 @@ detect_loadavg() {
   awk '{ print $1; exit }' "$loadavg_file" 2>/dev/null
 }
 
+if [[ $# -gt 1 ]]; then
+  fail "usage: $0 [--cpus]"
+fi
+if [[ "${1:-}" == "--cpus" ]]; then
+  detect_cpus
+  exit 0
+fi
+if [[ $# -ne 0 ]]; then
+  fail "usage: $0 [--cpus]"
+fi
+
 cpus="$(detect_cpus)"
 memory_kib="$(detect_memory_kib || true)"
 jobs="$cpus"
