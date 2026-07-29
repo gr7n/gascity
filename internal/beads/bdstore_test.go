@@ -1024,6 +1024,25 @@ func TestBdStoreClaimConflictReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestBdStoreClaimAsPassesExplicitActor(t *testing.T) {
+	var gotArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		gotArgs = append([]string(nil), args...)
+		return []byte(`[{"id":"bd-42","status":"in_progress","assignee":"worker-1","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}]`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+	claimed, ok, err := s.ClaimAs("bd-42", "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.Assignee != "worker-1" {
+		t.Fatalf("ClaimAs = (%+v, %v), want worker-1 claim", claimed, ok)
+	}
+	if got := strings.Join(gotArgs, " "); got != "update bd-42 --claim --actor worker-1 --json" {
+		t.Fatalf("args = %q, want explicit actor claim args", got)
+	}
+}
+
 func TestBdStoreUpdatePassesPriority(t *testing.T) {
 	var gotArgs []string
 	runner := func(_, _ string, args ...string) ([]byte, error) {
