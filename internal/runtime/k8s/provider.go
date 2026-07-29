@@ -349,6 +349,21 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		}
 	}
 
+	// ReadyDelayMs is the provider-neutral fallback readiness contract when no
+	// prompt probe is available. The tmux and exec adapters already honor it;
+	// k8s must not report creation complete or deliver the initial nudge before
+	// the same delay has elapsed.
+	if err := waitForK8sReadyDelay(ctx, cfg.ReadyDelayMs); err != nil {
+		cleanup("ready delay canceled")
+		return fmt.Errorf("waiting for runtime readiness for session %q: %w", name, err)
+	}
+	if requiresPostStartLiveness && cfg.ReadyDelayMs > 0 &&
+		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
+		cleanup("agent process not ready after ready delay")
+		return fmt.Errorf("%w: session %q has no live agent process after ready delay",
+			runtime.ErrSessionDiedDuringStartup, name)
+	}
+
 	// Send initial nudge if configured (matches tmux adapter step 6).
 	if cfg.Nudge != "" {
 		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
@@ -449,10 +464,33 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 		}
 	}
 
+	if err := waitForK8sReadyDelay(ctx, cfg.ReadyDelayMs); err != nil {
+		return fmt.Errorf("waiting for runtime readiness after relaunch for session %q: %w", name, err)
+	}
+	if k8sRequiresPostStartLiveness(cfg) && cfg.ReadyDelayMs > 0 &&
+		!p.ObserveLiveness(name, cfg.ProcessNames).Alive {
+		return fmt.Errorf("%w: session %q has no live agent process after relaunch ready delay",
+			runtime.ErrSessionDiedDuringStartup, name)
+	}
+
 	if cfg.Nudge != "" {
 		_ = p.Nudge(name, runtime.TextContent(cfg.Nudge))
 	}
 	return nil
+}
+
+func waitForK8sReadyDelay(ctx context.Context, readyDelayMs int) error {
+	if readyDelayMs <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(time.Duration(readyDelayMs) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func k8sRequiresPostStartLiveness(cfg runtime.Config) bool {
