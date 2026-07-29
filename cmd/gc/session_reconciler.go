@@ -2031,6 +2031,25 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						fmt.Fprintf(stdout, "Skipping drain for '%s': store query partial (transient failure)\n", name) //nolint:errcheck
 						continue
 					}
+					// A pool worker becomes provider-live before its first
+					// claim is guaranteed visible in the owning store. Honor
+					// the same post-create window as the startup sweep so the
+					// steady-state reconciler cannot retire a healthy worker
+					// during that gap.
+					if isEphemeralSessionInfo(infoPostHeal) &&
+						withinPostCreateProtectionWindowInfo(infoPostHeal, clk.Now()) {
+						if trace != nil {
+							template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
+							if template == "" {
+								template = infoPostHeal.Template
+							}
+							trace.RecordDecision(TraceSiteReconcilerOrphaned, TraceReasonPendingCreate, TraceOutcomeDeferred, template, name, traceRecordPayload{
+								"provider_alive": true,
+								"state":          infoPostHeal.MetadataState,
+							})
+						}
+						continue
+					}
 					reason := "orphaned"
 					if configuredNames[name] {
 						reason = "suspended"

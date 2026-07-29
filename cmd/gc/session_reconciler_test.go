@@ -5952,6 +5952,43 @@ func TestReconcileSessionBeads_OrphanSessionDrained(t *testing.T) {
 	}
 }
 
+func TestReconcileSessionBeads_FreshPoolSessionGetsFirstClaimWindow(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{
+			Name:              "worker",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+	if err := env.sp.Start(context.Background(), "worker-1", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	session := env.createSessionBead("worker-1", "worker")
+	env.setSessionMetadata(&session, map[string]string{
+		"state":                   "active",
+		"state_reason":            "creation_complete",
+		"creation_complete_at":    env.clk.Now().UTC().Format(time.RFC3339),
+		"last_woke_at":            env.clk.Now().UTC().Format(time.RFC3339),
+		"pool_managed":            "true",
+		"pool_slot":               "1",
+		"canonical_pool_slot":     "1",
+		"canonical_instance_name": "worker-1",
+	})
+
+	env.reconcile([]beads.Bead{session})
+	if ds := env.dt.get(session.ID); ds != nil {
+		t.Fatalf("fresh pool session drained before its first claim window elapsed: %+v", ds)
+	}
+
+	env.clk.Time = env.clk.Now().Add(postCreateProtectionTimeout + time.Second)
+	env.reconcile([]beads.Bead{session})
+	ds := env.dt.get(session.ID)
+	if ds == nil || ds.reason != "orphaned" {
+		t.Fatalf("expired unclaimed pool session drain = %+v, want orphaned", ds)
+	}
+}
+
 func TestReconcileSessionBeads_OrphanDrainLiveAssignedWorkStaysOpen(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{Agents: []config.Agent{{Name: "other"}}}
