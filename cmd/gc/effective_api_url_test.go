@@ -29,6 +29,18 @@ func TestStandaloneAPIBaseURLNormalizesBracketWildcardIPv6(t *testing.T) {
 	}
 }
 
+func TestStandaloneAPIBaseURLNormalizesWildcardIPv4(t *testing.T) {
+	got := standaloneAPIBaseURL(&config.City{
+		API: config.APIConfig{
+			Bind: "0.0.0.0",
+			Port: 4567,
+		},
+	})
+	if want := "http://127.0.0.1:4567"; got != want {
+		t.Fatalf("standaloneAPIBaseURL = %q, want %q", got, want)
+	}
+}
+
 func TestDiscoverReachableSupervisorAPIBaseURLTimeout(t *testing.T) {
 	origHook := effectiveAPIBaseURLHook
 	origFactory := effectiveAPIClientFactory
